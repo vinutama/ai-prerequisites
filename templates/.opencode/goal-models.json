@@ -1,0 +1,26 @@
+{
+  "planner": {
+    "preferred_models": ["opencode-go/qwen3.7-max"],
+    "fallback_models": ["opencode-go/kimi-k2.7-code", "opencode/deepseek-v4-flash-free"]
+  },
+  "reviewer": {
+    "preferred_models": ["opencode-go/kimi-k2.7-code"],
+    "fallback_models": ["opencode-go/deepseek-v4-pro", "opencode/deepseek-v4-flash-free"]
+  },
+  "builder-backend": {
+    "preferred_models": ["opencode-go/deepseek-v4-flash"],
+    "fallback_models": ["opencode/deepseek-v4-flash-free"]
+  },
+  "builder-frontend": {
+    "preferred_models": ["opencode-go/deepseek-v4-flash"],
+    "fallback_models": ["opencode/deepseek-v4-flash-free"]
+  },
+  "orchestrator": {
+    "preferred_models": ["opencode-go/deepseek-v4-flash"],
+    "fallback_models": ["opencode/deepseek-v4-flash-free"]
+  },
+  "visual-reviewer": {
+    "preferred_models": ["opencode/mimo-v2.5-free"],
+    "fallback_models": ["opencode/deepseek-v4-flash-free"]
+  }
+}
