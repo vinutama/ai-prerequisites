@@ -3,7 +3,7 @@ set -euo pipefail
 
 STATE_FILE="${STATE_FILE:-state.json}"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPTS_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPTS_DIR/../.." && pwd)"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'

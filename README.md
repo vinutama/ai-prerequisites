@@ -23,7 +23,7 @@ opencode
 | `.opencode/command/goal.md` | `/goal` slash command |
 | `.opencode/skills/goal-loop/` | Reusable goal-loop skill |
 | `.opencode/goal-models.json` | Preferred and fallback model config per agent |
-| `scripts/goal-git.sh` | Git helper (branch, commit, push, PR, review loop) |
+| `.opencode/scripts/goal-git.sh` | Git helper (branch, commit, push, PR, review loop) |
 
 ## Agent roles
 

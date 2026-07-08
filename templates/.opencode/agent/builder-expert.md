@@ -30,9 +30,9 @@ Always operate in `/ponytail full` mode:
 3. Trace the full execution path before writing a single line.
 4. Implement the minimal correct solution. Complex does not mean
    complicated — the best complex solutions are surgically simple.
-5. After all changes, run `scripts/goal-git.sh analyze` and verify it passes
+5. After all changes, run `.opencode/scripts/goal-git.sh analyze` and verify it passes
    before handing back to the orchestrator.
-6. Only use `scripts/goal-git.sh` for git operations — do NOT run git
+6. Only use `.opencode/scripts/goal-git.sh` for git operations — do NOT run git
    commands directly.
 
 ## What you handle

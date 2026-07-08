@@ -44,20 +44,20 @@ Platform is auto-detected from the origin remote URL. GitHub uses `gh` CLI,
 GitLab uses `glab` CLI. Override with `GOAL_PLATFORM=github|gitlab`.
 
 ### Git workflow
-All git operations MUST go through `scripts/goal-git.sh`:
+All git operations MUST go through `.opencode/scripts/goal-git.sh`:
 ```bash
-scripts/goal-git.sh start <goal>     # create branch
-scripts/goal-git.sh commit [msg]     # conventional commit
-scripts/goal-git.sh push             # push to origin
-scripts/goal-git.sh pr               # create/update PR
-scripts/goal-git.sh pending          # check unresolved PR threads
-scripts/goal-git.sh analyze          # npx gitnexus analyze && rtk gain
+.opencode/scripts/goal-git.sh start <goal>     # create branch
+.opencode/scripts/goal-git.sh commit [msg]     # conventional commit
+.opencode/scripts/goal-git.sh push             # push to origin
+.opencode/scripts/goal-git.sh pr               # create/update PR
+.opencode/scripts/goal-git.sh pending          # check unresolved PR threads
+.opencode/scripts/goal-git.sh analyze          # npx gitnexus analyze && rtk gain
 ```
 
 ### Review loop
-- After code changes, run `scripts/goal-git.sh analyze` (gitnexus + rtk gain).
+- After code changes, run `.opencode/scripts/goal-git.sh analyze` (gitnexus + rtk gain).
   If it fails, STOP.
-- Run `scripts/goal-git.sh pending` to check PR threads.
+- Run `.opencode/scripts/goal-git.sh pending` to check PR threads.
 - Loop until exit 0 (zero unresolved threads).
 
 ### State

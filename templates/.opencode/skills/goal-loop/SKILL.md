@@ -17,7 +17,7 @@ description: >-
 ## Rules
 1. **Single source of truth**: `state.json` in the project root.
 2. **One tool for git**: all agents route git operations through
-   `scripts/goal-git.sh`.
+   `.opencode/scripts/goal-git.sh`.
 3. **Analyze before review**: after every code change, run
    `npx gitnexus analyze && rtk gain`. If either fails, STOP.
 4. **Consensus gate**: PR must have zero unresolved review threads before
@@ -56,12 +56,12 @@ The orchestrator reads these tags and delegates to the correct agent.
 }
 ```
 
-## Git Helper (`scripts/goal-git.sh`)
+## Git Helper (`.opencode/scripts/goal-git.sh`)
 ```bash
-scripts/goal-git.sh start <goal>     # create branch, write state.json
-scripts/goal-git.sh commit [msg]     # stage all, conventional commit
-scripts/goal-git.sh push             # push branch to origin
-scripts/goal-git.sh pr               # create or update PR
-scripts/goal-git.sh pending          # exit 0 if no unresolved threads
-scripts/goal-git.sh analyze          # npx gitnexus analyze && rtk gain
+.opencode/scripts/goal-git.sh start <goal>     # create branch, write state.json
+.opencode/scripts/goal-git.sh commit [msg]     # stage all, conventional commit
+.opencode/scripts/goal-git.sh push             # push branch to origin
+.opencode/scripts/goal-git.sh pr               # create or update PR
+.opencode/scripts/goal-git.sh pending          # exit 0 if no unresolved threads
+.opencode/scripts/goal-git.sh analyze          # npx gitnexus analyze && rtk gain
 ```

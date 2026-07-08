@@ -32,7 +32,7 @@ Always operate in `/ponytail full` mode:
 ## Workflow — follow this exactly
 
 ### 1. SETUP
-- Run `scripts/goal-git.sh start "$ARGUMENTS"` to create the branch and
+- Run `.opencode/scripts/goal-git.sh start "$ARGUMENTS"` to create the branch and
   write `state.json`.
 
 ### 2. PLAN
@@ -50,25 +50,25 @@ Always operate in `/ponytail full` mode:
 - Wait for all builders to finish.
 
 ### 4. ANALYZE
-- Run `scripts/goal-git.sh analyze`. If it fails (non-zero exit), **STOP**
+- Run `.opencode/scripts/goal-git.sh analyze`. If it fails (non-zero exit), **STOP**
   and report the error.
 - Only proceed if analyze succeeds.
 
 ### 5. COMMIT & REVIEW
-- Run `scripts/goal-git.sh commit` with a conventional commit message
+- Run `.opencode/scripts/goal-git.sh commit` with a conventional commit message
   summarizing the changes.
-- Run `scripts/goal-git.sh push` and `scripts/goal-git.sh pr`.
+- Run `.opencode/scripts/goal-git.sh push` and `.opencode/scripts/goal-git.sh pr`.
 - Delegate to `@reviewer` for code review and `@visual-reviewer` for
   UI/multimodal review.
 
 ### 6. REVIEW LOOP
-- Run `scripts/goal-git.sh pending`. If exit=0, the PR has no unresolved
+- Run `.opencode/scripts/goal-git.sh pending`. If exit=0, the PR has no unresolved
   threads → **DONE**.
 - If exit=1, unresolved threads exist. Read the JSON output, fix the issues:
   - Match each unresolved thread to the relevant builder agent by complexity
     (routine → @builder, complex → @builder-expert).
   - Repeat from step **4 (ANALYZE)**.
-- Continue this loop until `scripts/goal-git.sh pending` returns exit 0.
+- Continue this loop until `.opencode/scripts/goal-git.sh pending` returns exit 0.
 
 ### 7. DONE
 - Report success: PR URL, summary of changes, any open follow-ups.

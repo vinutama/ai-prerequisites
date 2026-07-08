@@ -29,9 +29,9 @@ Always operate in `/ponytail full` mode:
    tasks tagged `@builder`.
 2. Read `state.json` to know the goal and branch.
 3. Implement changes in the minimal number of files.
-4. After all changes, run `scripts/goal-git.sh analyze` and verify it passes
+4. After all changes, run `.opencode/scripts/goal-git.sh analyze` and verify it passes
    before handing back to the orchestrator.
-5. Only use `scripts/goal-git.sh` for git operations — do NOT run git
+5. Only use `.opencode/scripts/goal-git.sh` for git operations — do NOT run git
    commands directly.
 
 ## What you handle
