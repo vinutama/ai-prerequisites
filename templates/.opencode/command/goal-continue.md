@@ -1,6 +1,6 @@
 ---
 description: >-
-  Continue a goal on its existing branch/PR. Usage: /goal continue [goal-or-branch]
+  Continue a goal on its existing branch/PR. Usage: /goal-continue [goal-or-branch]
 agent: orchestrator
 subtask: true
 ---

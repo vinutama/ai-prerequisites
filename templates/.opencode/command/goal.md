@@ -17,4 +17,4 @@ Follow the orchestrator workflow:
 
 Only use `.opencode/scripts/goal-git.sh` for all git operations.
 
-Tip: use '/goal list' to see all goals, '/goal continue [id]' to resume a previous one.
+Tip: use '/goal-list' to see all goals, '/goal-continue [id]' to resume a previous one.
