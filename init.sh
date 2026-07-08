@@ -129,16 +129,6 @@ migrate_cursor_assets() {
 
 migrate_cursor_assets "$TARGET"
 
-# Update root .gitignore
-GITIGNORE="$TARGET/.gitignore"
-touch "$GITIGNORE"
-for entry in "state.json" ".gitnexus/"; do
-  if ! grep -qxF "$entry" "$GITIGNORE" 2>/dev/null; then
-    echo "$entry" >> "$GITIGNORE"
-    log "Added $entry to .gitignore"
-  fi
-done
-
 echo ""
 log "Setup complete!"
 echo ""
@@ -168,7 +158,6 @@ for skill_dir in "$TARGET/.opencode/skills"/*/; do
   echo "    │   │   └── SKILL.md"
 done
 echo "    ├── goal-models.json"
-echo "    ├── .gitignore"
 echo "    └── package.json"
 echo ""
 log "Run 'opencode' and type '/goal <your objective>' to start."
