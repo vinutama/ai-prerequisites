@@ -49,6 +49,9 @@ The orchestrator delegates automatically.
 ## Requirements
 
 - [OpenCode](https://opencode.ai) with OpenCode Go and Zen credentials
-- [GitHub CLI](https://cli.github.com) (`gh auth login`)
+- Git forge CLI — auto-detected from origin remote:
+  - **GitHub**: [GitHub CLI](https://cli.github.com) (`gh auth login`)
+  - **GitLab**: [GitLab CLI](https://gitlab.com/gitlab-org/cli) (`glab auth login`)
+  - Override with `GOAL_PLATFORM=github|gitlab`
 - [RTK](https://github.com/rtk-ai/rtk) (`cargo install rtk`)
 - `jq`, `npx` (Node.js >= 22), `git`

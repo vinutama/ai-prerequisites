@@ -39,6 +39,10 @@ The orchestrator delegates tasks to the tagged agent automatically.
 - Mark deliberate simplifications with `ponytail:` comments.
 - Non-trivial logic leaves one runnable check behind.
 
+### Platform detection
+Platform is auto-detected from the origin remote URL. GitHub uses `gh` CLI,
+GitLab uses `glab` CLI. Override with `GOAL_PLATFORM=github|gitlab`.
+
 ### Git workflow
 All git operations MUST go through `scripts/goal-git.sh`:
 ```bash
