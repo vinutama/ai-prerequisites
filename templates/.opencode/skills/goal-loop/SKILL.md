@@ -30,11 +30,19 @@ description: >-
 | Agent | Role | Access |
 |---|---|---|
 | `orchestrator` | Manages workflow, delegates, runs scripts | Full + task |
-| `planner` | Architecture and implementation plans | Read-only |
-| `builder-backend` | Server-side implementation | Full |
-| `builder-frontend` | Client-side implementation | Full |
+| `planner` | Architecture and implementation plans — tags tasks @builder or @builder-expert | Read-only |
+| `builder` | Routine execution (CRUD, UI, refactors, config, tests) across frontend and backend | Full |
+| `builder-expert` | Complex execution (algorithms, concurrency, security, perf, state machines, distributed coordination) | Full |
 | `reviewer` | Code correctness, security, tests | Read-only |
 | `visual-reviewer` | UI quality, accessibility, visuals | Read-only |
+
+## Delegation logic
+The planner analyzes task complexity and tags each planned item:
+- `@builder` — standard CRUD, UI, refactors, config, glue code, routine tests.
+- `@builder-expert` — novel algorithms, concurrency, auth/security, perf
+  hot paths, complex state machines, distributed coordination, DB migrations.
+
+The orchestrator reads these tags and delegates to the correct agent.
 
 ## State (`state.json`)
 ```json

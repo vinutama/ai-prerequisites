@@ -2,8 +2,7 @@
 description: >-
   Goal-loop orchestrator. Manages the full /goal workflow: plan → build →
   analyze → review → push → loop until PR threads resolved. Delegates to
-  planner, builder-backend, builder-frontend, reviewer, and visual-reviewer
-  subagents.
+  planner, builder, builder-expert, reviewer, and visual-reviewer subagents.
 mode: subagent
 model: opencode-go/deepseek-v4-flash
 temperature: 0.2
@@ -14,8 +13,8 @@ permission:
     "*": deny
     planner: allow
     reviewer: allow
-    builder-backend: allow
-    builder-frontend: allow
+    builder: allow
+    builder-expert: allow
     visual-reviewer: allow
   todowrite: allow
 ---
@@ -39,11 +38,15 @@ Always operate in `/ponytail full` mode:
 ### 2. PLAN
 - Delegate to `@planner` to analyze the codebase and produce an
   implementation plan.
+- The planner's output will tag each task with `@builder` or
+  `@builder-expert`.
 - Review the plan. If acceptable, proceed.
 
 ### 3. BUILD
-- Delegate implementation to `@builder-backend` and/or `@builder-frontend`
-  based on the plan.
+- Parse the planner's output for `@builder` and `@builder-expert` tags.
+- Delegate `@builder` tasks to `@builder` and `@builder-expert` tasks to
+  `@builder-expert`.
+- Run both in parallel when tasks are independent.
 - Wait for all builders to finish.
 
 ### 4. ANALYZE
@@ -62,7 +65,8 @@ Always operate in `/ponytail full` mode:
 - Run `scripts/goal-git.sh pending`. If exit=0, the PR has no unresolved
   threads → **DONE**.
 - If exit=1, unresolved threads exist. Read the JSON output, fix the issues:
-  - Delegate fixes to the appropriate builder subagents.
+  - Match each unresolved thread to the relevant builder agent by complexity
+    (routine → @builder, complex → @builder-expert).
   - Repeat from step **4 (ANALYZE)**.
 - Continue this loop until `scripts/goal-git.sh pending` returns exit 0.
 

@@ -15,13 +15,21 @@ zero unresolved review threads remain.
 | Agent | Role | Model |
 |---|---|---|
 | `orchestrator` | Manages the full loop | opencode-go/deepseek-v4-flash |
-| `planner` | Architecture and plans | opencode-go/qwen3.7-max |
-| `builder-backend` | Server-side implementation | opencode-go/deepseek-v4-flash |
-| `builder-frontend` | Client-side implementation | opencode-go/deepseek-v4-flash |
+| `planner` | Architecture & plans — tags tasks @builder or @builder-expert | opencode-go/qwen3.7-max |
+| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | opencode-go/deepseek-v4-flash |
+| `builder-expert` | Complex execution (algorithms, concurrency, security, perf) | opencode-go/qwen3.7-max |
 | `reviewer` | Code review | opencode-go/kimi-k2.7-code |
 | `visual-reviewer` | UI/multimodal review | opencode/mimo-v2.5-free |
 
 Model fallbacks are configured in `.opencode/goal-models.json`.
+
+### Delegation
+The planner tags every task:
+- `@builder` — routine frontend/backend tasks.
+- `@builder-expert` — novel algorithms, concurrency, auth/security,
+  performance hot paths, complex state machines, distributed coordination.
+
+The orchestrator delegates tasks to the tagged agent automatically.
 
 ### All agents operate in /ponytail full mode
 - YAGNI first: question whether code needs to exist at all.

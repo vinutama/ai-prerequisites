@@ -19,7 +19,7 @@ opencode
 |---|---|
 | `AGENTS.md` | Project conventions and workflow instructions |
 | `state.json` | Runtime state (goal, branch, PR number) — gitignored |
-| `.opencode/agent/` | 6 specialized agents (planner, reviewer, builders, orchestrator, visual-reviewer) |
+| `.opencode/agent/` | 6 specialized agents |
 | `.opencode/command/goal.md` | `/goal` slash command |
 | `.opencode/skills/goal-loop/` | Reusable goal-loop skill |
 | `.opencode/goal-models.json` | Preferred and fallback model config per agent |
@@ -29,14 +29,22 @@ opencode
 
 | Agent | Role | Preferred Model |
 |---|---|---|
-| `planner` | Architecture & plans | `opencode-go/qwen3.7-max` |
+| `planner` | Architecture & plans — tags tasks @builder or @builder-expert | `opencode-go/qwen3.7-max` |
+| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | `opencode-go/deepseek-v4-flash` |
+| `builder-expert` | Complex execution (algorithms, concurrency, security, perf) | `opencode-go/qwen3.7-max` |
 | `reviewer` | Code review | `opencode-go/kimi-k2.7-code` |
-| `builder-backend` | Backend implementation | `opencode-go/deepseek-v4-flash` |
-| `builder-frontend` | Frontend implementation | `opencode-go/deepseek-v4-flash` |
 | `orchestrator` | Workflow manager | `opencode-go/deepseek-v4-flash` |
 | `visual-reviewer` | UI/multimodal review | `opencode/mimo-v2.5-free` |
 
 Every agent operates in `/ponytail full` mode.
+
+### Delegation
+The planner tags every task:
+- `@builder` — routine frontend/backend tasks.
+- `@builder-expert` — novel algorithms, concurrency, auth/security,
+  performance hot paths, complex state machines, distributed coordination.
+
+The orchestrator delegates automatically.
 
 ## Requirements
 

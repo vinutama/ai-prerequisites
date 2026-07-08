@@ -7,12 +7,12 @@
     "preferred_models": ["opencode-go/kimi-k2.7-code"],
     "fallback_models": ["opencode-go/deepseek-v4-pro", "opencode/deepseek-v4-flash-free"]
   },
-  "builder-backend": {
+  "builder": {
     "preferred_models": ["opencode-go/deepseek-v4-flash"],
     "fallback_models": ["opencode/deepseek-v4-flash-free"]
   },
-  "builder-frontend": {
-    "preferred_models": ["opencode-go/deepseek-v4-flash"],
+  "builder-expert": {
+    "preferred_models": ["opencode-go/qwen3.7-max"],
     "fallback_models": ["opencode/deepseek-v4-flash-free"]
   },
   "orchestrator": {
