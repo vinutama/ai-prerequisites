@@ -1,7 +1,6 @@
 ---
 description: >-
-  Continue the current /goal on the same branch/PR with an extended or refined
-  objective. Usage: /goal continue <additional objective>
+  Continue a goal on its existing branch/PR. Usage: /goal continue [goal-or-branch]
 agent: orchestrator
 subtask: true
 ---
@@ -10,12 +9,13 @@ Read the project README and AGENTS.md to understand conventions first.
 
 Goal (continued): $ARGUMENTS
 
-This is a continuation of the existing goal. The branch and PR/MR are already
-set up — do NOT create a new one.
+This continues an existing goal. If an identifier is provided (branch name or
+goal text), the goal is switched first. If no identifier, the active (last) goal
+is continued. The branch/PR are NOT re-created.
 
 Follow the orchestrator workflow, but skip SETUP's `start`:
-1. Run `.opencode/scripts/goal-git.sh continue "$ARGUMENTS"` to update the goal.
-2. Skip branch creation — you are already on the goal branch.
+1. Run `.opencode/scripts/goal-git.sh continue "$ARGUMENTS"` to switch/activate the goal.
+2. Skip branch creation — you are on the goal's branch.
 3. Plan → Build → Analyze → Review → Loop until done.
 4. Report the final PR URL.
 

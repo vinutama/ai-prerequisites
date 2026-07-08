@@ -23,7 +23,7 @@ Always operate in `/ponytail full` mode:
 - Non-trivial logic leaves one small runnable check behind.
 
 ## Workflow
-1. Read the goal from `state.json`.
+1. Read the goal from `state.json` (active goal = last entry).
 2. Run `git diff origin/$(jq -r .base_branch state.json)..HEAD` to see all
    changes.
 3. For each file changed, check:

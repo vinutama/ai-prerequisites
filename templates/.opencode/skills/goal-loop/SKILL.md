@@ -46,21 +46,25 @@ The orchestrator reads these tags and delegates to the correct agent.
 
 ## State (`state.json`)
 ```json
-{
-  "goal": "the task objective",
-  "branch": "goal/<slug>",
-  "base_branch": "main",
-  "pr_number": null,
-  "pr_url": "",
-  "status": "in_progress|completed|failed"
-}
+[
+  {
+    "goal": "the task objective",
+    "branch": "goal/<slug>",
+    "base_branch": "main",
+    "pr_number": null,
+    "pr_url": "",
+    "status": "in_progress|completed|failed"
+  }
+]
 ```
+The last entry is the active goal. All commands read/write it.
 
 ## Git Helper (`.opencode/scripts/goal-git.sh`)
 ```bash
-.opencode/scripts/goal-git.sh start <goal>     # create branch, write state.json
-.opencode/scripts/goal-git.sh continue <goal>  # update goal on same branch/PR
-.opencode/scripts/goal-git.sh stage <file>...  # stage specific files (new files only)
+.opencode/scripts/goal-git.sh start <goal>     # create branch, append to history
+.opencode/scripts/goal-git.sh continue [id]    # resume active or switch goal
+.opencode/scripts/goal-git.sh list             # list all goals
+.opencode/scripts/goal-git.sh stage <file>...   # stage specific files (new files only)
 .opencode/scripts/goal-git.sh commit [msg]     # commit staged changes (conventional)
 .opencode/scripts/goal-git.sh push             # push branch to origin
 .opencode/scripts/goal-git.sh pr               # create or update PR

@@ -35,7 +35,7 @@ Always operate in `/ponytail full` mode:
 ## Workflow
 1. Read the plan from the orchestrator (passed in context). Only pick up
    tasks tagged `@builder-expert`.
-2. Read `state.json` to know the goal and branch.
+2. Read `state.json` to know the goal and branch (active goal = last entry).
 3. Trace the full execution path before writing a single line.
 4. Implement the minimal correct solution. Complex does not mean
    complicated — the best complex solutions are surgically simple.

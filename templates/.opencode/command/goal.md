@@ -17,4 +17,4 @@ Follow the orchestrator workflow:
 
 Only use `.opencode/scripts/goal-git.sh` for all git operations.
 
-Tip: to extend an existing goal on the same branch/PR, use `/goal continue <objective>` instead.
+Tip: use '/goal list' to see all goals, '/goal continue [id]' to resume a previous one.

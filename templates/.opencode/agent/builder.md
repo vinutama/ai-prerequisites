@@ -36,7 +36,7 @@ Always operate in `/ponytail full` mode:
 ## Workflow
 1. Read the plan from the orchestrator (passed in context). Only pick up
    tasks tagged `@builder`.
-2. Read `state.json` to know the goal and branch.
+2. Read `state.json` to know the goal and branch (active goal = last entry).
 3. Implement changes in the minimal number of files.
 4. Review `git status`. Revert any changed file not directly related to the goal.
 5. Stage new files with `.opencode/scripts/goal-git.sh stage <file>...`.

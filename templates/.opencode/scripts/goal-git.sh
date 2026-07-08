@@ -16,18 +16,19 @@ err()  { echo -e "${RED}[goal]${NC} $*" >&2; }
 
 usage() {
   cat <<EOF
-Usage: goal-git.sh {start|continue|stage|commit|push|pr|pending|analyze|selfcheck} [args]
+Usage: goal-git.sh {start|continue|list|stage|commit|push|pr|pending|analyze|selfcheck} [args]
 
 Commands:
-  start <goal>     Create branch and write state.json
-  continue <goal>  Update goal on existing branch (keeps PR/MR)
-  stage <file>...  Stage specific files for commit (use for new files)
-  commit [msg]     Commit staged changes (conventional commit)
-  push             Push branch to origin
-  pr               Create or update the PR (GitHub) / MR (GitLab)
-  pending          Check for unresolved review threads (exit 0 = clean)
-  analyze          Run gitnexus analyze && rtk gain
-  selfcheck        Run platform detection self-check
+  start <goal>       Create branch and append goal to history
+  continue [id]      Continue active goal (or switch to goal by branch/text)
+  list               List all goals with status and active marker
+  stage <file>...    Stage specific files for commit (use for new files)
+  commit [msg]       Commit staged changes (conventional commit)
+  push               Push branch to origin
+  pr                 Create or update the PR (GitHub) / MR (GitLab)
+  pending            Check for unresolved review threads (exit 0 = clean)
+  analyze            Run gitnexus analyze && rtk gain
+  selfcheck          Run platform detection self-check
 EOF
   exit 1
 }
@@ -63,6 +64,24 @@ require_vcs_cli() {
   esac
 }
 
+# --- State Helpers ---
+
+state_ensure_array() {
+  if [ -f "$STATE_FILE" ] && jq -e 'type == "object"' "$STATE_FILE" >/dev/null 2>&1; then
+    jq '[.]' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  fi
+}
+
+state_active() {
+  state_ensure_array
+  jq -r '.[-1]' "$STATE_FILE"
+}
+
+state_update() {
+  local field="$1" value="$2"
+  jq --arg v "$value" ".[-1].$field = \$v" "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+}
+
 # --- Commands ---
 
 detect_base() {
@@ -95,11 +114,13 @@ cmd_start() {
   local goal="${1:-}"
   [ -z "$goal" ] && { err "start requires a goal description"; exit 1; }
 
+  state_ensure_array
+
   if [ -f "$STATE_FILE" ]; then
     local old_status
-    old_status=$(jq -r '.status // "unknown"' "$STATE_FILE" 2>/dev/null || echo "unknown")
+    old_status=$(jq -r '.[-1].status // "unknown"' "$STATE_FILE" 2>/dev/null || echo "unknown")
     if [ "$old_status" = "in_progress" ]; then
-      warn "A goal is already in progress. Starting a new goal will replace it. Use 'continue' to extend the existing goal instead."
+      warn "A goal is already in progress. Starting a new goal will append to history. Use 'continue' to extend the existing goal instead."
     fi
   fi
 
@@ -114,10 +135,16 @@ cmd_start() {
   git fetch origin "$base" 2>/dev/null || true
   git checkout -b "$branch" "origin/$base" 2>/dev/null || git checkout "$branch" 2>/dev/null || true
 
-  jq -n --arg goal "$goal" --arg branch "$branch" --arg base "$base" \
-    '{goal: $goal, branch: $branch, base_branch: $base, pr_number: null, pr_url: "", status: "in_progress"}' \
-    > "$STATE_FILE"
-  log "state.json written"
+  local new_goal
+  new_goal=$(jq -n --arg goal "$goal" --arg branch "$branch" --arg base "$base" \
+    '{goal: $goal, branch: $branch, base_branch: $base, pr_number: null, pr_url: "", status: "in_progress"}')
+
+  if [ -f "$STATE_FILE" ]; then
+    jq --argjson entry "$new_goal" '. + [$entry]' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  else
+    echo "[$new_goal]" > "$STATE_FILE"
+  fi
+  log "Goal #$(jq 'length' "$STATE_FILE") started"
 }
 
 cmd_commit() {
@@ -130,8 +157,9 @@ cmd_commit() {
 
 cmd_push() {
   require_cmd git jq
+  state_ensure_array
   local branch
-  branch=$(jq -r '.branch' "$STATE_FILE")
+  branch=$(jq -r '.[-1].branch' "$STATE_FILE")
   git push -u origin "$branch" --force-with-lease 2>/dev/null || git push -u origin "$branch"
   log "Pushed: $branch"
 }
@@ -139,22 +167,23 @@ cmd_push() {
 cmd_pr() {
   require_cmd jq
   require_vcs_cli
+  state_ensure_array
   local branch base goal pr_number title pr_url
-  branch=$(jq -r '.branch' "$STATE_FILE")
-  base=$(jq -r '.base_branch' "$STATE_FILE")
-  goal=$(jq -r '.goal' "$STATE_FILE")
-  pr_number=$(jq -r '.pr_number' "$STATE_FILE")
+  branch=$(jq -r '.[-1].branch' "$STATE_FILE")
+  base=$(jq -r '.[-1].base_branch' "$STATE_FILE")
+  goal=$(jq -r '.[-1].goal' "$STATE_FILE")
+  pr_number=$(jq -r '.[-1].pr_number' "$STATE_FILE")
 
   if [ "$pr_number" != "null" ] && [ -n "$pr_number" ]; then
     log "PR/MR already exists: #$pr_number"
     return
   fi
 
-  title="${goal:0:72}"
+  title="${goal:0:250}"
 
   case "$platform" in
     github)
-      pr_number=$(gh pr create --base "$base" --head "$branch" --title "$title" --body "Automated by /goal" --json number -q '.number')
+      pr_number=$(gh pr create --base "$base" --head "$branch" --title "$title" --body "$goal" --json number -q '.number')
       local gh_owner
       gh_owner=$(gh repo view --json nameWithOwner -q '.nameWithOwner')
       pr_url="https://github.com/$gh_owner/pull/$pr_number"
@@ -162,12 +191,12 @@ cmd_pr() {
     gitlab)
       log "Creating MR: $title"
       local mr_output mr_number
-      mr_output=$(glab mr create --yes --source-branch "$branch" --target-branch "$base" --title "$title" --description "Automated by /goal" --output json 2>/dev/null || true)
+      mr_output=$(glab mr create --yes --source-branch "$branch" --target-branch "$base" --title "$title" --description "$goal" --output json 2>/dev/null || true)
       if echo "$mr_output" | jq -e '.iid' >/dev/null 2>&1; then
         mr_number=$(echo "$mr_output" | jq -r '.iid')
         pr_url=$(echo "$mr_output" | jq -r '.web_url // empty')
       else
-        mr_output=$(glab mr create --yes --source-branch "$branch" --target-branch "$base" --title "$title" --description "Automated by /goal" 2>&1)
+        mr_output=$(glab mr create --yes --source-branch "$branch" --target-branch "$base" --title "$title" --description "$goal" 2>&1)
         mr_number=$(echo "$mr_output" | grep -oE '\!([0-9]+)' | head -1 | tr -d '!')
       fi
       [ -z "$mr_number" ] && { err "Failed to extract MR number from glab output"; err "Output: $mr_output"; exit 1; }
@@ -186,7 +215,7 @@ cmd_pr() {
   esac
 
   jq --argjson pn "$pr_number" --arg url "$pr_url" \
-    '.pr_number = $pn | .pr_url = $url' \
+    '.[-1].pr_number = $pn | .[-1].pr_url = $url' \
     "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
 
   log "Created: $pr_url"
@@ -195,8 +224,9 @@ cmd_pr() {
 cmd_pending() {
   require_cmd jq
   require_vcs_cli
+  state_ensure_array
   local pr_number unresolved result total
-  pr_number=$(jq -r '.pr_number' "$STATE_FILE")
+  pr_number=$(jq -r '.[-1].pr_number' "$STATE_FILE")
 
   if [ "$pr_number" = "null" ] || [ -z "$pr_number" ]; then
     err "No PR/MR yet — run 'goal-git.sh pr' first"
@@ -238,19 +268,37 @@ cmd_pending() {
 
 cmd_continue() {
   require_cmd git jq
-  local new_goal="${1:-}"
-  [ -z "$new_goal" ] && { err "continue requires a goal description"; exit 1; }
   [ ! -f "$STATE_FILE" ] && { err "No existing goal to continue — run 'start' first"; exit 1; }
 
-  local branch status
-  branch=$(jq -r '.branch' "$STATE_FILE")
-  status=$(jq -r '.status // "unknown"' "$STATE_FILE")
+  state_ensure_array
+  local identifier="${1:-}"
 
-  jq --arg goal "$new_goal" '.goal = $goal | .status = "in_progress"' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  if [ -n "$identifier" ]; then
+    local idx branch
+    # Try exact branch match first
+    idx=$(jq --arg id "$identifier" 'map(.branch == $id) | index(true)' "$STATE_FILE")
+    if [ "$idx" = "null" ]; then
+      # Try branch partial (goal/<text>)
+      idx=$(jq --arg id "$identifier" 'map(.branch | contains($id)) | index(true)' "$STATE_FILE")
+    fi
+    if [ "$idx" = "null" ]; then
+      err "Goal not found: $identifier (use 'list' to see all goals)"
+      exit 1
+    fi
+    # Switch goal: move found entry to end of array
+    jq --argjson idx "$idx" '.[:$idx] + .[($idx+1):] + [.[$idx]]' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    branch=$(jq -r '.[-1].branch' "$STATE_FILE")
+    log "Switched to goal on branch: $branch"
+  fi
 
+  # Set active goal status to in_progress
+  jq '.[-1].status = "in_progress"' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+
+  local branch
+  branch=$(jq -r '.[-1].branch' "$STATE_FILE")
   git checkout "$branch" 2>/dev/null || true
-  log "Goal updated on branch: $branch"
-  log "Continuing: $new_goal"
+  log "Continuing on branch: $branch"
+  log "Goal: $(jq -r '.[-1].goal' "$STATE_FILE")"
 }
 
 cmd_stage() {
@@ -258,6 +306,27 @@ cmd_stage() {
   [ $# -eq 0 ] && { err "stage requires at least one file path"; exit 1; }
   git add "$@"
   log "Staged: $*"
+}
+
+cmd_list() {
+  require_cmd jq
+  if [ ! -f "$STATE_FILE" ]; then
+    log "No goals yet. Run 'start' to create one."
+    return
+  fi
+  state_ensure_array
+  local count
+  count=$(jq 'length' "$STATE_FILE")
+  log "$count goal(s):"
+  jq -r '
+    length as $total |
+    to_entries | .[] |
+    "  \(.key + 1) [\(.value.status)] " +
+    (if .key + 1 == $total then "* " else "  " end) +
+    "\(.value.branch) — \(.value.goal)"
+  ' "$STATE_FILE"
+  echo ""
+  log "* = active goal"
 }
 
 cmd_analyze() {
@@ -272,6 +341,11 @@ cmd_analyze() {
 cmd_selfcheck() {
   require_cmd git jq
   log "selfcheck: start"
+
+  if [ -f "$STATE_FILE" ]; then
+    state_ensure_array
+    log "Goals in state.json: $(jq 'length' "$STATE_FILE") ($(jq -r '.[-1].status' "$STATE_FILE"))"
+  fi
 
   local url
   url="$(git remote get-url origin 2>/dev/null || echo '<no origin remote>')"
@@ -297,6 +371,7 @@ cmd_selfcheck() {
 case "${1:-}" in
   start)    cmd_start "${2:-}" ;;
   continue) cmd_continue "${2:-}" ;;
+  list)     cmd_list ;;
   stage)    shift; cmd_stage "$@" ;;
   commit)   cmd_commit "${2:-}" ;;
   push)     cmd_push ;;
