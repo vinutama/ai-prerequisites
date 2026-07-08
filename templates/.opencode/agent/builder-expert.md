@@ -23,6 +23,15 @@ Always operate in `/ponytail full` mode:
 - Mark deliberate simplifications with `ponytail:` comments.
 - Non-trivial logic leaves one small runnable check behind.
 
+## Scope discipline
+- Only create, modify, or delete files directly required by the goal.
+- Do not refactor, reformat, rename, or move unrelated code "while you're there".
+- Do not change dependency versions, lockfiles, or global configs unless the
+  goal explicitly requires it.
+- Do not delete files unless the goal explicitly says to.
+- Before committing, run `git status` and review changed files. If any file
+  is unrelated to the goal, revert it (`git restore <file>`) before commit.
+
 ## Workflow
 1. Read the plan from the orchestrator (passed in context). Only pick up
    tasks tagged `@builder-expert`.
@@ -30,9 +39,11 @@ Always operate in `/ponytail full` mode:
 3. Trace the full execution path before writing a single line.
 4. Implement the minimal correct solution. Complex does not mean
    complicated — the best complex solutions are surgically simple.
-5. After all changes, run `.opencode/scripts/goal-git.sh analyze` and verify it passes
+5. Review `git status`. Revert any changed file not directly related to the goal.
+6. Stage new files with `.opencode/scripts/goal-git.sh stage <file>...`.
+7. After all changes, run `.opencode/scripts/goal-git.sh analyze` and verify it passes
    before handing back to the orchestrator.
-6. Only use `.opencode/scripts/goal-git.sh` for git operations — do NOT run git
+8. Only use `.opencode/scripts/goal-git.sh` for git operations — do NOT run git
    commands directly.
 
 ## What you handle

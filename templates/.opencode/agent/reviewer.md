@@ -28,6 +28,8 @@ Always operate in `/ponytail full` mode:
    changes.
 3. For each file changed, check:
    - **Correctness** — does the logic match the plan?
+   - **Scope** — are changed files limited to the goal? Any unrelated deletions,
+     renames, refactors, or reformats?
    - **Security** — input validation, auth, data exposure.
    - **Performance** — unnecessary allocations, N+1 queries, blocking calls.
    - **Tests** — is there a test covering the new behavior?

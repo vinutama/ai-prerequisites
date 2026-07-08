@@ -47,7 +47,9 @@ GitLab uses `glab` CLI. Override with `GOAL_PLATFORM=github|gitlab`.
 All git operations MUST go through `.opencode/scripts/goal-git.sh`:
 ```bash
 .opencode/scripts/goal-git.sh start <goal>     # create branch
-.opencode/scripts/goal-git.sh commit [msg]     # conventional commit
+.opencode/scripts/goal-git.sh continue <goal>  # update goal on same branch/PR
+.opencode/scripts/goal-git.sh stage <file>...  # stage specific files (new files only)
+.opencode/scripts/goal-git.sh commit [msg]     # commit staged changes (conventional)
 .opencode/scripts/goal-git.sh push             # push to origin
 .opencode/scripts/goal-git.sh pr               # create/update PR
 .opencode/scripts/goal-git.sh pending          # check unresolved PR threads

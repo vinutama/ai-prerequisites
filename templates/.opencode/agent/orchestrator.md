@@ -32,8 +32,10 @@ Always operate in `/ponytail full` mode:
 ## Workflow — follow this exactly
 
 ### 1. SETUP
-- Run `.opencode/scripts/goal-git.sh start "$ARGUMENTS"` to create the branch and
-  write `state.json`.
+- If this is a new goal, run `.opencode/scripts/goal-git.sh start "$ARGUMENTS"` to create the
+  branch and write `state.json`.
+- If this is continuing an existing goal, run `.opencode/scripts/goal-git.sh continue "$ARGUMENTS"`
+  to update the goal on the same branch — do NOT create a new branch or PR.
 
 ### 2. PLAN
 - Delegate to `@planner` to analyze the codebase and produce an

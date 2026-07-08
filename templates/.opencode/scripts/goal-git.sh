@@ -16,11 +16,13 @@ err()  { echo -e "${RED}[goal]${NC} $*" >&2; }
 
 usage() {
   cat <<EOF
-Usage: goal-git.sh {start|commit|push|pr|pending|analyze|selfcheck} [args]
+Usage: goal-git.sh {start|continue|stage|commit|push|pr|pending|analyze|selfcheck} [args]
 
 Commands:
   start <goal>     Create branch and write state.json
-  commit [msg]     Stage all and conventional-commit
+  continue <goal>  Update goal on existing branch (keeps PR/MR)
+  stage <file>...  Stage specific files for commit (use for new files)
+  commit [msg]     Commit staged changes (conventional commit)
   push             Push branch to origin
   pr               Create or update the PR (GitHub) / MR (GitLab)
   pending          Check for unresolved review threads (exit 0 = clean)
@@ -93,6 +95,14 @@ cmd_start() {
   local goal="${1:-}"
   [ -z "$goal" ] && { err "start requires a goal description"; exit 1; }
 
+  if [ -f "$STATE_FILE" ]; then
+    local old_status
+    old_status=$(jq -r '.status // "unknown"' "$STATE_FILE" 2>/dev/null || echo "unknown")
+    if [ "$old_status" = "in_progress" ]; then
+      warn "A goal is already in progress. Starting a new goal will replace it. Use 'continue' to extend the existing goal instead."
+    fi
+  fi
+
   local base branch
   base=$(detect_base)
   branch="goal/$(slugify "$goal")"
@@ -113,8 +123,7 @@ cmd_start() {
 cmd_commit() {
   require_cmd git
   local msg="${1:-chore: automated changes}"
-  git add -A
-  git diff --cached --quiet && { log "Nothing to commit"; return; }
+  git diff --cached --quiet && { log "Nothing staged to commit. Use 'stage <file>...' to add files."; return; }
   git commit -m "$msg"
   log "Committed: $msg"
 }
@@ -227,6 +236,30 @@ cmd_pending() {
   exit 0
 }
 
+cmd_continue() {
+  require_cmd git jq
+  local new_goal="${1:-}"
+  [ -z "$new_goal" ] && { err "continue requires a goal description"; exit 1; }
+  [ ! -f "$STATE_FILE" ] && { err "No existing goal to continue — run 'start' first"; exit 1; }
+
+  local branch status
+  branch=$(jq -r '.branch' "$STATE_FILE")
+  status=$(jq -r '.status // "unknown"' "$STATE_FILE")
+
+  jq --arg goal "$new_goal" '.goal = $goal | .status = "in_progress"' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+
+  git checkout "$branch" 2>/dev/null || true
+  log "Goal updated on branch: $branch"
+  log "Continuing: $new_goal"
+}
+
+cmd_stage() {
+  require_cmd git
+  [ $# -eq 0 ] && { err "stage requires at least one file path"; exit 1; }
+  git add "$@"
+  log "Staged: $*"
+}
+
 cmd_analyze() {
   require_cmd npx
   log "Running gitnexus analyze…"
@@ -263,6 +296,8 @@ cmd_selfcheck() {
 
 case "${1:-}" in
   start)    cmd_start "${2:-}" ;;
+  continue) cmd_continue "${2:-}" ;;
+  stage)    shift; cmd_stage "$@" ;;
   commit)   cmd_commit "${2:-}" ;;
   push)     cmd_push ;;
   pr)       cmd_pr ;;

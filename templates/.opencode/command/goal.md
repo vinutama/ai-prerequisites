@@ -16,3 +16,5 @@ Follow the orchestrator workflow:
 3. Report the final PR URL.
 
 Only use `.opencode/scripts/goal-git.sh` for all git operations.
+
+Tip: to extend an existing goal on the same branch/PR, use `/goal continue <objective>` instead.

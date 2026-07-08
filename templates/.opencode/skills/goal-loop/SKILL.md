@@ -59,7 +59,9 @@ The orchestrator reads these tags and delegates to the correct agent.
 ## Git Helper (`.opencode/scripts/goal-git.sh`)
 ```bash
 .opencode/scripts/goal-git.sh start <goal>     # create branch, write state.json
-.opencode/scripts/goal-git.sh commit [msg]     # stage all, conventional commit
+.opencode/scripts/goal-git.sh continue <goal>  # update goal on same branch/PR
+.opencode/scripts/goal-git.sh stage <file>...  # stage specific files (new files only)
+.opencode/scripts/goal-git.sh commit [msg]     # commit staged changes (conventional)
 .opencode/scripts/goal-git.sh push             # push branch to origin
 .opencode/scripts/goal-git.sh pr               # create or update PR
 .opencode/scripts/goal-git.sh pending          # exit 0 if no unresolved threads
