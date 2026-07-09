@@ -29,22 +29,21 @@ Always operate in `/ponytail full` mode:
 - Do not change dependency versions, lockfiles, or global configs unless the
   goal explicitly requires it.
 - Do not delete files unless the goal explicitly says to.
-- Before committing, run `git status` and review changed files. If any file
-  is unrelated to the goal, revert it (`git restore <file>`) before commit.
+- Before committing, run `.opencode/scripts/goal-git.sh status` and review changed files. If any file
+  is unrelated to the goal, revert it with `.opencode/scripts/goal-git.sh restore <file>` before commit.
 
 ## Workflow
 1. Read the plan from the orchestrator (passed in context). Only pick up
    tasks tagged `@builder-expert`.
-2. Read `state.json` to know the goal and branch (active goal = last entry).
+2. Read the active goal via `.opencode/scripts/goal-git.sh state`.
 3. Trace the full execution path before writing a single line.
 4. Implement the minimal correct solution. Complex does not mean
    complicated — the best complex solutions are surgically simple.
-5. Review `git status`. Revert any changed file not directly related to the goal.
+5. Run `.opencode/scripts/goal-git.sh status`. Revert any changed file not directly related to the goal with `.opencode/scripts/goal-git.sh restore <file>`.
 6. Stage new files with `.opencode/scripts/goal-git.sh stage <file>...`.
 7. After all changes, run `.opencode/scripts/goal-git.sh analyze` and verify it passes
    before handing back to the orchestrator.
-8. Only use `.opencode/scripts/goal-git.sh` for git operations — do NOT run git
-   commands directly.
+8. NEVER invoke `git`, `gh`, or `glab` directly — only use `.opencode/scripts/goal-git.sh`.
 
 ## What you handle
 - Novel algorithms and data structures.

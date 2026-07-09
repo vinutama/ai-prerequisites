@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-STATE_FILE="${STATE_FILE:-state.json}"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPTS_DIR/../.." && pwd)"
+STATE_FILE="$PROJECT_ROOT/state.json"
+CONFIG_FILE="$PROJECT_ROOT/.opencode/goal-config.json"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -16,7 +17,7 @@ err()  { echo -e "${RED}[goal]${NC} $*" >&2; }
 
 usage() {
   cat <<EOF
-Usage: goal-git.sh {start|continue|list|stage|commit|push|pr|pending|analyze|selfcheck} [args]
+Usage: goal-git.sh {start|continue|list|stage|commit|push|pr|pending|analyze|selfcheck|config|state|status|restore|diff} [args]
 
 Commands:
   start <goal>       Create branch and append goal to history
@@ -29,6 +30,12 @@ Commands:
   pending            Check for unresolved review threads (exit 0 = clean)
   analyze            Run gitnexus analyze && rtk gain
   selfcheck          Run platform detection self-check
+  config set <source> <target-branch> <platform>  Write goal-config.json
+  config get         Print goal-config.json
+  state              Print active goal JSON from state.json
+  status             Show working tree status
+  restore <file>...  Restore files to HEAD
+  diff               Show diff against base branch for active goal
 EOF
   exit 1
 }
@@ -38,6 +45,15 @@ require_cmd() {
 }
 
 cd "$PROJECT_ROOT"
+
+# --- Config Helpers ---
+
+config_read() {
+  local field="$1"
+  if [ -f "$CONFIG_FILE" ]; then
+    jq -r --arg f "$field" '.[$f] // empty' "$CONFIG_FILE" 2>/dev/null || true
+  fi
+}
 
 # --- Platform Detection ---
 
@@ -51,10 +67,11 @@ detect_platform() {
   esac
 }
 
-platform="${GOAL_PLATFORM:-$(detect_platform)}"
+platform="${GOAL_PLATFORM:-$(config_read platform)}"
+[ -z "$platform" ] && platform="$(detect_platform)"
 case "$platform" in
   github|gitlab) ;;
-  *) err "Cannot detect platform from origin remote. Set GOAL_PLATFORM=github or GOAL_PLATFORM=gitlab"; exit 1 ;;
+  *) err "Cannot detect platform. Run '/init-goal' or set GOAL_PLATFORM=github|gitlab"; exit 1 ;;
 esac
 
 require_vcs_cli() {
@@ -85,6 +102,13 @@ state_update() {
 # --- Commands ---
 
 detect_base() {
+  local configured
+  configured="$(config_read target_branch)"
+  if [ -n "$configured" ]; then
+    echo "$configured"
+    return
+  fi
+
   case "$platform" in
     github)
       require_cmd gh
@@ -275,23 +299,19 @@ cmd_continue() {
 
   if [ -n "$identifier" ]; then
     local idx branch
-    # Try exact branch match first
     idx=$(jq --arg id "$identifier" 'map(.branch == $id) | index(true)' "$STATE_FILE")
     if [ "$idx" = "null" ]; then
-      # Try branch partial (goal/<text>)
       idx=$(jq --arg id "$identifier" 'map(.branch | contains($id)) | index(true)' "$STATE_FILE")
     fi
     if [ "$idx" = "null" ]; then
       err "Goal not found: $identifier (use 'list' to see all goals)"
       exit 1
     fi
-    # Switch goal: move found entry to end of array
     jq --argjson idx "$idx" '.[:$idx] + .[($idx+1):] + [.[$idx]]' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
     branch=$(jq -r '.[-1].branch' "$STATE_FILE")
     log "Switched to goal on branch: $branch"
   fi
 
-  # Set active goal status to in_progress
   jq '.[-1].status = "in_progress"' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
 
   local branch
@@ -338,13 +358,93 @@ cmd_analyze() {
   log "Analyze complete"
 }
 
+cmd_config_set() {
+  require_cmd jq
+  local source="${1:-}" target="${2:-}" plat="${3:-}"
+
+  [ -z "$source" ] || [ -z "$target" ] || [ -z "$plat" ] && {
+    err "config set requires: <goal_source> <target_branch> <platform>"
+    exit 1
+  }
+
+  case "$source" in
+    jira|markdown|prompt) ;;
+    *) err "goal_source must be: jira, markdown, or prompt"; exit 1 ;;
+  esac
+
+  case "$plat" in
+    github|gitlab) ;;
+    *) err "platform must be: github or gitlab"; exit 1 ;;
+  esac
+
+  mkdir -p "$(dirname "$CONFIG_FILE")"
+  jq -n \
+    --arg source "$source" \
+    --arg target "$target" \
+    --arg platform "$plat" \
+    '{goal_source: $source, target_branch: $target, platform: $platform}' \
+    > "$CONFIG_FILE"
+
+  log "Config written to $CONFIG_FILE"
+  jq . "$CONFIG_FILE"
+}
+
+cmd_config_get() {
+  require_cmd jq
+  if [ ! -f "$CONFIG_FILE" ]; then
+    err "No goal config found — run '/init-goal' first"
+    exit 1
+  fi
+  jq . "$CONFIG_FILE"
+}
+
+cmd_state() {
+  require_cmd jq
+  [ ! -f "$STATE_FILE" ] && { err "No state found — run 'start' first"; exit 1; }
+  state_ensure_array
+  state_active
+}
+
+cmd_status() {
+  require_cmd git
+  git status
+}
+
+cmd_restore() {
+  require_cmd git
+  [ $# -eq 0 ] && { err "restore requires at least one file path"; exit 1; }
+  git restore "$@"
+  log "Restored: $*"
+}
+
+cmd_diff() {
+  require_cmd git jq
+  [ ! -f "$STATE_FILE" ] && { err "No state found — run 'start' first"; exit 1; }
+  state_ensure_array
+  local base
+  base=$(jq -r '.[-1].base_branch' "$STATE_FILE")
+  git diff "origin/$base..HEAD"
+}
+
 cmd_selfcheck() {
   require_cmd git jq
   log "selfcheck: start"
+  log "Project root: $PROJECT_ROOT"
+  log "State file: $STATE_FILE"
+  log "Config file: $CONFIG_FILE"
 
   if [ -f "$STATE_FILE" ]; then
     state_ensure_array
     log "Goals in state.json: $(jq 'length' "$STATE_FILE") ($(jq -r '.[-1].status' "$STATE_FILE"))"
+  else
+    log "No state.json yet"
+  fi
+
+  if [ -f "$CONFIG_FILE" ]; then
+    log "Goal config:"
+    jq . "$CONFIG_FILE"
+  else
+    warn "No goal-config.json — run '/init-goal' to configure"
   fi
 
   local url
@@ -378,6 +478,17 @@ case "${1:-}" in
   pr)       cmd_pr ;;
   pending)  cmd_pending ;;
   analyze)  cmd_analyze ;;
+  config)
+    case "${2:-}" in
+      set) cmd_config_set "${3:-}" "${4:-}" "${5:-}" ;;
+      get) cmd_config_get ;;
+      *)   err "config subcommand must be 'set' or 'get'"; exit 1 ;;
+    esac
+    ;;
+  state)    cmd_state ;;
+  status)   cmd_status ;;
+  restore)  shift; cmd_restore "$@" ;;
+  diff)     cmd_diff ;;
   selfcheck) cmd_selfcheck ;;
   *)        usage ;;
 esac

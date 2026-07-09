@@ -15,9 +15,9 @@ description: >-
 ```
 
 ## Rules
-1. **Single source of truth**: `state.json` in the project root.
-2. **One tool for git**: all agents route git operations through
-   `.opencode/scripts/goal-git.sh`.
+1. **Single source of truth**: `state.json` in the project root (project-level only).
+2. **One tool for git**: all agents route git and state operations through
+   `.opencode/scripts/goal-git.sh`. NEVER invoke `git`, `gh`, or `glab` directly.
 3. **Analyze before review**: after every code change, run
    `npx gitnexus analyze && rtk gain`. If either fails, STOP.
 4. **Consensus gate**: PR must have zero unresolved review threads before
@@ -45,6 +45,7 @@ The planner analyzes task complexity and tags each planned item:
 The orchestrator reads these tags and delegates to the correct agent.
 
 ## State (`state.json`)
+Project-level only — pinned to the project root, never global.
 ```json
 [
   {
@@ -57,17 +58,32 @@ The orchestrator reads these tags and delegates to the correct agent.
   }
 ]
 ```
-The last entry is the active goal. All commands read/write it.
+The last entry is the active goal. Read via `goal-git.sh state`.
+
+## Config (`.opencode/goal-config.json`)
+Project-level only — set via `/init-goal`.
+```json
+{
+  "goal_source": "prompt|markdown|jira",
+  "target_branch": "main",
+  "platform": "github|gitlab"
+}
+```
 
 ## Git Helper (`.opencode/scripts/goal-git.sh`)
 ```bash
 .opencode/scripts/goal-git.sh start <goal>     # create branch, append to history
 .opencode/scripts/goal-git.sh continue [id]    # resume active or switch goal
 .opencode/scripts/goal-git.sh list             # list all goals
-.opencode/scripts/goal-git.sh stage <file>...   # stage specific files (new files only)
-.opencode/scripts/goal-git.sh commit [msg]     # commit staged changes (conventional)
+.opencode/scripts/goal-git.sh state            # print active goal JSON
+.opencode/scripts/goal-git.sh stage <file>...   # stage specific files
+.opencode/scripts/goal-git.sh commit [msg]     # commit staged changes
 .opencode/scripts/goal-git.sh push             # push branch to origin
 .opencode/scripts/goal-git.sh pr               # create or update PR
 .opencode/scripts/goal-git.sh pending          # exit 0 if no unresolved threads
 .opencode/scripts/goal-git.sh analyze          # npx gitnexus analyze && rtk gain
+.opencode/scripts/goal-git.sh status           # working tree status
+.opencode/scripts/goal-git.sh restore <file>   # restore files to HEAD
+.opencode/scripts/goal-git.sh diff             # diff against base branch
+.opencode/scripts/goal-git.sh config get       # print goal config
 ```

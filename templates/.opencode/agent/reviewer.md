@@ -23,9 +23,8 @@ Always operate in `/ponytail full` mode:
 - Non-trivial logic leaves one small runnable check behind.
 
 ## Workflow
-1. Read the goal from `state.json` (active goal = last entry).
-2. Run `git diff origin/$(jq -r .base_branch state.json)..HEAD` to see all
-   changes.
+1. Read the active goal via `.opencode/scripts/goal-git.sh state`.
+2. Run `.opencode/scripts/goal-git.sh diff` to see all changes against the base branch.
 3. For each file changed, check:
    - **Correctness** — does the logic match the plan?
    - **Scope** — are changed files limited to the goal? Any unrelated deletions,

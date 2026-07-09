@@ -10,6 +10,7 @@ PR, looping until zero unresolved review threads remain.
 ./init.sh /path/to/your/project
 cd /path/to/your/project
 opencode
+/init-goal          # configure goal source, target branch, platform
 /goal Add a health-check endpoint
 ```
 
@@ -18,12 +19,23 @@ opencode
 | Path | Purpose |
 |---|---|
 | `AGENTS.md` | Project conventions and workflow instructions |
-| `state.json` | Runtime state (goal, branch, PR number) — gitignored |
+| `state.json` | Runtime state (goal, branch, PR number) — gitignored, project-level |
+| `.opencode/goal-config.json` | Goal source, target branch, platform — gitignored, project-level |
 | `.opencode/agent/` | 6 specialized agents |
-| `.opencode/command/goal.md` | `/goal` slash command |
+| `.opencode/command/goal.md` | `/goal` slash command (with `--list`, `--continue` flags) |
+| `.opencode/command/init-goal.md` | `/init-goal` setup command |
 | `.opencode/skills/goal-loop/` | Reusable goal-loop skill |
 | `.opencode/goal-models.json` | Preferred and fallback model config per agent |
 | `.opencode/scripts/goal-git.sh` | Git helper (branch, commit, push, PR, review loop) |
+
+## Commands
+
+| Command | Description |
+|---|---|
+| `/init-goal` | One-time setup: goal source, target branch, git platform |
+| `/goal <objective>` | Start a new goal |
+| `/goal --list` | List all goals |
+| `/goal --continue [id]` | Resume a previous goal |
 
 ## Agent roles
 
@@ -49,7 +61,7 @@ The orchestrator delegates automatically.
 ## Requirements
 
 - [OpenCode](https://opencode.ai) with OpenCode Go and Zen credentials
-- Git forge CLI — auto-detected from origin remote:
+- Git forge CLI — configured via `/init-goal` or auto-detected from origin remote:
   - **GitHub**: [GitHub CLI](https://cli.github.com) (`gh auth login`)
   - **GitLab**: [GitLab CLI](https://gitlab.com/gitlab-org/cli) (`glab auth login`)
   - Override with `GOAL_PLATFORM=github|gitlab`

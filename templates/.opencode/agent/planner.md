@@ -24,7 +24,7 @@ Always operate in `/ponytail full` mode:
 - Non-trivial logic leaves one small runnable check behind.
 
 ## Workflow
-1. Read the goal from `state.json` in the project root (active goal = last entry).
+1. Read the active goal via `.opencode/scripts/goal-git.sh state`.
 2. Explore the codebase to understand existing patterns, utilities, and
    architecture.
 3. Produce a plan with numbered tasks. For each task, tag it with the

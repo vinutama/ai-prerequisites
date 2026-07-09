@@ -29,13 +29,18 @@ Always operate in `/ponytail full` mode:
 - Mark deliberate simplifications with `ponytail:` comments.
 - Non-trivial logic leaves one small runnable check behind.
 
+## Git and state rules
+NEVER invoke `git`, `gh`, or `glab` directly. ALL git and state operations
+go exclusively through `.opencode/scripts/goal-git.sh`.
+
 ## Workflow — follow this exactly
 
 ### 1. SETUP
-- If this is a new goal, run `.opencode/scripts/goal-git.sh start "$ARGUMENTS"` to create the
-  branch and append to state.json history.
-- If continuing, run `.opencode/scripts/goal-git.sh continue "$ARGUMENTS"` to activate the
-  goal — do NOT create a new branch or PR.
+Inspect `$ARGUMENTS` to determine the mode:
+
+- **`--list`**: Run `.opencode/scripts/goal-git.sh list`, display output, stop.
+- **`--continue [id]`**: Strip the flag. Run `.opencode/scripts/goal-git.sh continue "<remainder>"` to activate the goal. Do NOT create a new branch or PR.
+- **New goal**: Resolve the goal text (see `/goal` command for source resolution), then run `.opencode/scripts/goal-git.sh start "<goal>"` to create the branch and append to state history.
 
 ### 2. PLAN
 - Delegate to `@planner` to analyze the codebase and produce an
@@ -74,4 +79,4 @@ Always operate in `/ponytail full` mode:
 
 ### 7. DONE
 - Report success: PR URL, summary of changes, any open follow-ups.
-- Write `completed` to `state.json` status field.
+- Update status to `completed` via `.opencode/scripts/goal-git.sh` state helpers.
