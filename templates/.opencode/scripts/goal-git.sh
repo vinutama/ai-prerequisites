@@ -5,6 +5,7 @@ SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPTS_DIR/../.." && pwd)"
 STATE_FILE="$PROJECT_ROOT/state.json"
 CONFIG_FILE="$PROJECT_ROOT/.opencode/goal-config.json"
+WORKTREES_DIR="$PROJECT_ROOT/.worktrees"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -17,25 +18,32 @@ err()  { echo -e "${RED}[goal]${NC} $*" >&2; }
 
 usage() {
   cat <<EOF
-Usage: goal-git.sh {start|continue|list|stage|commit|push|pr|pending|analyze|selfcheck|config|state|status|restore|diff} [args]
+Usage: goal-git.sh <command> [args]
 
 Commands:
-  start <goal>       Create branch and append goal to history
-  continue [id]      Continue active goal (or switch to goal by branch/text)
-  list               List all goals with status and active marker
-  stage <file>...    Stage specific files for commit (use for new files)
-  commit [msg]       Commit staged changes (conventional commit)
-  push               Push branch to origin
-  pr                 Create or update the PR (GitHub) / MR (GitLab)
-  pending            Check for unresolved review threads (exit 0 = clean)
-  analyze            Run gitnexus analyze && rtk gain
-  selfcheck          Run platform detection self-check
-  config set <source> <target-branch> <platform>  Write goal-config.json
-  config get         Print goal-config.json
-  state              Print active goal JSON from state.json
-  status             Show working tree status
-  restore <file>...  Restore files to HEAD
-  diff               Show diff against base branch for active goal
+  start <goal>              Create branch and append goal to history
+  continue [id]             Continue active goal (or switch to goal by branch/text)
+  list                      List all goals with status and active marker
+  stage <file>...           Stage specific files for commit
+  commit [msg]              Commit staged changes (conventional commit)
+  push                      Push branch to origin
+  pr                        Create or update the PR (GitHub) / MR (GitLab)
+  pending                   Check for unresolved review threads (exit 0 = clean)
+  threads                   List review threads as JSON
+  comment <path> <line> <body>  Post inline review comment
+  resolve <thread-id>       Resolve a review thread/discussion
+  analyze                   Run gitnexus analyze && rtk gain
+  selfcheck                 Run platform detection self-check
+  config set <source> <target> <platform> [concurrency]  Write goal-config.json
+  config get                Print goal-config.json
+  state                     Print active goal JSON from state.json
+  status                    Show working tree status
+  restore <file>...         Restore files to HEAD
+  diff                      Show diff against base branch for active goal
+  worktree add <task-slug>  Create isolated git worktree for parallel task
+  worktree list             List active task worktrees
+  worktree merge <task-slug>  Merge worktree branch into goal branch
+  worktree remove <task-slug> Remove worktree without merging
 EOF
   exit 1
 }
@@ -99,6 +107,40 @@ state_update() {
   jq --arg v "$value" ".[-1].$field = \$v" "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
 }
 
+require_active_goal() {
+  require_cmd jq
+  [ ! -f "$STATE_FILE" ] && { err "No state found — run 'start' first"; exit 1; }
+  state_ensure_array
+}
+
+pr_number_active() {
+  require_active_goal
+  local pr_number
+  pr_number=$(jq -r '.[-1].pr_number' "$STATE_FILE")
+  if [ "$pr_number" = "null" ] || [ -z "$pr_number" ]; then
+    err "No PR/MR yet — run 'goal-git.sh pr' first"
+    exit 1
+  fi
+  echo "$pr_number"
+}
+
+github_owner_repo() {
+  require_cmd gh
+  local owner repo
+  owner=$(gh repo view --json owner -q '.owner.login')
+  repo=$(gh repo view --json name -q '.name')
+  echo "$owner" "$repo"
+}
+
+gitlab_project_path() {
+  require_cmd glab jq
+  local project_path encoded_path
+  project_path=$(glab repo view --output json 2>/dev/null | jq -r '.path_with_namespace // empty')
+  [ -z "$project_path" ] && { err "Failed to get project path from glab repo view"; exit 1; }
+  encoded_path=$(echo "$project_path" | jq -sRr @uri)
+  echo "$project_path" "$encoded_path"
+}
+
 # --- Commands ---
 
 detect_base() {
@@ -130,6 +172,26 @@ detect_base() {
 
 slugify() {
   echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | head -c 50
+}
+
+worktree_path() {
+  echo "$WORKTREES_DIR/$(slugify "$1")"
+}
+
+task_branch_name() {
+  local goal_branch slug
+  goal_branch="$1"
+  slug="$2"
+  echo "${goal_branch}--${slug}"
+}
+
+sync_worktree_config() {
+  local wt_path="$1"
+  [ -f "$STATE_FILE" ] && cp "$STATE_FILE" "$wt_path/state.json"
+  if [ -f "$CONFIG_FILE" ]; then
+    mkdir -p "$wt_path/.opencode"
+    cp "$CONFIG_FILE" "$wt_path/.opencode/goal-config.json"
+  fi
 }
 
 cmd_start() {
@@ -245,39 +307,53 @@ cmd_pr() {
   log "Created: $pr_url"
 }
 
-cmd_pending() {
+fetch_threads_json() {
   require_cmd jq
   require_vcs_cli
-  state_ensure_array
-  local pr_number unresolved result total
-  pr_number=$(jq -r '.[-1].pr_number' "$STATE_FILE")
-
-  if [ "$pr_number" = "null" ] || [ -z "$pr_number" ]; then
-    err "No PR/MR yet — run 'goal-git.sh pr' first"
-    exit 1
-  fi
+  local pr_number="$1"
 
   case "$platform" in
     github)
-      local owner repo query
-      owner=$(gh repo view --json owner -q '.owner.login')
-      repo=$(gh repo view --json name -q '.name')
-      query='query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){reviewThreads(first:100){nodes{id isResolved isOutdated comments(first:1){nodes{body}}}totalCount}}}}'
-
+      local owner repo query result
+      read -r owner repo < <(github_owner_repo)
+      query='query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){reviewThreads(first:100){nodes{id isResolved isOutdated path line comments(first:1){nodes{body}}}}}}}}'
       result=$(gh api graphql -f query="$query" -F owner="$owner" -F repo="$repo" -F pr="$pr_number" 2>/dev/null || echo '{}')
-      total=$(echo "$result" | jq -r '.data.repository.pullRequest.reviewThreads.totalCount // 0')
-      unresolved=$(echo "$result" | jq '[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved == false and .isOutdated == false)] | length')
+      echo "$result" | jq '[.data.repository.pullRequest.reviewThreads.nodes[]? | {
+        id: .id,
+        path: (.path // ""),
+        line: (.line // 0),
+        body: (.comments.nodes[0].body // ""),
+        resolved: (.isResolved or .isOutdated)
+      }]'
       ;;
     gitlab)
-      local project_path encoded_path
-      project_path=$(glab repo view --output json 2>/dev/null | jq -r '.path_with_namespace // empty')
-      [ -z "$project_path" ] && { err "Failed to get project path from glab repo view"; exit 1; }
-      encoded_path=$(echo "$project_path" | jq -sRr @uri)
+      local encoded_path result
+      read -r _ encoded_path < <(gitlab_project_path)
       result=$(glab api "projects/$encoded_path/merge_requests/$pr_number/discussions" 2>/dev/null || echo '[]')
-      total=$(echo "$result" | jq 'if type == "array" then length else 0 end')
-      unresolved=$(echo "$result" | jq '[.[] | select(.notes[0].resolved == false or (.notes | length > 1 and any(.resolved == false)))] | length')
+      echo "$result" | jq '[.[]? | {
+        id: .id,
+        path: (.position.new_path // ""),
+        line: (.position.new_line // 0),
+        body: (.notes[0].body // ""),
+        resolved: (.notes[0].resolved // false)
+      }]'
       ;;
   esac
+}
+
+cmd_threads() {
+  local pr_number
+  pr_number="$(pr_number_active)"
+  fetch_threads_json "$pr_number"
+}
+
+cmd_pending() {
+  require_cmd jq
+  local pr_number threads_json total unresolved
+  pr_number="$(pr_number_active)"
+  threads_json="$(fetch_threads_json "$pr_number")"
+  total=$(echo "$threads_json" | jq 'length')
+  unresolved=$(echo "$threads_json" | jq '[.[] | select(.resolved == false)] | length')
 
   echo "{\"total\": ${total:-0}, \"unresolved\": ${unresolved:-0}}"
 
@@ -288,6 +364,76 @@ cmd_pending() {
 
   log "No unresolved threads — PR/MR is clean"
   exit 0
+}
+
+cmd_comment() {
+  require_cmd jq
+  require_vcs_cli
+  local path="${1:-}" line="${2:-}" body="${3:-}"
+  [ -z "$path" ] || [ -z "$line" ] || [ -z "$body" ] && {
+    err "comment requires: <path> <line> <body>"
+    exit 1
+  }
+
+  local pr_number
+  pr_number="$(pr_number_active)"
+
+  case "$platform" in
+    github)
+      local owner repo head_sha
+      read -r owner repo < <(github_owner_repo)
+      head_sha=$(gh pr view "$pr_number" --json headRefOid -q '.headRefOid')
+      gh api "repos/$owner/$repo/pulls/$pr_number/comments" \
+        -f commit_id="$head_sha" \
+        -f path="$path" \
+        -F line="$line" \
+        -f side="RIGHT" \
+        -f body="$body" >/dev/null
+      ;;
+    gitlab)
+      local encoded_path versions base_sha head_sha start_sha
+      read -r _ encoded_path < <(gitlab_project_path)
+      versions=$(glab api "projects/$encoded_path/merge_requests/$pr_number/versions" | jq '.[0]')
+      base_sha=$(echo "$versions" | jq -r '.base_commit_sha')
+      head_sha=$(echo "$versions" | jq -r '.head_commit_sha')
+      start_sha=$(echo "$versions" | jq -r '.start_commit_sha // .base_commit_sha')
+      glab api --method POST "projects/$encoded_path/merge_requests/$pr_number/discussions" \
+        -f "body=$body" \
+        -f "position[position_type]=text" \
+        -f "position[base_sha]=$base_sha" \
+        -f "position[head_sha]=$head_sha" \
+        -f "position[start_sha]=$start_sha" \
+        -f "position[new_path]=$path" \
+        -f "position[new_line]=$line" >/dev/null
+      ;;
+  esac
+
+  log "Posted inline comment on $path:$line"
+}
+
+cmd_resolve() {
+  require_cmd jq
+  require_vcs_cli
+  local thread_id="${1:-}"
+  [ -z "$thread_id" ] && { err "resolve requires <thread-id>"; exit 1; }
+
+  local pr_number
+  pr_number="$(pr_number_active)"
+
+  case "$platform" in
+    github)
+      local mutation
+      mutation="mutation { resolveReviewThread(input: {threadId: \"$thread_id\"}) { thread { isResolved } } }"
+      gh api graphql -f query="$mutation" >/dev/null
+      ;;
+    gitlab)
+      local encoded_path
+      read -r _ encoded_path < <(gitlab_project_path)
+      glab api --method PUT "projects/$encoded_path/merge_requests/$pr_number/discussions/$thread_id?resolved=true" >/dev/null
+      ;;
+  esac
+
+  log "Resolved thread: $thread_id"
 }
 
 cmd_continue() {
@@ -360,10 +506,10 @@ cmd_analyze() {
 
 cmd_config_set() {
   require_cmd jq
-  local source="${1:-}" target="${2:-}" plat="${3:-}"
+  local source="${1:-}" target="${2:-}" plat="${3:-}" concurrency="${4:-1}"
 
   [ -z "$source" ] || [ -z "$target" ] || [ -z "$plat" ] && {
-    err "config set requires: <goal_source> <target_branch> <platform>"
+    err "config set requires: <goal_source> <target_branch> <platform> [concurrency]"
     exit 1
   }
 
@@ -377,12 +523,18 @@ cmd_config_set() {
     *) err "platform must be: github or gitlab"; exit 1 ;;
   esac
 
+  if ! [[ "$concurrency" =~ ^[0-9]+$ ]] || [ "$concurrency" -lt 1 ]; then
+    err "concurrency must be a positive integer (1 = sequential only)"
+    exit 1
+  fi
+
   mkdir -p "$(dirname "$CONFIG_FILE")"
   jq -n \
     --arg source "$source" \
     --arg target "$target" \
     --arg platform "$plat" \
-    '{goal_source: $source, target_branch: $target, platform: $platform}' \
+    --argjson concurrency "$concurrency" \
+    '{goal_source: $source, target_branch: $target, platform: $platform, concurrency: $concurrency}' \
     > "$CONFIG_FILE"
 
   log "Config written to $CONFIG_FILE"
@@ -426,12 +578,109 @@ cmd_diff() {
   git diff "origin/$base..HEAD"
 }
 
+cmd_worktree_add() {
+  require_cmd git jq
+  local slug="${1:-}"
+  [ -z "$slug" ] && { err "worktree add requires <task-slug>"; exit 1; }
+
+  slug="$(slugify "$slug")"
+  require_active_goal
+
+  local goal_branch task_branch wt_path
+  goal_branch=$(jq -r '.[-1].branch' "$STATE_FILE")
+  task_branch="$(task_branch_name "$goal_branch" "$slug")"
+  wt_path="$(worktree_path "$slug")"
+
+  mkdir -p "$WORKTREES_DIR"
+  if [ -d "$wt_path" ]; then
+    err "Worktree already exists: $wt_path"
+    exit 1
+  fi
+
+  git worktree add -b "$task_branch" "$wt_path" "$goal_branch"
+  sync_worktree_config "$wt_path"
+
+  echo "$wt_path"
+  log "Worktree created: $wt_path (branch: $task_branch)"
+}
+
+cmd_worktree_list() {
+  require_cmd git
+  if [ -d "$WORKTREES_DIR" ]; then
+    log "Task worktrees in $WORKTREES_DIR:"
+    for d in "$WORKTREES_DIR"/*/; do
+      [ -d "$d" ] || continue
+      echo "  $(basename "$d") -> $d"
+    done
+  else
+    log "No task worktrees yet"
+  fi
+  echo ""
+  git worktree list
+}
+
+cmd_worktree_merge() {
+  require_cmd git jq
+  local slug="${1:-}"
+  [ -z "$slug" ] && { err "worktree merge requires <task-slug>"; exit 1; }
+
+  slug="$(slugify "$slug")"
+  require_active_goal
+
+  local goal_branch task_branch wt_path
+  goal_branch=$(jq -r '.[-1].branch' "$STATE_FILE")
+  task_branch="$(task_branch_name "$goal_branch" "$slug")"
+  wt_path="$(worktree_path "$slug")"
+
+  [ -d "$wt_path" ] || { err "Worktree not found: $wt_path"; exit 1; }
+
+  (
+    cd "$wt_path"
+    git add -A
+    if ! git diff --cached --quiet; then
+      git commit -m "feat: $slug"
+    fi
+  )
+
+  git checkout "$goal_branch"
+  if ! git merge "$task_branch" -m "merge: $slug"; then
+    err "Merge conflict merging $task_branch into $goal_branch"
+    git diff --name-only --diff-filter=U
+    exit 1
+  fi
+
+  git worktree remove "$wt_path" --force 2>/dev/null || git worktree remove "$wt_path"
+  git branch -d "$task_branch" 2>/dev/null || true
+  log "Merged $task_branch into $goal_branch"
+}
+
+cmd_worktree_remove() {
+  require_cmd git jq
+  local slug="${1:-}"
+  [ -z "$slug" ] && { err "worktree remove requires <task-slug>"; exit 1; }
+
+  slug="$(slugify "$slug")"
+  require_active_goal
+
+  local goal_branch task_branch wt_path
+  goal_branch=$(jq -r '.[-1].branch' "$STATE_FILE")
+  task_branch="$(task_branch_name "$goal_branch" "$slug")"
+  wt_path="$(worktree_path "$slug")"
+
+  [ -d "$wt_path" ] || { err "Worktree not found: $wt_path"; exit 1; }
+
+  git worktree remove "$wt_path" --force 2>/dev/null || git worktree remove "$wt_path"
+  git branch -D "$task_branch" 2>/dev/null || true
+  log "Removed worktree: $wt_path"
+}
+
 cmd_selfcheck() {
   require_cmd git jq
   log "selfcheck: start"
   log "Project root: $PROJECT_ROOT"
   log "State file: $STATE_FILE"
   log "Config file: $CONFIG_FILE"
+  log "Worktrees dir: $WORKTREES_DIR"
 
   if [ -f "$STATE_FILE" ]; then
     state_ensure_array
@@ -477,10 +726,13 @@ case "${1:-}" in
   push)     cmd_push ;;
   pr)       cmd_pr ;;
   pending)  cmd_pending ;;
+  threads)  cmd_threads ;;
+  comment)  cmd_comment "${2:-}" "${3:-}" "${4:-}" ;;
+  resolve)  cmd_resolve "${2:-}" ;;
   analyze)  cmd_analyze ;;
   config)
     case "${2:-}" in
-      set) cmd_config_set "${3:-}" "${4:-}" "${5:-}" ;;
+      set) cmd_config_set "${3:-}" "${4:-}" "${5:-}" "${6:-1}" ;;
       get) cmd_config_get ;;
       *)   err "config subcommand must be 'set' or 'get'"; exit 1 ;;
     esac
@@ -489,6 +741,15 @@ case "${1:-}" in
   status)   cmd_status ;;
   restore)  shift; cmd_restore "$@" ;;
   diff)     cmd_diff ;;
+  worktree)
+    case "${2:-}" in
+      add)    cmd_worktree_add "${3:-}" ;;
+      list)   cmd_worktree_list ;;
+      merge)  cmd_worktree_merge "${3:-}" ;;
+      remove) cmd_worktree_remove "${3:-}" ;;
+      *)      err "worktree subcommand must be add, list, merge, or remove"; exit 1 ;;
+    esac
+    ;;
   selfcheck) cmd_selfcheck ;;
   *)        usage ;;
 esac

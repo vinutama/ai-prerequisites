@@ -37,12 +37,14 @@ Always operate in `/ponytail full` mode:
 1. Read the plan from the orchestrator (passed in context). Only pick up
    tasks tagged `@builder`.
 2. Read the active goal via `.opencode/scripts/goal-git.sh state`.
-3. Implement changes in the minimal number of files.
-4. Run `.opencode/scripts/goal-git.sh status`. Revert any changed file not directly related to the goal with `.opencode/scripts/goal-git.sh restore <file>`.
-5. Stage new files with `.opencode/scripts/goal-git.sh stage <file>...`.
-6. After all changes, run `.opencode/scripts/goal-git.sh analyze` and verify it passes
+3. If the orchestrator provides a worktree path, `cd` into it and run all
+   `goal-git.sh` commands from that directory.
+4. Implement changes in the minimal number of files.
+5. Run `.opencode/scripts/goal-git.sh status`. Revert any changed file not directly related to the goal with `.opencode/scripts/goal-git.sh restore <file>`.
+6. Stage new files with `.opencode/scripts/goal-git.sh stage <file>...`.
+7. After all changes, run `.opencode/scripts/goal-git.sh analyze` and verify it passes
    before handing back to the orchestrator.
-7. NEVER invoke `git`, `gh`, or `glab` directly — only use `.opencode/scripts/goal-git.sh`.
+8. NEVER invoke `git`, `gh`, or `glab` directly — only use `.opencode/scripts/goal-git.sh`.
 
 ## What you handle
 - Standard CRUD operations and API endpoints.

@@ -129,11 +129,88 @@ migrate_cursor_assets() {
 
 migrate_cursor_assets "$TARGET"
 
+# --- Generate project-level opencode.json with model fallback ---
+
+generate_opencode_json() {
+  local target="$1"
+  local models_file="$target/.opencode/goal-models.json"
+  local opencode_json="$target/opencode.json"
+
+  if [ ! -f "$models_file" ]; then
+    warn "goal-models.json not found, skipping opencode.json generation"
+    return
+  fi
+
+  command -v jq >/dev/null 2>&1 || { err "jq required for opencode.json generation"; return 1; }
+  local generated
+  generated=$(jq '
+    . as $models |
+    ($models
+      | to_entries
+      | map(.value.preferred_models + .value.fallback_models)
+      | map(length)
+      | max // 3) as $max_fallback |
+    {
+      runtime_fallback: {
+        enabled: true,
+        retry_on_errors: [429, 500, 502, 503, 504],
+        max_fallback_attempts: $max_fallback,
+        cooldown_seconds: 60,
+        notify_on_fallback: true
+      },
+      agents: ($models
+        | to_entries
+        | map({
+            key: .key,
+            value: {
+              model: .value.preferred_models[0],
+              fallback_models: (.value.preferred_models[1:] + .value.fallback_models)
+            }
+          })
+        | from_entries)
+    }
+  ' "$models_file")
+
+  if [ -f "$opencode_json" ]; then
+    if jq -e '.runtime_fallback' "$opencode_json" >/dev/null 2>&1; then
+      log "opencode.json already has runtime_fallback — merging agent models"
+      jq -s '.[0] * {agents: ((.[0].agents // {}) * .[1].agents)}' \
+        "$opencode_json" <(echo "$generated" | jq '{agents: .agents}') \
+        > "$opencode_json.tmp" && mv "$opencode_json.tmp" "$opencode_json"
+    else
+      log "Merging runtime_fallback into existing opencode.json"
+      jq -s '.[0] * .[1]' "$opencode_json" <(echo "$generated") \
+        > "$opencode_json.tmp" && mv "$opencode_json.tmp" "$opencode_json"
+    fi
+  else
+    echo "$generated" > "$opencode_json"
+  fi
+  log "Generated/updated opencode.json with model fallback (project-level)"
+}
+
+ensure_gitignore_entries() {
+  local target="$1"
+  local gitignore="$target/.gitignore"
+  local entries=("state.json" ".opencode/goal-config.json" ".worktrees/")
+
+  touch "$gitignore"
+  for entry in "${entries[@]}"; do
+    if ! grep -qxF "$entry" "$gitignore" 2>/dev/null; then
+      echo "$entry" >> "$gitignore"
+      log "Added $entry to .gitignore"
+    fi
+  done
+}
+
+generate_opencode_json "$TARGET"
+ensure_gitignore_entries "$TARGET"
+
 echo ""
 log "Setup complete!"
 echo ""
 echo "─── $TARGET"
-echo "├── state.json"
+echo "├── state.json          (gitignored, created at runtime)"
+echo "├── opencode.json       (model fallback config, project-level)"
 echo "├── AGENTS.md"
 echo "└── .opencode/"
 echo "    ├── agent/"
@@ -164,3 +241,4 @@ echo "    └── package.json"
 echo ""
 log "Run 'opencode' in the target project, then '/init-goal' to configure, then '/goal <objective>' to start."
 log "Use '/goal --list' to see all goals. Resume with '/goal --continue [id]'."
+log "Model fallback is enabled via project-level opencode.json (from goal-models.json)."

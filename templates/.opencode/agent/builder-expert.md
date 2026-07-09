@@ -36,14 +36,16 @@ Always operate in `/ponytail full` mode:
 1. Read the plan from the orchestrator (passed in context). Only pick up
    tasks tagged `@builder-expert`.
 2. Read the active goal via `.opencode/scripts/goal-git.sh state`.
-3. Trace the full execution path before writing a single line.
-4. Implement the minimal correct solution. Complex does not mean
+3. If the orchestrator provides a worktree path, `cd` into it and run all
+   `goal-git.sh` commands from that directory.
+4. Trace the full execution path before writing a single line.
+5. Implement the minimal correct solution. Complex does not mean
    complicated — the best complex solutions are surgically simple.
-5. Run `.opencode/scripts/goal-git.sh status`. Revert any changed file not directly related to the goal with `.opencode/scripts/goal-git.sh restore <file>`.
-6. Stage new files with `.opencode/scripts/goal-git.sh stage <file>...`.
-7. After all changes, run `.opencode/scripts/goal-git.sh analyze` and verify it passes
+6. Run `.opencode/scripts/goal-git.sh status`. Revert any changed file not directly related to the goal with `.opencode/scripts/goal-git.sh restore <file>`.
+7. Stage new files with `.opencode/scripts/goal-git.sh stage <file>...`.
+8. After all changes, run `.opencode/scripts/goal-git.sh analyze` and verify it passes
    before handing back to the orchestrator.
-8. NEVER invoke `git`, `gh`, or `glab` directly — only use `.opencode/scripts/goal-git.sh`.
+9. NEVER invoke `git`, `gh`, or `glab` directly — only use `.opencode/scripts/goal-git.sh`.
 
 ## What you handle
 - Novel algorithms and data structures.
