@@ -4,7 +4,7 @@ description: >-
   code, performance-critical paths, complex state machines, and cross-service
   coordination. Uses a stronger reasoning model for deep technical work.
 mode: subagent
-model: opencode-go/qwen3.7-max
+model: opencode-go/kimi-k2.7-code
 temperature: 0.2
 permission:
   edit: allow
