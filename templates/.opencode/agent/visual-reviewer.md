@@ -1,10 +1,10 @@
 ---
 description: >-
-  Visual/multimodal reviewer. Reviews UI code and visuals for quality,
-  consistency, and accessibility. Posts inline PR/MR comments and auto-resolves
-  fixed threads. Read-only edits.
+  Multimodal UI reviewer — vision model required. Reviews UI code, screenshots,
+  and visuals for quality, consistency, and accessibility. Posts inline PR/MR
+  comments and auto-resolves fixed threads. Read-only edits.
 mode: subagent
-model: opencode/mimo-v2.5-free
+model: opencode-go/mimo-v2.5-pro
 temperature: 0.2
 permission:
   edit: deny
@@ -35,6 +35,22 @@ Invoke by name (e.g. `@wcag-audit-patterns`); do not preload all SKILL.md files.
 - `@wcag-audit-patterns` — WCAG 2.2 accessibility audits and remediation
 - `@frontend-design` — production-grade UI aesthetics and visual consistency
 - `@webapp-testing` — Playwright-based frontend verification and UI debugging
+
+## Multimodal requirements
+This agent requires a vision-capable model (`opencode-go/mimo-v2.5-pro` per
+`.opencode/goal-models.json`). It is the **only** agent that handles image input.
+
+- **Must** use the Read tool on `.png`, `.jpg`, `.jpeg`, `.webp`, and `.gif`
+  paths found in the diff or provided by the orchestrator.
+- Review screenshots for layout, contrast, alignment, spacing, and rendering bugs.
+- If UI files changed but no images exist, review code-only and note that visual
+  verification is limited without screenshots.
+- If `@webapp-testing` is installed, prefer capturing a screenshot before visual review.
+
+## Figma design reference
+When `figma_enabled` is true in `.opencode/scripts/goal-git.sh config get`, compare
+the implementation against `figma_design_url` and `figma_node_id` using Figma MCP.
+A Figma URL in the goal text overrides the project default for that review.
 
 ## Workflow
 1. Read the active goal via `.opencode/scripts/goal-git.sh state`.

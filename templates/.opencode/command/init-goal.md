@@ -1,7 +1,8 @@
 ---
 description: >-
   Initialize goal configuration for this project. Asks about goal source,
-  target branch, git platform, and concurrency. Usage: /init-goal
+  target branch, git platform, concurrency, and optional Figma design lookup.
+  Usage: /init-goal
 agent: orchestrator
 subtask: true
 ---
@@ -30,16 +31,45 @@ This command configures the goal workflow for this project. Ask the user the fol
    - `no` — sequential execution only (concurrency = 1)
    - `yes` — ask how many subagents max (e.g. 2, 3, 4). Store as `concurrency` integer.
 
-After collecting all answers, persist the configuration by running:
+5. **Figma design lookup** — Connect Figma to look up preferred designs during UI goals?
+   - `no` — skip (default)
+   - `yes` — continue to 5b and 5c below
+
+   **5b (only if yes):** Figma Personal Access Token
+   - Guide: Figma → Settings → Security → Personal access tokens
+   - Warn: token is stored in `.opencode/figma.env` (project-level, gitignored)
+   - Run: `.opencode/scripts/goal-git.sh figma setup "<token>"`
+   - Optionally verify after sourcing env: `set -a && source .opencode/figma.env && set +a && opencode mcp list`
+   - If verification fails, warn but continue
+
+   **5c (only if yes, after token saved):** Default Figma design link
+   - Ask: *"Which Figma design should agents use as the preferred reference for this project?"*
+   - Accept full Figma URL (design file, legacy file link, or frame via `node-id`)
+   - Example: `https://www.figma.com/design/FILE_KEY/Project-Name?node-id=1-2`
+   - Run: `.opencode/scripts/goal-git.sh figma design set "<url>"`
+   - Confirm parsed `figma_file_key` and optional `figma_node_id` from `figma status`
+
+After collecting answers for questions 1–4 (and 5 if applicable), persist core config:
 ```bash
 .opencode/scripts/goal-git.sh config set <goal_source> <target_branch> <platform> <concurrency>
 ```
 Use `1` for concurrency when the user chose sequential only.
 
-Confirm the saved config by running `.opencode/scripts/goal-git.sh config get` and display the result to the user.
+If Figma was enabled (question 5 = yes), run `figma setup` and `figma design set` **after** `config set` (order: config set → figma setup → figma design set).
+
+Confirm the saved config:
+```bash
+.opencode/scripts/goal-git.sh config get
+.opencode/scripts/goal-git.sh figma status
+```
 
 Then run `.opencode/scripts/goal-git.sh selfcheck` to verify the platform CLI is available and authenticated.
 
 Tell the user they can now run `/goal <objective>` to start a goal.
+If Figma was configured, remind them to launch OpenCode with secrets loaded:
+```bash
+.opencode/scripts/run-opencode.sh
+```
+or `set -a && source .opencode/figma.env && set +a && opencode`
 
 Only use `.opencode/scripts/goal-git.sh` for all git and state operations — never run `git`, `gh`, or `glab` directly.

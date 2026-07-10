@@ -99,8 +99,16 @@ Read `concurrency` from config (default 1).
 - Run `.opencode/scripts/goal-git.sh commit` with a conventional commit message
   summarizing the changes.
 - Run `.opencode/scripts/goal-git.sh push` and `.opencode/scripts/goal-git.sh pr`.
-- Delegate to `@reviewer` for code review and `@visual-reviewer` for
-  UI/multimodal review.
+- **Code review (text-only):** always delegate to `@reviewer` for correctness,
+  security, performance, and tests.
+- **Visual/multimodal review:** delegate to `@visual-reviewer` when any of:
+  - UI/frontend/CSS/component/template files changed in the diff, OR
+  - screenshots or images are attached to the session or PR.
+- When delegating to `@visual-reviewer`, include this instruction verbatim:
+  *"You are the multimodal reviewer. Read image files with the Read tool.
+  Review screenshots for layout, contrast, alignment, and accessibility."*
+- Never delegate image or screenshot review to `@reviewer`, `@builder`, or
+  `@builder-expert` — only `@visual-reviewer` handles multimodal input.
 - Reviewers post inline comments on the PR/MR and auto-resolve fixed threads.
 
 ### 6. REVIEW LOOP

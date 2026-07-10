@@ -39,12 +39,15 @@ Always operate in `/ponytail full` mode:
 2. Read the active goal via `.opencode/scripts/goal-git.sh state`.
 3. If the orchestrator provides a worktree path, `cd` into it and run all
    `goal-git.sh` commands from that directory.
-4. Implement changes in the minimal number of files.
-5. Run `.opencode/scripts/goal-git.sh status`. Revert any changed file not directly related to the goal with `.opencode/scripts/goal-git.sh restore <file>`.
-6. Stage new files with `.opencode/scripts/goal-git.sh stage <file>...`.
-7. After all changes, run `.opencode/scripts/goal-git.sh analyze` and verify it passes
+4. If `figma_enabled` is true in `.opencode/scripts/goal-git.sh config get`, use
+   Figma MCP and the configured `figma_design_url` / `figma_file_key` when
+   implementing UI. A Figma URL in the goal text overrides the project default.
+5. Implement changes in the minimal number of files.
+6. Run `.opencode/scripts/goal-git.sh status`. Revert any changed file not directly related to the goal with `.opencode/scripts/goal-git.sh restore <file>`.
+7. Stage new files with `.opencode/scripts/goal-git.sh stage <file>...`.
+8. After all changes, run `.opencode/scripts/goal-git.sh analyze` and verify it passes
    before handing back to the orchestrator.
-8. NEVER invoke `git`, `gh`, or `glab` directly — only use `.opencode/scripts/goal-git.sh`.
+9. NEVER invoke `git`, `gh`, or `glab` directly — only use `.opencode/scripts/goal-git.sh`.
 
 ## Related skills
 Before starting, check whether any of these skills exist at

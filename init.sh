@@ -12,6 +12,7 @@ NC='\033[0m'
 log()  { echo -e "${GREEN}[init]${NC} $*"; }
 err()  { echo -e "${RED}[init]${NC} $*" >&2; }
 info() { echo -e "${CYAN}[init]${NC} $*"; }
+warn() { echo -e "${CYAN}[init]${NC} Warning: $*" >&2; }
 
 usage() {
   cat <<EOF
@@ -43,6 +44,7 @@ cp "$TEMPLATES_DIR/AGENTS.md" "$TARGET/"
 
 # Make scripts executable
 chmod +x "$TARGET/.opencode/scripts/goal-git.sh"
+chmod +x "$TARGET/.opencode/scripts/run-opencode.sh"
 
 # --- Migrate .cursor assets if present ---
 
@@ -131,6 +133,70 @@ migrate_cursor_assets "$TARGET"
 
 # --- Generate project-level opencode.json with model fallback plugin ---
 
+is_vision_model() {
+  local model="$1"
+  echo "$model" | grep -qiE 'mimo|gpt-4o|gpt-4\.1|claude.*sonnet|gemini.*(pro|flash|vision)|llava|qwen.*vl'
+}
+
+validate_multimodal_models() {
+  local models_file="$1"
+  jq -r '
+    to_entries[]
+    | select(.value.capabilities.multimodal == true)
+    | "\(.key)\t\(.value.preferred_models[0])"
+  ' "$models_file" | while IFS=$'\t' read -r name model; do
+    [ -n "$name" ] || continue
+    if ! is_vision_model "$model"; then
+      warn "$name is multimodal but preferred model '$model' may not support vision"
+    fi
+  done
+}
+
+sync_agent_frontmatter_model() {
+  local file="$1"
+  local model="$2"
+  awk -v model="$model" '
+    BEGIN { fm = 0 }
+    /^---$/ {
+      fm++
+      print
+      next
+    }
+    fm == 1 && /^model:/ {
+      print "model: " model
+      next
+    }
+    { print }
+  ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+}
+
+sync_agent_models_from_goal_models() {
+  local target="$1"
+  local models_file="$target/.opencode/goal-models.json"
+  local agents_dir="$target/.opencode/agent"
+
+  if [ ! -f "$models_file" ]; then
+    warn "goal-models.json not found, skipping agent model sync"
+    return
+  fi
+
+  command -v jq >/dev/null 2>&1 || { warn "jq required for agent model sync"; return; }
+
+  validate_multimodal_models "$models_file"
+
+  jq -r 'to_entries[] | "\(.key)\t\(.value.preferred_models[0])"' "$models_file" | while IFS=$'\t' read -r name model; do
+    [ -n "$name" ] || continue
+    [ -n "$model" ] || continue
+    local agent_file="$agents_dir/$name.md"
+    if [ ! -f "$agent_file" ]; then
+      warn "Agent file not found for $name: $agent_file"
+      continue
+    fi
+    sync_agent_frontmatter_model "$agent_file" "$model"
+    log "Synced model for agent: $name → $model"
+  done
+}
+
 generate_opencode_json() {
   local target="$1"
   local models_file="$target/.opencode/goal-models.json"
@@ -154,10 +220,13 @@ generate_opencode_json() {
         | to_entries
         | map({
             key: .key,
-            value: {
+            value: ({
               model: .value.preferred_models[0],
               fallback_models: (.value.preferred_models[1:] + .value.fallback_models)
             }
+            + if (.value.capabilities.multimodal // false) then
+                {description: "Multimodal UI reviewer — vision model required"}
+              else {} end)
           })
         | from_entries)
     }
@@ -202,7 +271,7 @@ generate_opencode_json() {
 ensure_gitignore_entries() {
   local target="$1"
   local gitignore="$target/.gitignore"
-  local entries=("state.json" ".opencode/goal-config.json" ".worktrees/")
+  local entries=("state.json" ".opencode/goal-config.json" ".opencode/figma.env" ".worktrees/")
 
   touch "$gitignore"
   for entry in "${entries[@]}"; do
@@ -214,6 +283,7 @@ ensure_gitignore_entries() {
 }
 
 generate_opencode_json "$TARGET"
+sync_agent_models_from_goal_models "$TARGET"
 ensure_gitignore_entries "$TARGET"
 
 echo ""
@@ -236,7 +306,8 @@ echo "    │   ├── goal.md"
 echo "    │   ├── init-goal.md"
 echo "    │   └── init-skills.md"
 echo "    ├── scripts/"
-echo "    │   └── goal-git.sh"
+echo "    │   ├── goal-git.sh"
+echo "    │   └── run-opencode.sh"
 echo "    ├── skills/"
 echo "    │   ├── goal-loop/"
 echo "    │   │   └── SKILL.md"

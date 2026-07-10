@@ -5,6 +5,8 @@ SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPTS_DIR/../.." && pwd)"
 STATE_FILE="$PROJECT_ROOT/state.json"
 CONFIG_FILE="$PROJECT_ROOT/.opencode/goal-config.json"
+FIGMA_ENV_FILE="$PROJECT_ROOT/.opencode/figma.env"
+OPENCODE_JSON="$PROJECT_ROOT/opencode.json"
 WORKTREES_DIR="$PROJECT_ROOT/.worktrees"
 
 RED='\033[0;31m'
@@ -44,6 +46,10 @@ Commands:
   worktree list             List active task worktrees
   worktree merge <task-slug>  Merge worktree branch into goal branch
   worktree remove <task-slug> Remove worktree without merging
+  figma setup <token>       Store Figma PAT and enable figma MCP in opencode.json
+  figma design set <url>    Set default Figma design link in goal-config.json
+  figma disable             Disable Figma integration
+  figma status              Show Figma integration status
 EOF
   exit 1
 }
@@ -504,6 +510,145 @@ cmd_analyze() {
   log "Analyze complete"
 }
 
+# --- Figma Helpers ---
+
+config_ensure_exists() {
+  mkdir -p "$(dirname "$CONFIG_FILE")"
+  if [ ! -f "$CONFIG_FILE" ]; then
+    echo '{}' > "$CONFIG_FILE"
+  fi
+}
+
+parse_figma_url() {
+  local url="$1"
+  if ! echo "$url" | grep -qE 'figma\.com/(design|file|board)/'; then
+    err "Invalid Figma URL — must contain figma.com/design/, file/, or board/"
+    return 1
+  fi
+  FIGMA_FILE_KEY="$(echo "$url" | grep -oE 'figma\.com/(design|file|board)/[^/?]+' | sed -E 's|.*/||' | head -1)"
+  [ -z "$FIGMA_FILE_KEY" ] && { err "Could not parse file key from Figma URL"; return 1; }
+  FIGMA_NODE_ID="$(echo "$url" | sed -nE 's/.*[?&]node-id=([^&]+).*/\1/p' | head -1)"
+  if [ -n "$FIGMA_NODE_ID" ]; then
+    FIGMA_NODE_ID="${FIGMA_NODE_ID//-/:}"
+  fi
+}
+
+merge_opencode_figma_mcp() {
+  local enabled="${1:-true}"
+  require_cmd jq
+  local figma_block
+  figma_block=$(jq -n --argjson enabled "$enabled" '{
+    type: "local",
+    command: ["npx", "-y", "figma-developer-mcp", "--stdio"],
+    environment: {FIGMA_API_KEY: "{env:FIGMA_API_KEY}"},
+    enabled: $enabled,
+    timeout: 15000
+  }')
+  if [ -f "$OPENCODE_JSON" ]; then
+    jq --argjson figma "$figma_block" \
+      '.mcp = ((.mcp // {}) * {figma: $figma})' \
+      "$OPENCODE_JSON" > "$OPENCODE_JSON.tmp" && mv "$OPENCODE_JSON.tmp" "$OPENCODE_JSON"
+  else
+    jq -n --argjson figma "$figma_block" \
+      '{"$schema": "https://opencode.ai/config.json", mcp: {figma: $figma}}' \
+      > "$OPENCODE_JSON"
+  fi
+}
+
+cmd_figma_setup() {
+  require_cmd jq
+  local token="${1:-}"
+  [ -z "$token" ] && { err "figma setup requires <token>"; exit 1; }
+
+  mkdir -p "$(dirname "$FIGMA_ENV_FILE")"
+  printf 'FIGMA_API_KEY=%s\n' "$token" > "$FIGMA_ENV_FILE"
+  chmod 600 "$FIGMA_ENV_FILE"
+
+  merge_opencode_figma_mcp true
+  config_ensure_exists
+  jq '.figma_enabled = true' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+
+  log "Figma PAT saved to $FIGMA_ENV_FILE"
+  log "Figma MCP enabled in $OPENCODE_JSON"
+  warn "Load secrets before OpenCode: set -a && source .opencode/figma.env && set +a && opencode"
+  warn "Or use: .opencode/scripts/run-opencode.sh"
+}
+
+cmd_figma_design_set() {
+  require_cmd jq
+  local url="${1:-}"
+  [ -z "$url" ] && { err "figma design set requires <url>"; exit 1; }
+
+  config_ensure_exists
+  local figma_enabled
+  figma_enabled=$(jq -r '.figma_enabled // false' "$CONFIG_FILE")
+  if [ "$figma_enabled" != "true" ]; then
+    err "Figma not enabled — run 'figma setup <token>' first"
+    exit 1
+  fi
+
+  parse_figma_url "$url" || exit 1
+
+  jq \
+    --arg url "$url" \
+    --arg file_key "$FIGMA_FILE_KEY" \
+    --arg node_id "${FIGMA_NODE_ID:-}" \
+    '.figma_design_url = $url
+     | .figma_file_key = $file_key
+     | if ($node_id | length) > 0 then .figma_node_id = $node_id else del(.figma_node_id) end' \
+    "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+
+  log "Figma design link saved"
+  log "  URL: $url"
+  log "  file_key: $FIGMA_FILE_KEY"
+  [ -n "${FIGMA_NODE_ID:-}" ] && log "  node_id: $FIGMA_NODE_ID"
+}
+
+cmd_figma_disable() {
+  require_cmd jq
+  config_ensure_exists
+  jq '.figma_enabled = false
+      | del(.figma_design_url, .figma_file_key, .figma_node_id)' \
+    "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+
+  if [ -f "$OPENCODE_JSON" ]; then
+    jq 'if .mcp.figma then .mcp.figma.enabled = false else . end' \
+      "$OPENCODE_JSON" > "$OPENCODE_JSON.tmp" && mv "$OPENCODE_JSON.tmp" "$OPENCODE_JSON"
+  fi
+
+  if [ -f "$FIGMA_ENV_FILE" ]; then
+    rm -f "$FIGMA_ENV_FILE"
+    log "Removed $FIGMA_ENV_FILE"
+  fi
+
+  log "Figma integration disabled"
+}
+
+cmd_figma_status() {
+  require_cmd jq
+  log "Figma status:"
+  if [ -f "$CONFIG_FILE" ]; then
+    jq '{
+      figma_enabled: (.figma_enabled // false),
+      figma_design_url: (.figma_design_url // null),
+      figma_file_key: (.figma_file_key // null),
+      figma_node_id: (.figma_node_id // null)
+    }' "$CONFIG_FILE"
+  else
+    warn "  No goal-config.json"
+  fi
+  if [ -f "$FIGMA_ENV_FILE" ]; then
+    log "  figma.env: present ($FIGMA_ENV_FILE)"
+  else
+    warn "  figma.env: missing"
+  fi
+  if [ -f "$OPENCODE_JSON" ] && jq -e '.mcp.figma' "$OPENCODE_JSON" >/dev/null 2>&1; then
+    log "  opencode.json mcp.figma: configured (enabled=$(jq -r '.mcp.figma.enabled // false' "$OPENCODE_JSON"))"
+  else
+    warn "  opencode.json mcp.figma: not configured"
+  fi
+}
+
 cmd_config_set() {
   require_cmd jq
   local source="${1:-}" target="${2:-}" plat="${3:-}" concurrency="${4:-1}"
@@ -529,13 +674,32 @@ cmd_config_set() {
   fi
 
   mkdir -p "$(dirname "$CONFIG_FILE")"
-  jq -n \
-    --arg source "$source" \
-    --arg target "$target" \
-    --arg platform "$plat" \
-    --argjson concurrency "$concurrency" \
-    '{goal_source: $source, target_branch: $target, platform: $platform, concurrency: $concurrency}' \
-    > "$CONFIG_FILE"
+  if [ -f "$CONFIG_FILE" ]; then
+    jq \
+      --arg source "$source" \
+      --arg target "$target" \
+      --arg platform "$plat" \
+      --argjson concurrency "$concurrency" \
+      '.goal_source = $source
+       | .target_branch = $target
+       | .platform = $platform
+       | .concurrency = $concurrency' \
+      "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+  else
+    jq -n \
+      --arg source "$source" \
+      --arg target "$target" \
+      --arg platform "$plat" \
+      --argjson concurrency "$concurrency" \
+      '{
+        goal_source: $source,
+        target_branch: $target,
+        platform: $platform,
+        concurrency: $concurrency,
+        figma_enabled: false
+      }' \
+      > "$CONFIG_FILE"
+  fi
 
   log "Config written to $CONFIG_FILE"
   jq . "$CONFIG_FILE"
@@ -751,5 +915,19 @@ case "${1:-}" in
     esac
     ;;
   selfcheck) cmd_selfcheck ;;
+  figma)
+    case "${2:-}" in
+      setup)  cmd_figma_setup "${3:-}" ;;
+      disable) cmd_figma_disable ;;
+      status) cmd_figma_status ;;
+      design)
+        case "${3:-}" in
+          set) cmd_figma_design_set "${4:-}" ;;
+          *) err "figma design subcommand must be 'set'"; exit 1 ;;
+        esac
+        ;;
+      *) err "figma subcommand must be setup, design set, disable, or status"; exit 1 ;;
+    esac
+    ;;
   *)        usage ;;
 esac

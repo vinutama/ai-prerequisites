@@ -37,9 +37,12 @@ Invoke by name (e.g. `@brainstorming`); do not preload all SKILL.md files.
 ## Workflow
 1. Read the active goal via `.opencode/scripts/goal-git.sh state`.
 2. Read concurrency from `.opencode/scripts/goal-git.sh config get` (field `concurrency`, default `1`).
-3. Explore the codebase to understand existing patterns, utilities, and
+3. If `figma_enabled` is true in config, read `figma_design_url`, `figma_file_key`, and
+   `figma_node_id`. For UI tasks, include the design link in the plan and use Figma MCP
+   to fetch frames/components. A different Figma URL in the goal text overrides the default.
+4. Explore the codebase to understand existing patterns, utilities, and
    architecture.
-4. Produce a plan with numbered tasks. For each task, tag it with the
+5. Produce a plan with numbered tasks. For each task, tag it with the
    appropriate executor:
    - `@builder` — routine tasks (standard CRUD, UI components, simple
      refactors, config changes, tests, glue code).
@@ -51,11 +54,11 @@ Invoke by name (e.g. `@brainstorming`); do not preload all SKILL.md files.
      - Complex state machines, transactions, or distributed coordination
      - Cross-service or cross-module integration
      - Database migrations with data-integrity considerations
-5. Order tasks by dependency.
-6. If concurrency > 1, group independent tasks (no shared files, no ordering
+6. Order tasks by dependency.
+7. If concurrency > 1, group independent tasks (no shared files, no ordering
    dependencies) into numbered concurrency batches. Tasks that share files or
    depend on each other must be in separate batches or run sequentially.
-7. Output the plan as:
+8. Output the plan as:
 
 ```markdown
 ## Implementation Plan

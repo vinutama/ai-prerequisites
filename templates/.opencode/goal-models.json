@@ -6,7 +6,14 @@
     "fallback_models": [
       "opencode-go/kimi-k2.7-code",
       "opencode/deepseek-v4-flash-free"
-    ]
+    ],
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": ["text"],
+        "output": ["text"]
+      }
+    }
   },
   "reviewer": {
     "preferred_models": [
@@ -14,7 +21,14 @@
     ],
     "fallback_models": [
       "opencode/deepseek-v4-flash-free"
-    ]
+    ],
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": ["text"],
+        "output": ["text"]
+      }
+    }
   },
   "builder": {
     "preferred_models": [
@@ -22,7 +36,14 @@
     ],
     "fallback_models": [
       "opencode/deepseek-v4-flash-free"
-    ]
+    ],
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": ["text"],
+        "output": ["text"]
+      }
+    }
   },
   "builder-expert": {
     "preferred_models": [
@@ -30,7 +51,14 @@
     ],
     "fallback_models": [
       "opencode/deepseek-v4-flash-free"
-    ]
+    ],
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": ["text"],
+        "output": ["text"]
+      }
+    }
   },
   "orchestrator": {
     "preferred_models": [
@@ -38,14 +66,28 @@
     ],
     "fallback_models": [
       "opencode/deepseek-v4-flash-free"
-    ]
+    ],
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": ["text"],
+        "output": ["text"]
+      }
+    }
   },
   "visual-reviewer": {
     "preferred_models": [
-      "opencode/mimo-v2.5-free"
+      "opencode-go/mimo-v2.5-pro"
     ],
     "fallback_models": [
-      "opencode/deepseek-v4-flash-free"
-    ]
+      "opencode/mimo-v2.5-free"
+    ],
+    "capabilities": {
+      "multimodal": true,
+      "modalities": {
+        "input": ["text", "image"],
+        "output": ["text"]
+      }
+    }
   }
 }

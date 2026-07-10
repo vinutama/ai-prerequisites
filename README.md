@@ -10,7 +10,7 @@ PR, looping until zero unresolved review threads remain.
 ./init.sh /path/to/your/project
 cd /path/to/your/project
 opencode
-/init-goal          # configure goal source, target branch, platform, concurrency
+/init-goal          # configure goal source, target branch, platform, concurrency, Figma
 /goal Add a health-check endpoint
 ```
 
@@ -21,20 +21,21 @@ opencode
 | `AGENTS.md` | Project conventions and workflow instructions |
 | `state.json` | Runtime state (goal, branch, PR number) — gitignored, project-level |
 | `opencode.json` | Model fallback config — project-level, generated from goal-models.json |
-| `.opencode/goal-config.json` | Goal source, target branch, platform, concurrency — gitignored |
+| `.opencode/goal-config.json` | Goal source, target branch, platform, concurrency, Figma design — gitignored |
+| `.opencode/figma.env` | Figma PAT for MCP — gitignored |
 | `.opencode/agent/` | 6 specialized agents |
 | `.opencode/command/goal.md` | `/goal` slash command (with `--list`, `--continue` flags) |
 | `.opencode/command/init-goal.md` | `/init-goal` setup command |
 | `.opencode/command/init-skills.md` | `/init-skills` skill injection command |
 | `.opencode/skills/goal-loop/` | Reusable goal-loop skill |
-| `.opencode/goal-models.json` | Preferred and fallback model config per agent |
+| `.opencode/goal-models.json` | Preferred, fallback, and capability config per agent |
 | `.opencode/scripts/goal-git.sh` | Git helper (branch, commit, push, PR, review loop, worktrees) |
 
 ## Commands
 
 | Command | Description |
 |---|---|
-| `/init-goal` | One-time setup: goal source, target branch, git platform, concurrency |
+| `/init-goal` | One-time setup: goal source, target branch, git platform, concurrency, optional Figma |
 | `/init-skills` | Optional: inject curated skills from agentic-awesome-skills |
 | `/goal <objective>` | Start a new goal |
 | `/goal --list` | List all goals |
@@ -57,6 +58,18 @@ issues are fixed by builders.
 (from `goal-models.json`). Plugin settings live in
 `.opencode/opencode-model-fallback.json`. On rate limit or API error, agents
 automatically try fallback models in order.
+
+### Multimodal review
+Only `visual-reviewer` is multimodal (`opencode-go/mimo-v2.5-pro`). It accepts
+text and image input for UI/screenshot review. All other agents are text-only.
+Capabilities are declared in `goal-models.json`; `init.sh` syncs models from
+that file into agent `.md` frontmatter and `opencode.json`.
+
+### Figma design lookup (optional)
+During `/init-goal`, connect Figma with a Personal Access Token and default design link.
+PAT is stored in `.opencode/figma.env` (gitignored); design URL and parsed file key
+live in `goal-config.json`. `init-goal` runs `figma setup` then `figma design set`.
+Launch OpenCode with secrets: `.opencode/scripts/run-opencode.sh`.
 
 ### Jira goal source
 When configured, `/goal PROJ-123` fetches ticket content via Atlassian MCP.
@@ -84,7 +97,7 @@ filter: `safe,none`. Invoke installed skills by name in prompts (e.g. `@brainsto
 | `builder-expert` | Complex execution (algorithms, concurrency, security, perf) | `opencode-go/kimi-k2.7-code` |
 | `reviewer` | Code review + inline PR comments | `opencode-go/deepseek-v4-pro` |
 | `orchestrator` | Workflow manager | `opencode-go/deepseek-v4-flash` |
-| `visual-reviewer` | UI/multimodal review + inline PR comments | `opencode/mimo-v2.5-free` |
+| `visual-reviewer` | UI/multimodal review + inline PR comments | `opencode-go/mimo-v2.5-pro` |
 
 Every agent operates in `/ponytail full` mode.
 
