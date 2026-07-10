@@ -53,5 +53,20 @@ Invoke by name (e.g. `@code-review-excellence`); do not preload all SKILL.md fil
    ```bash
    .opencode/scripts/goal-git.sh comment "<path>" <line> "<severity> — <problem> — <fix>"
    ```
-7. Summarize: threads resolved, comments posted, remaining issues.
-8. If no new issues and all threads resolved, output "LGTM — no issues."
+7. Run `.opencode/scripts/goal-git.sh pending` and `.opencode/scripts/goal-git.sh threads` to count remaining unresolved threads.
+8. End every review pass with the **Review report** (required):
+
+```markdown
+## Review report
+- threads_resolved: <comma-separated thread ids, or "none">
+- comments_posted: <count>
+- remaining_unresolved: <count>
+- verdict: NEEDS_FIX | LGTM
+```
+
+Rules:
+- **Must** call `.opencode/scripts/goal-git.sh resolve <thread-id>` for every fixed thread before claiming LGTM.
+- Never say "all fixed" or output LGTM when `remaining_unresolved` > 0.
+- `verdict: LGTM` only when `remaining_unresolved` is 0 and every fixed thread was resolved.
+- Never merge the PR/MR — merge is orchestrator-owned when `auto_merge` is true in config.
+- Never tell the user the PR was merged unless merge was actually executed (you do not run merge).

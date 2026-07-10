@@ -55,10 +55,12 @@ Invoke by name (e.g. `@brainstorming`); do not preload all SKILL.md files.
      - Cross-service or cross-module integration
      - Database migrations with data-integrity considerations
 6. Order tasks by dependency.
-7. If concurrency > 1, group independent tasks (no shared files, no ordering
+7. Detect UI/visual work: frontend/CSS/components/pages/templates, `figma_enabled` in config,
+   or goal text mentioning UI, design, portfolio, landing, Figma, or screenshots.
+8. If concurrency > 1, group independent tasks (no shared files, no ordering
    dependencies) into numbered concurrency batches. Tasks that share files or
    depend on each other must be in separate batches or run sequentially.
-8. Output the plan as:
+9. Output the plan as:
 
 ```markdown
 ## Implementation Plan
@@ -66,6 +68,10 @@ Invoke by name (e.g. `@brainstorming`); do not preload all SKILL.md files.
 1. [ ] <task description> → @builder
 2. [ ] <complex task description> → @builder-expert
 3. [ ] <task description> → @builder
+
+### Review requirements
+- @reviewer — always
+- @visual-reviewer — required (include only when UI/visual goal; omit line when not UI)
 
 ### Concurrency batches
 (only when concurrency > 1)
@@ -78,3 +84,6 @@ Invoke by name (e.g. `@brainstorming`); do not preload all SKILL.md files.
 ```
 
 When concurrency = 1, omit the Concurrency batches section.
+When the goal is not UI/visual, omit the `@visual-reviewer` line under Review requirements
+but always keep `@reviewer — always`.
+When Figma is enabled, note that `@visual-reviewer` must compare against `figma_design_url`.

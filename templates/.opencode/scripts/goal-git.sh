@@ -36,9 +36,11 @@ Commands:
   resolve <thread-id>       Resolve a review thread/discussion
   analyze                   Run gitnexus analyze && rtk gain
   selfcheck                 Run platform detection self-check
-  config set <source> <target> <platform> [concurrency]  Write goal-config.json
+  config set <source> <target> <platform> [concurrency] [auto_merge]  Write goal-config.json
   config get                Print goal-config.json
   state                     Print active goal JSON from state.json
+  state complete            Mark active goal status as completed
+  merge                     Merge active PR/MR into target branch (after clean review)
   status                    Show working tree status
   restore <file>...         Restore files to HEAD
   diff                      Show diff against base branch for active goal
@@ -651,10 +653,10 @@ cmd_figma_status() {
 
 cmd_config_set() {
   require_cmd jq
-  local source="${1:-}" target="${2:-}" plat="${3:-}" concurrency="${4:-1}"
+  local source="${1:-}" target="${2:-}" plat="${3:-}" concurrency="${4:-1}" auto_merge="${5:-false}"
 
   [ -z "$source" ] || [ -z "$target" ] || [ -z "$plat" ] && {
-    err "config set requires: <goal_source> <target_branch> <platform> [concurrency]"
+    err "config set requires: <goal_source> <target_branch> <platform> [concurrency] [auto_merge]"
     exit 1
   }
 
@@ -673,6 +675,14 @@ cmd_config_set() {
     exit 1
   fi
 
+  case "$auto_merge" in
+    true|false) ;;
+    *) err "auto_merge must be true or false"; exit 1 ;;
+  esac
+
+  local auto_merge_json
+  auto_merge_json=$( [ "$auto_merge" = "true" ] && echo true || echo false )
+
   mkdir -p "$(dirname "$CONFIG_FILE")"
   if [ -f "$CONFIG_FILE" ]; then
     jq \
@@ -680,10 +690,12 @@ cmd_config_set() {
       --arg target "$target" \
       --arg platform "$plat" \
       --argjson concurrency "$concurrency" \
+      --argjson auto_merge "$auto_merge_json" \
       '.goal_source = $source
        | .target_branch = $target
        | .platform = $platform
-       | .concurrency = $concurrency' \
+       | .concurrency = $concurrency
+       | .auto_merge = $auto_merge' \
       "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
   else
     jq -n \
@@ -691,11 +703,13 @@ cmd_config_set() {
       --arg target "$target" \
       --arg platform "$plat" \
       --argjson concurrency "$concurrency" \
+      --argjson auto_merge "$auto_merge_json" \
       '{
         goal_source: $source,
         target_branch: $target,
         platform: $platform,
         concurrency: $concurrency,
+        auto_merge: $auto_merge,
         figma_enabled: false
       }' \
       > "$CONFIG_FILE"
@@ -719,6 +733,40 @@ cmd_state() {
   [ ! -f "$STATE_FILE" ] && { err "No state found — run 'start' first"; exit 1; }
   state_ensure_array
   state_active
+}
+
+cmd_state_complete() {
+  require_active_goal
+  state_update status completed
+  log "Goal marked completed"
+}
+
+cmd_merge() {
+  require_vcs_cli
+  require_cmd jq
+  local pr_number pr_url
+  pr_number="$(pr_number_active)"
+  pr_url=$(jq -r '.[-1].pr_url // ""' "$STATE_FILE")
+
+  case "$platform" in
+    github)
+      if ! gh pr merge "$pr_number" --merge; then
+        err "PR merge failed — check for conflicts or branch protection"
+        exit 1
+      fi
+      ;;
+    gitlab)
+      if ! glab mr merge "$pr_number"; then
+        err "MR merge failed — check for conflicts or branch protection"
+        exit 1
+      fi
+      ;;
+  esac
+
+  log "Merged PR/MR #$pr_number"
+  if [ -n "$pr_url" ] && [ "$pr_url" != "null" ]; then
+    log "URL: $pr_url"
+  fi
 }
 
 cmd_status() {
@@ -896,12 +944,18 @@ case "${1:-}" in
   analyze)  cmd_analyze ;;
   config)
     case "${2:-}" in
-      set) cmd_config_set "${3:-}" "${4:-}" "${5:-}" "${6:-1}" ;;
+      set) cmd_config_set "${3:-}" "${4:-}" "${5:-}" "${6:-1}" "${7:-false}" ;;
       get) cmd_config_get ;;
       *)   err "config subcommand must be 'set' or 'get'"; exit 1 ;;
     esac
     ;;
-  state)    cmd_state ;;
+  state)
+    case "${2:-}" in
+      complete) cmd_state_complete ;;
+      *) cmd_state ;;
+    esac
+    ;;
+  merge)    cmd_merge ;;
   status)   cmd_status ;;
   restore)  shift; cmd_restore "$@" ;;
   diff)     cmd_diff ;;

@@ -1,8 +1,8 @@
 ---
 description: >-
   Initialize goal configuration for this project. Asks about goal source,
-  target branch, git platform, concurrency, and optional Figma design lookup.
-  Usage: /init-goal
+  target branch, git platform, concurrency, optional Figma design lookup,
+  and auto-merge. Usage: /init-goal
 agent: orchestrator
 subtask: true
 ---
@@ -49,11 +49,18 @@ This command configures the goal workflow for this project. Ask the user the fol
    - Run: `.opencode/scripts/goal-git.sh figma design set "<url>"`
    - Confirm parsed `figma_file_key` and optional `figma_node_id` from `figma status`
 
-After collecting answers for questions 1–4 (and 5 if applicable), persist core config:
+6. **Auto-merge** — After review is clean (zero unresolved threads), merge the PR/MR into the target branch automatically?
+   - `no` — leave PR open; user merges manually (**default**)
+   - `yes` — after LGTM + `pending` exit 0, orchestrator runs `goal-git.sh merge`
+     - On merge conflict: **stop**, report conflict files; do **not** invent conflict resolutions. User or a follow-up `/goal --continue` with builders can fix.
+
+After collecting answers for questions 1–6 (including 5b/5c when Figma is enabled), persist core config:
 ```bash
-.opencode/scripts/goal-git.sh config set <goal_source> <target_branch> <platform> <concurrency>
+.opencode/scripts/goal-git.sh config set <goal_source> <target_branch> <platform> <concurrency> <auto_merge>
 ```
 Use `1` for concurrency when the user chose sequential only.
+Use `false` for `auto_merge` when the user chose manual merge (default).
+Use `true` when the user chose auto-merge.
 
 If Figma was enabled (question 5 = yes), run `figma setup` and `figma design set` **after** `config set` (order: config set → figma setup → figma design set).
 

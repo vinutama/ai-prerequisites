@@ -71,5 +71,21 @@ A Figma URL in the goal text overrides the project default for that review.
    ```bash
    .opencode/scripts/goal-git.sh comment "<path>" <line> "<severity> — <problem> — <fix>"
    ```
-8. Summarize: threads resolved, comments posted, remaining issues.
-9. If no visual issues and all threads resolved, output "LGTM — no visual issues."
+8. Run `.opencode/scripts/goal-git.sh pending` and `.opencode/scripts/goal-git.sh threads` to count remaining unresolved threads.
+9. End every review pass with the **Review report** (required):
+
+```markdown
+## Review report
+- threads_resolved: <comma-separated thread ids, or "none">
+- comments_posted: <count>
+- remaining_unresolved: <count>
+- verdict: NEEDS_FIX | LGTM
+```
+
+Rules:
+- **Must** call `.opencode/scripts/goal-git.sh resolve <thread-id>` for every fixed thread before claiming LGTM.
+- Never say "all fixed" or output LGTM when `remaining_unresolved` > 0.
+- `verdict: LGTM` only when `remaining_unresolved` is 0 and every fixed thread was resolved.
+- When `figma_enabled` is true, compare implementation against `figma_design_url` (and `figma_node_id` if set).
+- Never merge the PR/MR — merge is orchestrator-owned when `auto_merge` is true in config.
+- Never tell the user the PR was merged unless merge was actually executed (you do not run merge).

@@ -21,15 +21,21 @@ Extra domain skills can be injected project-level via `/init-skills` (from
 1. **Single source of truth**: `state.json` in the project root (project-level only).
 2. **One tool for git**: all agents route git and state operations through
    `.opencode/scripts/goal-git.sh`. NEVER invoke `git`, `gh`, or `glab` directly.
-3. **Analyze before review**: after every code change, run
+3. **Orchestrator never fixes code**: review findings are delegated to `@builder` /
+   `@builder-expert` only; orchestrator has `edit: deny`.
+4. **Analyze before review**: after every code change, run
    `npx gitnexus analyze && rtk gain`. If either fails, STOP.
-4. **Consensus gate**: PR must have zero unresolved review threads before
-   the loop exits.
-5. **Ponytail full**: every agent operates in ponytail full mode — YAGNI
+5. **Consensus gate**: PR must have zero unresolved review threads before
+   the loop exits. Reviewers must `resolve` fixed threads before LGTM.
+6. **Ponytail full**: every agent operates in ponytail full mode — YAGNI
    first, reuse over rewrite, shortest working diff wins.
-6. **Conventional commits**: all commits use the Conventional Commits format.
-7. **Inline review**: reviewers post comments on the PR/MR and auto-resolve
-   threads when issues are fixed.
+7. **Conventional commits**: all commits use the Conventional Commits format.
+8. **Inline review**: reviewers post comments on the PR/MR and resolve threads
+   when issues are fixed; each pass outputs a structured **Review report**.
+9. **Visual review for UI**: planner marks `@visual-reviewer` required for UI goals;
+   orchestrator always delegates when plan, Figma, or UI file changes require it.
+10. **Auto-merge opt-in**: when `auto_merge` is true, orchestrator runs `merge` after
+    clean review; default is manual merge.
 
 ## Agent Roles
 | Agent | Role | Access |
@@ -77,6 +83,7 @@ Project-level only — set via `/init-goal`.
   "target_branch": "main",
   "platform": "github|gitlab",
   "concurrency": 1,
+  "auto_merge": false,
   "figma_enabled": false,
   "figma_design_url": "https://www.figma.com/design/...",
   "figma_file_key": "AbCdEf",
@@ -136,6 +143,8 @@ regenerates `opencode.json`. Only `visual-reviewer` handles image input.
 .opencode/scripts/goal-git.sh threads          # list review threads as JSON
 .opencode/scripts/goal-git.sh comment <path> <line> <body>  # post inline comment
 .opencode/scripts/goal-git.sh resolve <thread-id>  # resolve thread
+.opencode/scripts/goal-git.sh merge            # merge PR/MR (when auto_merge enabled)
+.opencode/scripts/goal-git.sh state complete   # mark goal completed
 .opencode/scripts/goal-git.sh analyze          # npx gitnexus analyze && rtk gain
 .opencode/scripts/goal-git.sh status           # working tree status
 .opencode/scripts/goal-git.sh restore <file>   # restore files to HEAD

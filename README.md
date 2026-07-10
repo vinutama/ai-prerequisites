@@ -21,7 +21,7 @@ opencode
 | `AGENTS.md` | Project conventions and workflow instructions |
 | `state.json` | Runtime state (goal, branch, PR number) — gitignored, project-level |
 | `opencode.json` | Model fallback config — project-level, generated from goal-models.json |
-| `.opencode/goal-config.json` | Goal source, target branch, platform, concurrency, Figma design — gitignored |
+| `.opencode/goal-config.json` | Goal source, target branch, platform, concurrency, auto_merge, Figma design — gitignored |
 | `.opencode/figma.env` | Figma PAT for MCP — gitignored |
 | `.opencode/agent/` | 6 specialized agents |
 | `.opencode/command/goal.md` | `/goal` slash command (with `--list`, `--continue` flags) |
@@ -35,7 +35,7 @@ opencode
 
 | Command | Description |
 |---|---|
-| `/init-goal` | One-time setup: goal source, target branch, git platform, concurrency, optional Figma |
+| `/init-goal` | One-time setup: goal source, target branch, git platform, concurrency, auto_merge, optional Figma |
 | `/init-skills` | Optional: inject curated skills from agentic-awesome-skills |
 | `/goal <objective>` | Start a new goal |
 | `/goal --list` | List all goals |
@@ -49,8 +49,14 @@ parallel using isolated git worktrees. The planner groups tasks into
 concurrency batches; the orchestrator merges results back into the goal branch.
 
 ### Inline PR/MR review
-Reviewers post inline comments on GitHub/GitLab and auto-resolve threads when
-issues are fixed by builders.
+Reviewers post inline comments on GitHub/GitLab and **must** resolve threads when
+issues are fixed (`goal-git.sh resolve`). The orchestrator never fixes code itself —
+it re-delegates to builders until `pending` returns exit 0.
+
+### Auto-merge (opt-in)
+When `auto_merge` is `true` (set via `/init-goal`), the orchestrator runs
+`goal-git.sh merge` after a clean review. Default is `false` — PR stays open for
+manual merge. On merge conflict, agents stop and report; they do not invent resolutions.
 
 ### Model fallback
 `init.sh` generates project-level `opencode.json` with the
