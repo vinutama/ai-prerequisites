@@ -11,9 +11,26 @@ Run `/init-goal` once after `init.sh` to configure goal source, target branch,
 git platform, and concurrency. Settings are stored in
 `.opencode/goal-config.json` (project-level, gitignored).
 
+Optionally run `/init-skills` to inject curated skills from
+[agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills)
+into `.opencode/skills/` (project-level, filtered by category and risk).
+Use the **recommended** preset to install skills that goal-loop agents look for.
+Each agent auto-uses related skills when installed; if a skill is absent, the
+agent proceeds normally.
+
+| Agent | Related skills (when installed) |
+|---|---|
+| `orchestrator` | `parallel-agents`, `multi-agent-patterns`, `verification-before-completion` |
+| `planner` | `brainstorming`, `concise-planning`, `writing-plans`, `architecture` |
+| `builder` | `test-driven-development`, `lint-and-validate`, `error-handling-patterns` |
+| `builder-expert` | `systematic-debugging`, `test-driven-development`, `lint-and-validate`, `architecture`, `error-handling-patterns` |
+| `reviewer` | `code-review-excellence`, `verification-before-completion`, `api-security-best-practices`, `systematic-debugging` |
+| `visual-reviewer` | `wcag-audit-patterns`, `frontend-design`, `webapp-testing` |
+
 ### How to use
 ```
 /init-goal                              # one-time project setup
+/init-skills                            # optional: inject domain skills
 /goal <your objective>                  # start a new goal
 /goal --list                            # list all goals
 /goal --continue [id] [new instruction]  # resume a goal; optional new instruction

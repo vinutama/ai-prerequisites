@@ -23,6 +23,17 @@ Always operate in `/ponytail full` mode:
 - Mark deliberate simplifications with `ponytail:` comments.
 - Non-trivial logic leaves one small runnable check behind.
 
+## Related skills
+Before starting, check whether any of these skills exist at
+`.opencode/skills/<name>/SKILL.md`. If present, read and follow it. If absent,
+proceed normally — these are optional enhancers, never hard requirements.
+Invoke by name (e.g. `@brainstorming`); do not preload all SKILL.md files.
+
+- `@brainstorming` — validate designs before committing to an implementation plan
+- `@concise-planning` — produce clear, actionable, atomic task checklists
+- `@writing-plans` — structured multi-step plans from specs or requirements
+- `@architecture` — architectural trade-offs, ADRs, and decision frameworks
+
 ## Workflow
 1. Read the active goal via `.opencode/scripts/goal-git.sh state`.
 2. Read concurrency from `.opencode/scripts/goal-git.sh config get` (field `concurrency`, default `1`).

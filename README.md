@@ -25,6 +25,7 @@ opencode
 | `.opencode/agent/` | 6 specialized agents |
 | `.opencode/command/goal.md` | `/goal` slash command (with `--list`, `--continue` flags) |
 | `.opencode/command/init-goal.md` | `/init-goal` setup command |
+| `.opencode/command/init-skills.md` | `/init-skills` skill injection command |
 | `.opencode/skills/goal-loop/` | Reusable goal-loop skill |
 | `.opencode/goal-models.json` | Preferred and fallback model config per agent |
 | `.opencode/scripts/goal-git.sh` | Git helper (branch, commit, push, PR, review loop, worktrees) |
@@ -34,6 +35,7 @@ opencode
 | Command | Description |
 |---|---|
 | `/init-goal` | One-time setup: goal source, target branch, git platform, concurrency |
+| `/init-skills` | Optional: inject curated skills from agentic-awesome-skills |
 | `/goal <objective>` | Start a new goal |
 | `/goal --list` | List all goals |
 | `/goal --continue [id] [instruction]` | Resume a goal; optional new instruction for this pass |
@@ -57,6 +59,19 @@ in order (configured in `goal-models.json`).
 ### Jira goal source
 When configured, `/goal PROJ-123` fetches ticket content via Atlassian MCP.
 `/init-goal` verifies MCP connectivity before saving.
+
+### Skill injection (optional)
+Run `/init-skills` to install a filtered subset of
+[agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills)
+into `.opencode/skills/` (project-level, not global). Choose the **recommended**
+preset to install skills that all goal-loop agents look for, or pick custom
+categories. Each agent opportunistically reads and follows its related skills
+when present under `.opencode/skills/<name>/SKILL.md`; if absent, it proceeds
+normally.
+
+Custom mode categories: `architecture`, `business`, `data-ai`, `development`,
+`general`, `infrastructure`, `security`, `testing`, `workflow`. Default risk
+filter: `safe,none`. Invoke installed skills by name in prompts (e.g. `@brainstorming`).
 
 ## Agent roles
 
@@ -89,3 +104,4 @@ The orchestrator delegates automatically.
 - [Atlassian MCP](https://github.com/sooperset/mcp-atlassian) — required only for Jira goal source
 - [RTK](https://github.com/rtk-ai/rtk) (`cargo install rtk`)
 - `jq`, `npx` (Node.js >= 22), `git`
+- [agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills) — optional, via `/init-skills`

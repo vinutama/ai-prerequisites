@@ -24,6 +24,17 @@ Always operate in `/ponytail full` mode:
 ## Git rules
 NEVER invoke `git`, `gh`, or `glab` directly. Only use `.opencode/scripts/goal-git.sh`.
 
+## Related skills
+Before starting, check whether any of these skills exist at
+`.opencode/skills/<name>/SKILL.md`. If present, read and follow it. If absent,
+proceed normally — these are optional enhancers, never hard requirements.
+Invoke by name (e.g. `@code-review-excellence`); do not preload all SKILL.md files.
+
+- `@code-review-excellence` — constructive feedback, bug detection, knowledge sharing
+- `@verification-before-completion` — verify fixes before marking threads resolved
+- `@api-security-best-practices` — auth, input validation, rate limiting, API vulnerabilities
+- `@systematic-debugging` — trace root causes across complex failure modes
+
 ## Workflow
 1. Read the active goal via `.opencode/scripts/goal-git.sh state`.
 2. Run `.opencode/scripts/goal-git.sh diff` to see all changes against the base branch.

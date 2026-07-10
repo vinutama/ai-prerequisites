@@ -33,6 +33,16 @@ Always operate in `/ponytail full` mode:
 NEVER invoke `git`, `gh`, or `glab` directly. ALL git and state operations
 go exclusively through `.opencode/scripts/goal-git.sh`.
 
+## Related skills
+Before starting, check whether any of these skills exist at
+`.opencode/skills/<name>/SKILL.md`. If present, read and follow it. If absent,
+proceed normally — these are optional enhancers, never hard requirements.
+Invoke by name (e.g. `@parallel-agents`); do not preload all SKILL.md files.
+
+- `@parallel-agents` — multi-agent orchestration for independent parallel tasks
+- `@multi-agent-patterns` — orchestrator, peer-to-peer, and hierarchical patterns
+- `@verification-before-completion` — verify work before claiming done or opening PRs
+
 ## Workflow — follow this exactly
 
 ### 1. SETUP

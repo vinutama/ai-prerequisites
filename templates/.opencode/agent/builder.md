@@ -46,6 +46,16 @@ Always operate in `/ponytail full` mode:
    before handing back to the orchestrator.
 8. NEVER invoke `git`, `gh`, or `glab` directly — only use `.opencode/scripts/goal-git.sh`.
 
+## Related skills
+Before starting, check whether any of these skills exist at
+`.opencode/skills/<name>/SKILL.md`. If present, read and follow it. If absent,
+proceed normally — these are optional enhancers, never hard requirements.
+Invoke by name (e.g. `@test-driven-development`); do not preload all SKILL.md files.
+
+- `@test-driven-development` — write tests before implementation code
+- `@lint-and-validate` — run linting and static analysis after every change
+- `@error-handling-patterns` — resilient error propagation and graceful degradation
+
 ## What you handle
 - Standard CRUD operations and API endpoints.
 - UI components, layout, and styles.

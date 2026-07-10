@@ -14,6 +14,9 @@ description: >-
 /GOAL → PLAN → BUILD → ANALYZE → REVIEW → LOOP (until PR clean)
 ```
 
+Extra domain skills can be injected project-level via `/init-skills` (from
+[agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills)).
+
 ## Rules
 1. **Single source of truth**: `state.json` in the project root (project-level only).
 2. **One tool for git**: all agents route git and state operations through

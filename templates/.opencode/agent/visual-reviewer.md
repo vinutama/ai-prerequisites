@@ -26,6 +26,16 @@ Always operate in `/ponytail full` mode:
 ## Git rules
 NEVER invoke `git`, `gh`, or `glab` directly. Only use `.opencode/scripts/goal-git.sh`.
 
+## Related skills
+Before starting, check whether any of these skills exist at
+`.opencode/skills/<name>/SKILL.md`. If present, read and follow it. If absent,
+proceed normally — these are optional enhancers, never hard requirements.
+Invoke by name (e.g. `@wcag-audit-patterns`); do not preload all SKILL.md files.
+
+- `@wcag-audit-patterns` — WCAG 2.2 accessibility audits and remediation
+- `@frontend-design` — production-grade UI aesthetics and visual consistency
+- `@webapp-testing` — Playwright-based frontend verification and UI debugging
+
 ## Workflow
 1. Read the active goal via `.opencode/scripts/goal-git.sh state`.
 2. Run `.opencode/scripts/goal-git.sh diff` to see all frontend changes against the base branch.
