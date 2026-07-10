@@ -52,9 +52,11 @@ Reviewers post inline comments on GitHub/GitLab and auto-resolve threads when
 issues are fixed by builders.
 
 ### Model fallback
-`init.sh` generates project-level `opencode.json` with `runtime_fallback`
-enabled. On rate limit or API error, agents automatically try fallback models
-in order (configured in `goal-models.json`).
+`init.sh` generates project-level `opencode.json` with the
+`@razroo/opencode-model-fallback` plugin and per-agent `fallback_models`
+(from `goal-models.json`). Plugin settings live in
+`.opencode/opencode-model-fallback.json`. On rate limit or API error, agents
+automatically try fallback models in order.
 
 ### Jira goal source
 When configured, `/goal PROJ-123` fetches ticket content via Atlassian MCP.
@@ -104,4 +106,5 @@ The orchestrator delegates automatically.
 - [Atlassian MCP](https://github.com/sooperset/mcp-atlassian) — required only for Jira goal source
 - [RTK](https://github.com/rtk-ai/rtk) (`cargo install rtk`)
 - `jq`, `npx` (Node.js >= 22), `git`
+- `@razroo/opencode-model-fallback` — loaded via `opencode.json` plugin (model fallback)
 - [agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills) — optional, via `/init-skills`

@@ -129,12 +129,13 @@ migrate_cursor_assets() {
 
 migrate_cursor_assets "$TARGET"
 
-# --- Generate project-level opencode.json with model fallback ---
+# --- Generate project-level opencode.json with model fallback plugin ---
 
 generate_opencode_json() {
   local target="$1"
   local models_file="$target/.opencode/goal-models.json"
   local opencode_json="$target/opencode.json"
+  local fallback_config="$target/.opencode/opencode-model-fallback.json"
 
   if [ ! -f "$models_file" ]; then
     warn "goal-models.json not found, skipping opencode.json generation"
@@ -142,23 +143,14 @@ generate_opencode_json() {
   fi
 
   command -v jq >/dev/null 2>&1 || { err "jq required for opencode.json generation"; return 1; }
-  local generated
+
+  local generated fallback_settings
   generated=$(jq '
     . as $models |
-    ($models
-      | to_entries
-      | map(.value.preferred_models + .value.fallback_models)
-      | map(length)
-      | max // 3) as $max_fallback |
     {
-      runtime_fallback: {
-        enabled: true,
-        retry_on_errors: [429, 500, 502, 503, 504],
-        max_fallback_attempts: $max_fallback,
-        cooldown_seconds: 60,
-        notify_on_fallback: true
-      },
-      agents: ($models
+      "$schema": "https://opencode.ai/config.json",
+      plugin: ["@razroo/opencode-model-fallback"],
+      agent: ($models
         | to_entries
         | map({
             key: .key,
@@ -171,21 +163,40 @@ generate_opencode_json() {
     }
   ' "$models_file")
 
+  fallback_settings=$(jq '
+    . as $models |
+    ($models
+      | to_entries
+      | map(.value.preferred_models + .value.fallback_models)
+      | map(length)
+      | max // 3) as $max_fallback |
+    {
+      enabled: true,
+      retry_on_errors: [429, 500, 502, 503, 504],
+      max_fallback_attempts: $max_fallback,
+      cooldown_seconds: 60,
+      notify_on_fallback: true
+    }
+  ' "$models_file")
+
   if [ -f "$opencode_json" ]; then
-    if jq -e '.runtime_fallback' "$opencode_json" >/dev/null 2>&1; then
-      log "opencode.json already has runtime_fallback — merging agent models"
-      jq -s '.[0] * {agents: ((.[0].agents // {}) * .[1].agents)}' \
-        "$opencode_json" <(echo "$generated" | jq '{agents: .agents}') \
-        > "$opencode_json.tmp" && mv "$opencode_json.tmp" "$opencode_json"
-    else
-      log "Merging runtime_fallback into existing opencode.json"
-      jq -s '.[0] * .[1]' "$opencode_json" <(echo "$generated") \
-        > "$opencode_json.tmp" && mv "$opencode_json.tmp" "$opencode_json"
-    fi
+    log "Merging model fallback into existing opencode.json"
+    jq -s '
+      .[0] as $existing |
+      .[1] as $generated |
+      ($existing | del(.runtime_fallback, .agents)) as $clean |
+      $clean
+      | .plugin = ((.plugin // []) + ($generated.plugin // []) | unique)
+      | .agent = ((.agent // {}) * ($generated.agent // {}))
+      | ."$schema" = ($generated["$schema"] // ."$schema")
+    ' "$opencode_json" <(echo "$generated") \
+      > "$opencode_json.tmp" && mv "$opencode_json.tmp" "$opencode_json"
   else
     echo "$generated" > "$opencode_json"
   fi
-  log "Generated/updated opencode.json with model fallback (project-level)"
+
+  echo "$fallback_settings" > "$fallback_config"
+  log "Generated/updated opencode.json and .opencode/opencode-model-fallback.json"
 }
 
 ensure_gitignore_entries() {
@@ -242,5 +253,5 @@ echo "    └── package.json"
 echo ""
 log "Run 'opencode' in the target project, then '/init-goal' to configure, then '/goal <objective>' to start."
 log "Use '/goal --list' to see all goals. Resume with '/goal --continue [id]'."
-log "Model fallback is enabled via project-level opencode.json (from goal-models.json)."
+log "Model fallback uses @razroo/opencode-model-fallback (see opencode.json + .opencode/opencode-model-fallback.json)."
 log "Optionally run '/init-skills' to inject curated skills from agentic-awesome-skills."

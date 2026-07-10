@@ -56,9 +56,11 @@ Goal source (configured via `/init-goal`):
 | `reviewer` | Code review + inline PR comments | opencode-go/deepseek-v4-pro |
 | `visual-reviewer` | UI/multimodal review + inline PR comments | opencode/mimo-v2.5-free |
 
-Model fallbacks are configured in project-level `opencode.json` (generated from
-`.opencode/goal-models.json` by `init.sh`). On rate limit or API error, OpenCode
-automatically tries `fallback_models` in order.
+Model fallbacks are configured in project-level `opencode.json` (plugin +
+per-agent `fallback_models`, generated from `.opencode/goal-models.json` by
+`init.sh`) and `.opencode/opencode-model-fallback.json`. On rate limit or API
+error, the `@razroo/opencode-model-fallback` plugin tries `fallback_models`
+in order.
 
 ### Delegation
 The planner tags every task:
