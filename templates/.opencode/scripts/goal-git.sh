@@ -322,28 +322,49 @@ fetch_threads_json() {
 
   case "$platform" in
     github)
-      local owner repo query result
+      local owner repo query result errors
       read -r owner repo < <(github_owner_repo)
       query='query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){reviewThreads(first:100){nodes{id isResolved isOutdated path line comments(first:1){nodes{body}}}}}}}}'
-      result=$(gh api graphql -f query="$query" -F owner="$owner" -F repo="$repo" -F pr="$pr_number" 2>/dev/null || echo '{}')
+      result=$(gh api graphql -f query="$query" -F owner="$owner" -F repo="$repo" -F pr="$pr_number" 2>&1) || {
+        err "Failed to fetch GitHub review threads for PR #$pr_number"
+        echo "$result" >&2
+        exit 1
+      }
+      errors=$(echo "$result" | jq -r '.errors // [] | length')
+      if [ "${errors:-0}" -gt 0 ]; then
+        err "GraphQL errors fetching review threads:"
+        echo "$result" | jq -r '.errors[]?.message // .errors[]?' >&2
+        exit 1
+      fi
+      if ! echo "$result" | jq -e '.data.repository.pullRequest' >/dev/null 2>&1; then
+        err "GraphQL returned no pullRequest for PR #$pr_number"
+        echo "$result" >&2
+        exit 1
+      fi
       echo "$result" | jq '[.data.repository.pullRequest.reviewThreads.nodes[]? | {
         id: .id,
         path: (.path // ""),
         line: (.line // 0),
         body: (.comments.nodes[0].body // ""),
-        resolved: (.isResolved or .isOutdated)
+        resolved: .isResolved,
+        outdated: .isOutdated
       }]'
       ;;
     gitlab)
       local encoded_path result
       read -r _ encoded_path < <(gitlab_project_path)
-      result=$(glab api "projects/$encoded_path/merge_requests/$pr_number/discussions" 2>/dev/null || echo '[]')
+      result=$(glab api "projects/$encoded_path/merge_requests/$pr_number/discussions" 2>&1) || {
+        err "Failed to fetch GitLab discussions for MR #$pr_number"
+        echo "$result" >&2
+        exit 1
+      }
       echo "$result" | jq '[.[]? | {
         id: .id,
         path: (.position.new_path // ""),
         line: (.position.new_line // 0),
         body: (.notes[0].body // ""),
-        resolved: (.notes[0].resolved // false)
+        resolved: (.notes[0].resolved // false),
+        outdated: false
       }]'
       ;;
   esac
@@ -430,14 +451,41 @@ cmd_resolve() {
 
   case "$platform" in
     github)
-      local mutation
+      local mutation result errors is_resolved
       mutation="mutation { resolveReviewThread(input: {threadId: \"$thread_id\"}) { thread { isResolved } } }"
-      gh api graphql -f query="$mutation" >/dev/null
+      result=$(gh api graphql -f query="$mutation" 2>&1) || {
+        err "GraphQL resolve failed for thread $thread_id"
+        echo "$result" >&2
+        exit 1
+      }
+      errors=$(echo "$result" | jq -r '.errors // [] | length')
+      if [ "${errors:-0}" -gt 0 ]; then
+        err "GraphQL errors resolving thread $thread_id:"
+        echo "$result" | jq -r '.errors[]?.message // .errors[]?' >&2
+        exit 1
+      fi
+      is_resolved=$(echo "$result" | jq -r '.data.resolveReviewThread.thread.isResolved // false')
+      if [ "$is_resolved" != "true" ]; then
+        err "Thread $thread_id was not marked resolved (isResolved=$is_resolved)"
+        exit 1
+      fi
       ;;
     gitlab)
-      local encoded_path
+      local encoded_path result
       read -r _ encoded_path < <(gitlab_project_path)
-      glab api --method PUT "projects/$encoded_path/merge_requests/$pr_number/discussions/$thread_id?resolved=true" >/dev/null
+      result=$(glab api --method PUT "projects/$encoded_path/merge_requests/$pr_number/discussions/$thread_id?resolved=true" 2>&1) || {
+        err "Failed to resolve GitLab discussion $thread_id"
+        echo "$result" >&2
+        exit 1
+      }
+      if echo "$result" | jq -e '.message? // .error? // empty' >/dev/null 2>&1; then
+        local api_err
+        api_err=$(echo "$result" | jq -r '.message // .error // empty')
+        if [ -n "$api_err" ]; then
+          err "GitLab API error resolving $thread_id: $api_err"
+          exit 1
+        fi
+      fi
       ;;
   esac
 

@@ -9,6 +9,8 @@ temperature: 0.2
 permission:
   edit: allow
   bash: allow
+  skill:
+    "*": allow
   task: deny
 ---
 
@@ -32,6 +34,22 @@ Always operate in `/ponytail full` mode:
 - Before committing, run `.opencode/scripts/goal-git.sh status` and review changed files. If any file
   is unrelated to the goal, revert it with `.opencode/scripts/goal-git.sh restore <file>` before commit.
 
+## Related skills
+Before starting work, for each skill below that appears in the OpenCode `skill`
+tool `available_skills` list, load it with:
+```
+skill({ name: "<skill-name>" })
+```
+If a skill is not available, skip it and continue.
+Do not rely on `@mentions` or manually reading `.opencode/skills/*/SKILL.md`.
+
+- `systematic-debugging` — structured root-cause analysis before proposing fixes
+- `test-driven-development` — write tests before implementation code
+- `lint-and-validate` — run linting and static analysis after every change
+- `architecture` — architectural trade-offs for complex design decisions
+- `error-handling-patterns` — resilient error propagation and graceful degradation
+- `api-endpoint-builder` — REST endpoints with validation, auth, errors, and docs
+
 ## Workflow
 1. Read the plan from the orchestrator (passed in context). Only pick up
    tasks tagged `@builder-expert`.
@@ -41,23 +59,30 @@ Always operate in `/ponytail full` mode:
 4. Trace the full execution path before writing a single line.
 5. Implement the minimal correct solution. Complex does not mean
    complicated — the best complex solutions are surgically simple.
-6. Run `.opencode/scripts/goal-git.sh status`. Revert any changed file not directly related to the goal with `.opencode/scripts/goal-git.sh restore <file>`.
-7. Stage new files with `.opencode/scripts/goal-git.sh stage <file>...`.
-8. After all changes, run `.opencode/scripts/goal-git.sh analyze` and verify it passes
-   before handing back to the orchestrator.
-9. NEVER invoke `git`, `gh`, or `glab` directly — only use `.opencode/scripts/goal-git.sh`.
+6. Run project build/test commands if the orchestrator or plan requires verification.
+7. Run `.opencode/scripts/goal-git.sh status`. Revert any changed file not directly related to the goal with `.opencode/scripts/goal-git.sh restore <file>`.
+8. Stage all goal-related changes with `.opencode/scripts/goal-git.sh stage <file>...`.
+9. Run `.opencode/scripts/goal-git.sh analyze` and verify it passes.
+10. Output the required **Handoff** (below) and stop — do **not** commit, push, or create PRs (orchestrator owns that).
 
-## Related skills
-Before starting, check whether any of these skills exist at
-`.opencode/skills/<name>/SKILL.md`. If present, read and follow it. If absent,
-proceed normally — these are optional enhancers, never hard requirements.
-Invoke by name (e.g. `@systematic-debugging`); do not preload all SKILL.md files.
+**Do not stop after build, status, or edits alone.** You are not done until analyze passes and Handoff is emitted.
 
-- `@systematic-debugging` — structured root-cause analysis before proposing fixes
-- `@test-driven-development` — write tests before implementation code
-- `@lint-and-validate` — run linting and static analysis after every change
-- `@architecture` — architectural trade-offs for complex design decisions
-- `@error-handling-patterns` — resilient error propagation and graceful degradation
+## Handoff (required)
+End every task — including review fixes — with exactly this structure:
+
+```markdown
+## Handoff
+- status: FIXES_COMPLETE | BLOCKED
+- files_staged: <comma-separated list, or "none">
+- analyze: pass | fail
+- notes: <one line>
+```
+
+Rules:
+- `status: FIXES_COMPLETE` only when all requested changes are done, files are staged, and `analyze` passed.
+- `status: BLOCKED` when you cannot finish — explain in `notes`.
+- On `FIXES_COMPLETE`, exit immediately so the orchestrator can continue.
+- NEVER invoke `git`, `gh`, or `glab` directly — only use `.opencode/scripts/goal-git.sh`.
 
 ## What you handle
 - Novel algorithms and data structures.

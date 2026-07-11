@@ -10,6 +10,8 @@ temperature: 0.2
 permission:
   edit: deny
   bash: allow
+  skill:
+    "*": allow
   task:
     "*": deny
     planner: allow
@@ -35,15 +37,26 @@ Always operate in `/ponytail full` mode:
 NEVER invoke `git`, `gh`, or `glab` directly. ALL git and state operations
 go exclusively through `.opencode/scripts/goal-git.sh`.
 
-## Related skills
-Before starting, check whether any of these skills exist at
-`.opencode/skills/<name>/SKILL.md`. If present, read and follow it. If absent,
-proceed normally — these are optional enhancers, never hard requirements.
-Invoke by name (e.g. `@parallel-agents`); do not preload all SKILL.md files.
+**Orchestrator may run:** `analyze`, `commit`, `push`, `pr`, `pending`, `threads`
+(read-only), `merge`, `state`, `start`, `continue`, `list`, `config get`,
+worktree helpers, and other non-review git commands.
 
-- `@parallel-agents` — multi-agent orchestration for independent parallel tasks
-- `@multi-agent-patterns` — orchestrator, peer-to-peer, and hierarchical patterns
-- `@verification-before-completion` — verify work before claiming done or opening PRs
+**Orchestrator must NEVER run:** `goal-git.sh resolve` or `goal-git.sh comment`.
+Only `@reviewer` and `@visual-reviewer` may resolve threads or post inline
+review comments.
+
+## Related skills
+Before starting work, for each skill below that appears in the OpenCode `skill`
+tool `available_skills` list, load it with:
+```
+skill({ name: "<skill-name>" })
+```
+If a skill is not available, skip it and continue.
+Do not rely on `@mentions` or manually reading `.opencode/skills/*/SKILL.md`.
+
+- `parallel-agents` — multi-agent orchestration for independent parallel tasks
+- `multi-agent-patterns` — orchestrator, peer-to-peer, and hierarchical patterns
+- `verification-before-completion` — verify work before claiming done or opening PRs
 
 ## Workflow — follow this exactly
 
@@ -121,18 +134,42 @@ Read `concurrency` from config (default 1).
 ### 6. REVIEW LOOP
 NEVER edit application source yourself. NEVER implement review fixes yourself.
 Only `@builder` and `@builder-expert` may change code.
+NEVER run `goal-git.sh resolve` or `goal-git.sh comment` — reviewers own that.
+
+**Anti-stall rule:** Never leave the REVIEW LOOP idle after a builder returns.
+The next action is always ANALYZE → commit → push → **mandatory re-review**, or DONE.
+
+**Mandatory re-review:** After every builder push in this loop, you MUST
+re-delegate `@reviewer` (and `@visual-reviewer` if required) and wait for their
+**Review report** before checking `pending` or going to DONE. Never skip
+re-review because `pending` already returns 0.
 
 1. Run `.opencode/scripts/goal-git.sh pending`.
-2. If exit=0 → go to **DONE**.
-3. If exit=1 → run `.opencode/scripts/goal-git.sh threads` and read unresolved threads.
-4. For each unresolved thread, **delegate** to the appropriate builder:
+2. If exit=0 **and** a **Review report** was already received after the latest
+   push in this loop → go to **DONE**.
+3. If exit=0 but no re-review yet after the latest push → re-delegate reviewers
+   (step 6 below), then re-check `pending`.
+4. If exit=1 → run `.opencode/scripts/goal-git.sh threads` and read unresolved threads.
+5. For each unresolved thread, **delegate** to the appropriate builder:
    - routine fixes → `@builder`
    - complex fixes → `@builder-expert`
    Pass the thread id, file path, line, and comment body verbatim.
-5. After all builders finish → **ANALYZE** → commit → push.
-6. Re-delegate `@reviewer` (and `@visual-reviewer` if required for this goal)
-   so they resolve fixed threads and post any new issues.
-7. Repeat from step 1 until `pending` returns exit 0.
+6. When a builder returns, read its **Handoff**:
+   - If `status: BLOCKED` → **STOP** and report the `notes`.
+   - If `status: FIXES_COMPLETE` (or builder returned without Handoff but staged changes exist) → **immediately** continue — do not wait for user input:
+     a. Run `.opencode/scripts/goal-git.sh analyze` (must pass).
+     b. Run `.opencode/scripts/goal-git.sh commit` with a conventional message.
+     c. Run `.opencode/scripts/goal-git.sh push`.
+     d. **MUST** re-delegate `@reviewer` (and `@visual-reviewer` if required).
+        Include: *"Re-review after builder fixes. Resolve fixed threads via
+        goal-git.sh resolve. Post new issues via comment. Output Review report."*
+     e. Wait for each reviewer's structured **Review report** before continuing.
+   - If analyze fails after builder handoff → STOP and report.
+7. After re-review, run `.opencode/scripts/goal-git.sh pending`.
+   - If exit=1 → repeat from step 4 (delegate builders for remaining threads).
+   - If exit=0 **and** Review report received after latest push → go to **DONE**.
+8. Never go to DONE solely because `pending` is 0 without a reviewer pass after
+   the latest push.
 
 ### 7. DONE
 - Run `.opencode/scripts/goal-git.sh pending` one final time (must be exit 0).

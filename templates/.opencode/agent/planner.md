@@ -10,6 +10,8 @@ temperature: 0.2
 permission:
   edit: deny
   bash: deny
+  skill:
+    "*": allow
   task: deny
 ---
 
@@ -24,15 +26,18 @@ Always operate in `/ponytail full` mode:
 - Non-trivial logic leaves one small runnable check behind.
 
 ## Related skills
-Before starting, check whether any of these skills exist at
-`.opencode/skills/<name>/SKILL.md`. If present, read and follow it. If absent,
-proceed normally — these are optional enhancers, never hard requirements.
-Invoke by name (e.g. `@brainstorming`); do not preload all SKILL.md files.
+Before starting work, for each skill below that appears in the OpenCode `skill`
+tool `available_skills` list, load it with:
+```
+skill({ name: "<skill-name>" })
+```
+If a skill is not available, skip it and continue.
+Do not rely on `@mentions` or manually reading `.opencode/skills/*/SKILL.md`.
 
-- `@brainstorming` — validate designs before committing to an implementation plan
-- `@concise-planning` — produce clear, actionable, atomic task checklists
-- `@writing-plans` — structured multi-step plans from specs or requirements
-- `@architecture` — architectural trade-offs, ADRs, and decision frameworks
+- `brainstorming` — validate designs before committing to an implementation plan
+- `concise-planning` — produce clear, actionable, atomic task checklists
+- `writing-plans` — structured multi-step plans from specs or requirements
+- `architecture` — architectural trade-offs, ADRs, and decision frameworks
 
 ## Workflow
 1. Read the active goal via `.opencode/scripts/goal-git.sh state`.

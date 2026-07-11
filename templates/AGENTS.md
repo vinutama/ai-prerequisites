@@ -16,15 +16,18 @@ Optionally run `/init-skills` to inject curated skills from
 [agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills)
 into `.opencode/skills/` (project-level, filtered by category and risk).
 Use the **recommended** preset to install skills that goal-loop agents look for.
-Each agent auto-uses related skills when installed; if a skill is absent, the
-agent proceeds normally.
+Each agent loads related skills via OpenCode's native `skill` tool
+(`skill({ name: "<skill-name>" })`) when they appear in `available_skills`.
+Do not use `@mentions` or manually read `.opencode/skills/*/SKILL.md`.
+If a skill is absent, the agent proceeds normally. Re-run `/init-skills` with
+**recommended** (includes `development`) to install skills like `api-endpoint-builder`.
 
 | Agent | Related skills (when installed) |
 |---|---|
 | `orchestrator` | `parallel-agents`, `multi-agent-patterns`, `verification-before-completion` |
 | `planner` | `brainstorming`, `concise-planning`, `writing-plans`, `architecture` |
-| `builder` | `test-driven-development`, `lint-and-validate`, `error-handling-patterns` |
-| `builder-expert` | `systematic-debugging`, `test-driven-development`, `lint-and-validate`, `architecture`, `error-handling-patterns` |
+| `builder` | `test-driven-development`, `lint-and-validate`, `error-handling-patterns`, `api-endpoint-builder` |
+| `builder-expert` | `systematic-debugging`, `test-driven-development`, `lint-and-validate`, `architecture`, `error-handling-patterns`, `api-endpoint-builder` |
 | `reviewer` | `code-review-excellence`, `verification-before-completion`, `api-security-best-practices`, `systematic-debugging` |
 | `visual-reviewer` | `wcag-audit-patterns`, `frontend-design`, `webapp-testing` |
 
@@ -154,11 +157,20 @@ Launch OpenCode with Figma secrets loaded:
 ### Review loop
 - The **orchestrator never edits application source** — it only delegates `@builder` /
   `@builder-expert` to fix review findings.
+- Builders must finish with a structured **Handoff** (`status`, `files_staged`, `analyze`, `notes`)
+  after staging changes and passing `goal-git.sh analyze`. They do not commit or push.
+- After a builder returns `FIXES_COMPLETE`, the orchestrator **immediately** resumes —
+  no user input — with ANALYZE → commit → push → **mandatory re-delegate reviewers**.
+  Never idle in REVIEW LOOP. Never skip re-review because `pending` is already 0.
+- **Only reviewers resolve threads** — the orchestrator must never run
+  `goal-git.sh resolve` or `goal-git.sh comment`. Reviewers resolve after confirming fixes.
 - After code changes, run `.opencode/scripts/goal-git.sh analyze` (gitnexus + rtk gain).
   If it fails, STOP.
 - Reviewers post inline comments on the PR/MR and **must** resolve fixed threads via
-  `goal-git.sh resolve` before claiming LGTM. Each pass ends with a structured
-  **Review report** (`threads_resolved`, `comments_posted`, `remaining_unresolved`, `verdict`).
+  `goal-git.sh resolve <thread-id>` (GraphQL id from `threads`, e.g. `PRRT_...`) with
+  **exit 0** before claiming LGTM. **`outdated: true` is not resolved** — only `resolved: true`
+  after a successful `resolve` call counts as clean. `goal-git.sh resolve` fails loudly on GraphQL/API errors.
+  Each pass ends with a structured **Review report** (`threads_resolved`, `comments_posted`, `remaining_unresolved`, `verdict`).
 - For UI/visual goals, the planner requires `@visual-reviewer`; the orchestrator always
   delegates visual review when the plan says so, Figma is enabled, or UI files changed.
 - Run `.opencode/scripts/goal-git.sh pending` to check PR threads.

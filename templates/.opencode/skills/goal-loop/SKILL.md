@@ -26,15 +26,20 @@ Extra domain skills can be injected project-level via `/init-skills` (from
 4. **Analyze before review**: after every code change, run
    `npx gitnexus analyze && rtk gain`. If either fails, STOP.
 5. **Consensus gate**: PR must have zero unresolved review threads before
-   the loop exits. Reviewers must `resolve` fixed threads before LGTM.
-6. **Ponytail full**: every agent operates in ponytail full mode — YAGNI
+   the loop exits. Reviewers must run `goal-git.sh resolve` (exit 0) for fixed threads before LGTM.
+6. **Skills via OpenCode tool**: agents load installed skills with
+   `skill({ name: "<skill-name>" })` from the native `skill` tool — not `@mentions` or Read on SKILL.md paths.
+7. **Ponytail full**: every agent operates in ponytail full mode — YAGNI
    first, reuse over rewrite, shortest working diff wins.
-7. **Conventional commits**: all commits use the Conventional Commits format.
-8. **Inline review**: reviewers post comments on the PR/MR and resolve threads
-   when issues are fixed; each pass outputs a structured **Review report**.
-9. **Visual review for UI**: planner marks `@visual-reviewer` required for UI goals;
+8. **Conventional commits**: all commits use the Conventional Commits format.
+9. **Inline review**: reviewers post comments on the PR/MR and resolve threads
+   when issues are fixed (use GraphQL thread `id` from `threads`; require resolve exit 0);
+   each pass outputs a structured **Review report**.
+10. **Builder handoff**: builders stage changes, pass `analyze`, then emit **Handoff**
+   (`FIXES_COMPLETE` or `BLOCKED`). Orchestrator resumes immediately — no idle wait.
+11. **Visual review for UI**: planner marks `@visual-reviewer` required for UI goals;
    orchestrator always delegates when plan, Figma, or UI file changes require it.
-10. **Auto-merge opt-in**: when `auto_merge` is true, orchestrator runs `merge` after
+12. **Auto-merge opt-in**: when `auto_merge` is true, orchestrator runs `merge` after
     clean review; default is manual merge.
 
 ## Agent Roles
