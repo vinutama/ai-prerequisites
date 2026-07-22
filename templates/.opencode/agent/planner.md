@@ -9,7 +9,7 @@ model: opencode-go/qwen3.7-max
 temperature: 0.2
 permission:
   edit: deny
-  bash: deny
+  bash: allow
   skill:
     "*": allow
   task: deny
@@ -38,6 +38,7 @@ Do not rely on `@mentions` or manually reading `.opencode/skills/*/SKILL.md`.
 - `concise-planning` — produce clear, actionable, atomic task checklists
 - `writing-plans` — structured multi-step plans from specs or requirements
 - `architecture` — architectural trade-offs, ADRs, and decision frameworks
+- `ui-ux-pro-max` — design intelligence for UI/UX (styles, palettes, design system generation)
 
 ## Workflow
 1. Read the active goal via `.opencode/scripts/goal-git.sh state`.
@@ -62,6 +63,25 @@ Do not rely on `@mentions` or manually reading `.opencode/skills/*/SKILL.md`.
 6. Order tasks by dependency.
 7. Detect UI/visual work: frontend/CSS/components/pages/templates, `figma_enabled` in config,
    or goal text mentioning UI, design, portfolio, landing, Figma, or screenshots.
+   When UI/visual work is detected **and** `ui-ux-pro-max` appears in the `skill` tool
+   `available_skills` list, load it and follow this branch:
+   - **If `figma_enabled` is true:** Figma is the visual source of truth (colors, layout,
+     spacing). Note in the plan that builders must implement from Figma MCP /
+     `figma_design_url`. `ui-ux-pro-max` is consulted **only** for stack guidelines,
+     accessibility, and the pre-delivery checklist — never to override Figma.
+   - **If `figma_enabled` is false:** check whether `design-system/MASTER.md` already exists.
+     - If it exists, reuse it — do **not** regenerate.
+     - If it does not exist, generate and persist a design system:
+       ```bash
+       python3 .opencode/skills/ui-ux-pro-max/scripts/search.py "<product/task summary>" --design-system --persist -p "<project name>"
+       ```
+       For a page-scoped task, also pass `--page "<page-name>"` to create
+       `design-system/pages/<page-name>.md`.
+       If `python3` is missing, note in the plan that design-system generation is blocked
+       and the user must install Python 3; do not attempt to install it.
+     - Summarize the generated (or reused) pattern / style / colors / typography in the plan
+       under a `### Design system` section, and instruct builders to implement against
+       `design-system/MASTER.md` (page override wins when present).
 8. If concurrency > 1, group independent tasks (no shared files, no ordering
    dependencies) into numbered concurrency batches. Tasks that share files or
    depend on each other must be in separate batches or run sequentially.
@@ -73,6 +93,11 @@ Do not rely on `@mentions` or manually reading `.opencode/skills/*/SKILL.md`.
 1. [ ] <task description> → @builder
 2. [ ] <complex task description> → @builder-expert
 3. [ ] <task description> → @builder
+
+### Design system
+(only when UI/visual and ui-ux-pro-max used)
+- Source: Figma (`figma_design_url`) | design-system/MASTER.md
+- Pattern / style / colors / typography: <summary or "see Figma">
 
 ### Review requirements
 - @reviewer — always
@@ -90,5 +115,5 @@ Do not rely on `@mentions` or manually reading `.opencode/skills/*/SKILL.md`.
 
 When concurrency = 1, omit the Concurrency batches section.
 When the goal is not UI/visual, omit the `@visual-reviewer` line under Review requirements
-but always keep `@reviewer — always`.
+and omit the Design system section, but always keep `@reviewer — always`.
 When Figma is enabled, note that `@visual-reviewer` must compare against `figma_design_url`.

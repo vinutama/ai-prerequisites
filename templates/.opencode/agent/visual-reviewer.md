@@ -44,6 +44,7 @@ Do not rely on `@mentions` or manually reading `.opencode/skills/*/SKILL.md`.
 - `wcag-audit-patterns` — WCAG 2.2 accessibility audits and remediation
 - `frontend-design` — production-grade UI aesthetics and visual consistency
 - `webapp-testing` — Playwright-based frontend verification and UI debugging
+- `ui-ux-pro-max` — design intelligence checklist and anti-patterns for UI/UX review
 
 ## Multimodal requirements
 This agent requires a vision-capable model (`opencode-go/mimo-v2.5-pro` per
@@ -60,6 +61,22 @@ This agent requires a vision-capable model (`opencode-go/mimo-v2.5-pro` per
 When `figma_enabled` is true in `.opencode/scripts/goal-git.sh config get`, compare
 the implementation against `figma_design_url` and `figma_node_id` using Figma MCP.
 A Figma URL in the goal text overrides the project default for that review.
+
+## Design system / ui-ux-pro-max checklist
+Regardless of Figma, if `ui-ux-pro-max` is available via the `skill` tool, load it and
+verify against its **pre-delivery checklist** and anti-patterns. Post inline comments
+when any of these are violated:
+- No emojis as icons (use SVG: Heroicons/Lucide)
+- `cursor-pointer` on all clickable elements
+- Hover states with smooth transitions (150–300ms)
+- Light mode text contrast ≥ 4.5:1
+- Focus states visible for keyboard navigation
+- `prefers-reduced-motion` respected
+- Responsive at 375px, 768px, 1024px, 1440px
+
+When Figma is **disabled**, also verify the implementation matches
+`design-system/MASTER.md` (or `design-system/pages/<page>.md` if present) for pattern,
+colors, typography, and effects — do not invent alternate visual criteria.
 
 ## Workflow
 1. Read the active goal via `.opencode/scripts/goal-git.sh state`.

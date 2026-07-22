@@ -48,6 +48,7 @@ Do not rely on `@mentions` or manually reading `.opencode/skills/*/SKILL.md`.
 - `lint-and-validate` — run linting and static analysis after every change
 - `error-handling-patterns` — resilient error propagation and graceful degradation
 - `api-endpoint-builder` — REST endpoints with validation, auth, errors, and docs
+- `ui-ux-pro-max` — design intelligence for UI/UX (styles, palettes, design system, checklist)
 
 ## Workflow
 1. Read the plan from the orchestrator (passed in context). Only pick up
@@ -58,12 +59,21 @@ Do not rely on `@mentions` or manually reading `.opencode/skills/*/SKILL.md`.
 4. If `figma_enabled` is true in `.opencode/scripts/goal-git.sh config get`, use
    Figma MCP and the configured `figma_design_url` / `figma_file_key` when
    implementing UI. A Figma URL in the goal text overrides the project default.
-5. Implement changes in the minimal number of files.
-6. Run project build/test commands if the orchestrator or plan requires verification.
-7. Run `.opencode/scripts/goal-git.sh status`. Revert any changed file not directly related to the goal with `.opencode/scripts/goal-git.sh restore <file>`.
-8. Stage all goal-related changes with `.opencode/scripts/goal-git.sh stage <file>...`.
-9. Run `.opencode/scripts/goal-git.sh analyze` and verify it passes.
-10. Output the required **Handoff** (below) and stop — do **not** commit, push, or create PRs (orchestrator owns that).
+5. **UI/UX design source** (when the plan or task is UI/frontend):
+   - If the plan says Figma is the source of truth → implement from Figma (existing
+     behavior). If `ui-ux-pro-max` is loaded, also follow its stack-specific guidelines
+     and **pre-delivery checklist** (cursor-pointer on clickables, hover/focus states,
+     contrast ≥ 4.5:1, `prefers-reduced-motion`, responsive at 375/768/1024/1440,
+     no emoji-as-icons). Never override Figma colors/layout/spacing with the skill.
+   - If the plan references `design-system/MASTER.md` (or a page override under
+     `design-system/pages/`) → read those files and implement using that pattern,
+     colors, typography, and effects; honor the anti-patterns list.
+6. Implement changes in the minimal number of files.
+7. Run project build/test commands if the orchestrator or plan requires verification.
+8. Run `.opencode/scripts/goal-git.sh status`. Revert any changed file not directly related to the goal with `.opencode/scripts/goal-git.sh restore <file>`.
+9. Stage all goal-related changes with `.opencode/scripts/goal-git.sh stage <file>...`.
+10. Run `.opencode/scripts/goal-git.sh analyze` and verify it passes.
+11. Output the required **Handoff** (below) and stop — do **not** commit, push, or create PRs (orchestrator owns that).
 
 **Do not stop after build, status, or edits alone.** You are not done until analyze passes and Handoff is emitted.
 

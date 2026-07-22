@@ -16,6 +16,9 @@ description: >-
 
 Extra domain skills can be injected project-level via `/init-skills` (from
 [agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills)).
+Optionally also install
+[ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) for
+UI/UX/frontend design intelligence (`uipro init --ai opencode`).
 
 ## Rules
 1. **Single source of truth**: `state.json` in the project root (project-level only).
@@ -39,7 +42,10 @@ Extra domain skills can be injected project-level via `/init-skills` (from
    (`FIXES_COMPLETE` or `BLOCKED`). Orchestrator resumes immediately — no idle wait.
 11. **Visual review for UI**: planner marks `@visual-reviewer` required for UI goals;
    orchestrator always delegates when plan, Figma, or UI file changes require it.
-12. **Auto-merge opt-in**: when `auto_merge` is true, orchestrator runs `merge` after
+12. **UI/UX Pro Max (optional)**: when installed, UI/frontend goals use Figma as visual
+    source of truth if enabled; otherwise persist/reuse `design-system/MASTER.md` via the
+    skill's design-system generator. Builders and visual-reviewer apply the pre-delivery checklist.
+13. **Auto-merge opt-in**: when `auto_merge` is true, orchestrator runs `merge` after
     clean review; default is manual merge.
 
 ## Agent Roles

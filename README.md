@@ -86,13 +86,16 @@ Run `/init-skills` to install a filtered subset of
 [agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills)
 into `.opencode/skills/` (project-level, not global). Choose the **recommended**
 preset to install skills that all goal-loop agents look for, or pick custom
-categories. Each agent opportunistically reads and follows its related skills
-when present under `.opencode/skills/<name>/SKILL.md`; if absent, it proceeds
-normally.
+categories. Optionally also install
+[ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
+(`npx -y ui-ux-pro-max-cli init --ai opencode`) for UI/UX design intelligence —
+used with Figma when attached, or to generate `design-system/MASTER.md` from scratch.
+Each agent loads related skills via OpenCode's `skill` tool when present; if absent,
+it proceeds normally. Requires `python3` for design-system generation.
 
 Custom mode categories: `architecture`, `business`, `data-ai`, `development`,
 `general`, `infrastructure`, `security`, `testing`, `workflow`. Default risk
-filter: `safe,none`. Invoke installed skills by name in prompts (e.g. `@brainstorming`).
+filter: `safe,none`.
 
 ## Agent roles
 
