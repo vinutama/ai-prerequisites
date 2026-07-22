@@ -46,9 +46,9 @@ the new instruction; if not, the whole remainder is the instruction for the
 active goal.
 
 Goal source (configured via `/init-goal`):
-- `prompt` — free-text objective (e.g. `/goal Add health check endpoint`)
-- `markdown` — path to a `.md` file (e.g. `/goal docs/feature.md`)
-- `jira` — Jira ticket key (e.g. `/goal PROJ-123`) — requires Atlassian MCP
+- `prompt` — free-text objective (e.g. `/goal Add health check endpoint`); branch `goal/<slug>`
+- `markdown` — reads a `.md` file as the goal (`/goal` uses `markdown_path` from config; `/goal docs/other.md` overrides); branch `goal/<slug>`
+- `jira` — fetches a Jira ticket as the goal (`/goal` uses `jira_ticket` from config; `/goal OTHER-123` or `/goal bugfix DEL-4123` overrides) — requires Atlassian MCP; branch `{task_type}/{ticket}-{slug}` (e.g. `feat/del-4123-add-health-check`)
 
 ### Agent roles
 | Agent | Role | Model |
@@ -120,7 +120,7 @@ Both state and config files are pinned to the project root. Agents read state vi
 NEVER invoke `git`, `gh`, or `glab` directly. ALL git and state operations
 MUST go through `.opencode/scripts/goal-git.sh`:
 ```bash
-.opencode/scripts/goal-git.sh start <goal>     # create branch
+.opencode/scripts/goal-git.sh start <goal> [ticket] [task_type]  # create branch (jira: task_type/ticket-slug)
 .opencode/scripts/goal-git.sh continue [id]     # resume goal by branch/text
 .opencode/scripts/goal-git.sh list              # list all goals
 .opencode/scripts/goal-git.sh state            # print active goal JSON
@@ -182,6 +182,8 @@ Launch OpenCode with Figma secrets loaded:
 ### Jira goal source
 When `goal_source` is `jira`, the Atlassian MCP must be connected in `opencode.json`.
 `/init-goal` verifies connectivity before saving. `/goal` re-checks before fetching tickets.
+Jira branches use `{task_type}/{lowercase-ticket}-{slug}` (task_type from issue type or
+`/goal bugfix DEL-4123` override). Prompt/markdown branches use `goal/<slug>`.
 
 ### Figma design lookup (optional)
 When enabled via `/init-goal`, agents use Figma MCP (`figma-developer-mcp`) with a PAT in

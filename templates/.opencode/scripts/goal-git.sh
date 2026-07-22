@@ -23,7 +23,7 @@ usage() {
 Usage: goal-git.sh <command> [args]
 
 Commands:
-  start <goal>              Create branch and append goal to history
+  start <goal> [ticket] [task_type]  Create branch (jira: task_type/ticket-slug)
   continue [id]             Continue active goal (or switch to goal by branch/text)
   list                      List all goals with status and active marker
   stage <file>...           Stage specific files for commit
@@ -182,6 +182,15 @@ slugify() {
   echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | head -c 50
 }
 
+normalize_task_type() {
+  local raw
+  raw=$(echo "${1:-feat}" | tr '[:upper:]' '[:lower:]')
+  case "$raw" in
+    feat|bugfix|chore|refactor|docs|test|perf) echo "$raw" ;;
+    *) echo "feat" ;;
+  esac
+}
+
 worktree_path() {
   echo "$WORKTREES_DIR/$(slugify "$1")"
 }
@@ -205,7 +214,7 @@ sync_worktree_config() {
 cmd_start() {
   require_cmd git jq
   require_vcs_cli
-  local goal="${1:-}"
+  local goal="${1:-}" ticket="${2:-}" task_type="${3:-}"
   [ -z "$goal" ] && { err "start requires a goal description"; exit 1; }
 
   state_ensure_array
@@ -218,9 +227,24 @@ cmd_start() {
     fi
   fi
 
-  local base branch
+  local base branch goal_source ticket_slug type_slug
   base=$(detect_base)
-  branch="goal/$(slugify "$goal")"
+  goal_source="$(config_read goal_source)"
+
+  if [ "$goal_source" = "jira" ]; then
+    if [ -z "$ticket" ]; then
+      ticket="$(config_read jira_ticket)"
+    fi
+    if [ -z "$ticket" ]; then
+      err "jira goal_source requires a ticket key — pass start <goal> <ticket> [task_type] or set jira_ticket via /init-goal"
+      exit 1
+    fi
+    ticket_slug=$(echo "$ticket" | tr '[:upper:]' '[:lower:]')
+    type_slug="$(normalize_task_type "$task_type")"
+    branch="${type_slug}/${ticket_slug}-$(slugify "$goal")"
+  else
+    branch="goal/$(slugify "$goal")"
+  fi
 
   log "Platform: $platform"
   log "Base: $base"
@@ -978,7 +1002,7 @@ cmd_selfcheck() {
 }
 
 case "${1:-}" in
-  start)    cmd_start "${2:-}" ;;
+  start)    cmd_start "${2:-}" "${3:-}" "${4:-}" ;;
   continue) cmd_continue "${2:-}" ;;
   list)     cmd_list ;;
   stage)    shift; cmd_stage "$@" ;;

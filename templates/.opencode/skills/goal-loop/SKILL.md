@@ -70,7 +70,7 @@ Project-level only — pinned to the project root, never global.
 [
   {
     "goal": "the task objective",
-    "branch": "goal/<slug>",
+    "branch": "goal/<slug> | feat/del-4123-<slug>",
     "base_branch": "main",
     "pr_number": null,
     "pr_url": "",
@@ -79,6 +79,8 @@ Project-level only — pinned to the project root, never global.
 ]
 ```
 The last entry is the active goal. Read via `goal-git.sh state`.
+Branch format: `goal/<slug>` for prompt/markdown; `{task_type}/{ticket}-{slug}` for jira
+(e.g. `feat/del-4123-add-health-check`).
 
 ## Config (`.opencode/goal-config.json`)
 Project-level only — set via `/init-goal`.
@@ -136,7 +138,7 @@ regenerates `opencode.json`. Only `visual-reviewer` handles image input.
 
 ## Git Helper (`.opencode/scripts/goal-git.sh`)
 ```bash
-.opencode/scripts/goal-git.sh start <goal>     # create branch, append to history
+.opencode/scripts/goal-git.sh start <goal> [ticket] [task_type]  # create branch (jira: task_type/ticket-slug)
 .opencode/scripts/goal-git.sh continue [id]    # resume active or switch goal (/goal --continue [id] [instruction])
 .opencode/scripts/goal-git.sh list             # list all goals
 .opencode/scripts/goal-git.sh state            # print active goal JSON

@@ -43,13 +43,37 @@ This continues an existing goal. No quotes required.
 ### `/goal <objective>` (new goal)
 1. Read goal source from `.opencode/scripts/goal-git.sh config get` (field `goal_source`). If no config exists, treat as `prompt`.
 2. Resolve the goal text based on source:
-   - `prompt` — use `$ARGUMENTS` directly as the goal.
-   - `markdown` — treat `$ARGUMENTS` as a path to a `.md` file; read its contents as the goal.
-   - `jira` — treat `$ARGUMENTS` as a Jira ticket key (e.g. `PROJ-123`):
-     - First verify Atlassian MCP is available (attempt `jira_get_issue` or check MCP tools).
-     - If unavailable, STOP and guide the user to connect the Atlassian MCP server in `opencode.json`, then retry.
-     - If available, fetch via `jira_get_issue` and use summary + description as the goal.
-3. Run `.opencode/scripts/goal-git.sh start "<resolved goal>"` to set up the branch.
+   - `prompt` — use `$ARGUMENTS` directly as the goal. If empty, STOP and ask the user for an objective.
+   - `markdown` — resolve the file path:
+     - If `$ARGUMENTS` is non-empty → use it as the path.
+     - If `$ARGUMENTS` is empty → read `markdown_path` from config; if missing, STOP and tell the user to run `/init-goal` or pass a path (e.g. `/goal docs/feature.md`).
+     - Read the file contents as the goal. If the file does not exist, STOP and report the path.
+   - `jira` — resolve ticket + task_type, then fetch the issue:
+     1. Parse `$ARGUMENTS` tokens:
+        - Optional leading `task_type` override if the first token is one of:
+          `feat`, `bugfix`, `chore`, `refactor`, `docs`, `test`, `perf`
+          (e.g. `/goal bugfix DEL-4123`).
+        - Next token (or first token if no type override) is the ticket key.
+        - If no ticket token → read `jira_ticket` from config.
+        - If still missing, STOP and tell the user to run `/init-goal` or pass a ticket (e.g. `/goal PROJ-123`).
+     2. Verify Atlassian MCP is available (attempt `jira_get_issue` or check MCP tools).
+        - If unavailable, STOP and guide the user to connect the Atlassian MCP server in `opencode.json`, then retry.
+     3. Fetch via `jira_get_issue` and use summary + description as the goal text.
+     4. If `task_type` was not overridden from args, map Jira issue type (case-insensitive):
+        - Bug, Defect → `bugfix`
+        - Story, Task, Feature, New Feature, Epic, Improvement, Enhancement → `feat`
+        - Documentation → `docs`
+        - Test → `test`
+        - Spike, Tech Debt, Chore → `chore`
+        - Performance → `perf`
+        - anything else / missing → `feat`
+     5. Call start with ticket and type:
+        ```bash
+        .opencode/scripts/goal-git.sh start "<resolved goal>" "<ticket-key>" "<task_type>"
+        ```
+        Branch becomes `{task_type}/{lowercase-ticket}-{slug}` (e.g. `feat/del-4123-add-health-check`).
+3. For `prompt` and `markdown` only: run `.opencode/scripts/goal-git.sh start "<resolved goal>"` (branch `goal/<slug>`).
+   For `jira`, start was already called in step 2.
 4. Plan → Build → Analyze → Review → Loop until done.
 5. Report the final PR URL.
 

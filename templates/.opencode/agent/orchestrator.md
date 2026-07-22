@@ -72,7 +72,7 @@ Inspect `$ARGUMENTS` to determine the mode:
      - If not → identifier = empty (active goal), continuation instruction = whole remainder.
   3. Run `.opencode/scripts/goal-git.sh continue "<identifier>"`. Do NOT create a new branch or PR.
   4. Carry the continuation instruction forward for the PLAN step (does NOT overwrite `state.json`).
-- **New goal**: Resolve the goal text (see `/goal` command for source resolution), then run `.opencode/scripts/goal-git.sh start "<goal>"` to create the branch and append to state history.
+- **New goal**: Resolve the goal text (see `/goal` command for source resolution), then run `.opencode/scripts/goal-git.sh start "<goal>"` (for jira: also pass `"<ticket>" "<task_type>"`) to create the branch and append to state history.
 
 Read concurrency from `.opencode/scripts/goal-git.sh config get` (field `concurrency`, default `1`).
 Read `auto_merge` from config (default `false`).
