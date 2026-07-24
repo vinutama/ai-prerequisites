@@ -80,13 +80,20 @@ Project-level only — pinned to the project root, never global.
     "base_branch": "main",
     "pr_number": null,
     "pr_url": "",
-    "status": "in_progress|completed|failed"
+    "status": "in_progress|completed|failed",
+    "repos": [
+      {"path": "repo-name", "pr_number": null, "pr_url": ""}
+    ]
   }
 ]
 ```
 The last entry is the active goal. Read via `goal-git.sh state`.
 Branch format: `goal/<slug>` for prompt/markdown; `{task_type}/{ticket}-{slug}` for jira
 (e.g. `feat/del-4123-add-health-check`).
+
+**Single-repo:** `repos` field absent or `[{path: ".", ...}]`. Top-level `pr_number`/`pr_url` still present for backward compat.
+
+**Multi-repo:** `repos` array contains {path, pr_number, pr_url} per repo. Top-level `pr_number`/`pr_url` may be absent.
 
 ## Config (`.opencode/goal-config.json`)
 Project-level only — set via `/init-goal`.
@@ -97,6 +104,7 @@ Project-level only — set via `/init-goal`.
   "platform": "github|gitlab",
   "concurrency": 1,
   "auto_merge": false,
+  "repos": ["repo1", "repo2"],
   "figma_enabled": false,
   "figma_design_url": "https://www.figma.com/design/...",
   "figma_file_key": "AbCdEf",
@@ -105,6 +113,8 @@ Project-level only — set via `/init-goal`.
 ```
 `concurrency` = 1 means sequential only. Values > 1 enable parallel builders
 via git worktrees.
+
+`repos` — array of repository paths (relative to PROJECT_ROOT). Absent in single-repo mode (defaults to `["."]`). Set by `/init-goal` repo selection step. Used by `goal-git.sh` to create branches/PRs in all selected repos.
 
 Figma PAT is stored separately in `.opencode/figma.env` (gitignored). MCP config
 is in project `opencode.json`. Commands:

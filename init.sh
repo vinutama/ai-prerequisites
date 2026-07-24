@@ -25,6 +25,13 @@ EOF
 }
 
 TARGET="${1:-}"
+
+# Handle --clean flag
+if [ "${1:-}" = "--clean" ]; then
+  cmd_clean "${2:-}"
+  exit 0
+fi
+
 if [ -z "$TARGET" ]; then
   err "Missing target project path."
   usage
@@ -45,6 +52,8 @@ cp "$TEMPLATES_DIR/AGENTS.md" "$TARGET/"
 # Make scripts executable
 chmod +x "$TARGET/.opencode/scripts/goal-git.sh"
 chmod +x "$TARGET/.opencode/scripts/run-opencode.sh"
+
+auto_detect_and_cleanup "$TARGET"
 
 # --- Migrate .cursor assets if present ---
 
@@ -271,7 +280,18 @@ generate_opencode_json() {
 ensure_gitignore_entries() {
   local target="$1"
   local gitignore="$target/.gitignore"
-  local entries=("state.json" ".opencode/goal-config.json" ".opencode/figma.env" ".worktrees/")
+  local entries=(".opencode/" "AGENTS.md" ".worktrees/" "state.json")
+
+  if [ -f "$gitignore" ]; then
+    local stale_patterns=(
+      "\.opencode/goal-config\.json"
+      "\.opencode/figma\.env"
+      "state\.\*json"
+    )
+    for pattern in "${stale_patterns[@]}"; do
+      sed -i '' "/^${pattern}$/d" "$gitignore" 2>/dev/null || true
+    done
+  fi
 
   touch "$gitignore"
   for entry in "${entries[@]}"; do
@@ -280,6 +300,99 @@ ensure_gitignore_entries() {
       log "Added $entry to .gitignore"
     fi
   done
+}
+
+cmd_clean() {
+  local target="$1"
+  [ -z "$target" ] && { err "clean requires <target-path>"; exit 1; }
+  target="$(cd "$target" 2>/dev/null && pwd || echo "")"
+  [ -z "$target" ] || [ ! -d "$target" ] && { err "Target does not exist: $1"; exit 1; }
+
+  log "Cleaning template from: $target"
+
+  if [ -d "$target/.opencode" ]; then
+    rm -rf "$target/.opencode"
+    log "Removed .opencode/"
+  fi
+
+  if [ -f "$target/AGENTS.md" ]; then
+    rm -f "$target/AGENTS.md"
+    log "Removed AGENTS.md"
+  fi
+
+  if [ -f "$target/state.json" ]; then
+    rm -f "$target/state.json"
+    log "Removed state.json"
+  fi
+
+  if [ -f "$target/opencode.json" ]; then
+    warn "opencode.json exists — review and remove manually if needed"
+  fi
+
+  if [ -f "$target/.gitignore" ]; then
+    local clean_patterns=(
+      "\.opencode/"
+      "\.opencode/goal-config\.json"
+      "\.opencode/figma\.env"
+      "\.worktrees/"
+      "state\.json"
+      "state\.\*json"
+      "AGENTS\.md"
+    )
+    for pattern in "${clean_patterns[@]}"; do
+      sed -i '' "/^${pattern}$/d" "$target/.gitignore" 2>/dev/null || true
+    done
+    log "Cleaned .gitignore"
+  fi
+
+  log "Clean complete"
+}
+
+auto_detect_and_cleanup() {
+  local target="$1"
+
+  if [ -d "$target/.git" ]; then
+    log "Mode: single-repo"
+    return
+  fi
+
+  local git_repos=()
+  local existing_opencode=()
+  for dir in "$target"/*/; do
+    [ -d "$dir" ] || continue
+    if [ -d "$dir.git" ]; then
+      git_repos+=("$(basename "$dir")")
+      if [ -d "$dir.opencode" ]; then
+        existing_opencode+=("$(basename "$dir")")
+      fi
+    fi
+  done
+
+  if [ ${#git_repos[@]} -eq 0 ]; then
+    warn "No git repos detected. Init at a git repo or a directory containing git repos."
+    return
+  fi
+
+  log "Mode: multi-repo (detected ${#git_repos[@]} git repos)"
+
+  if [ ${#existing_opencode[@]} -gt 0 ]; then
+    warn "Found existing .opencode/ in these repos (from previous single-repo inits):"
+    for repo in "${existing_opencode[@]}"; do
+      warn "  - $repo"
+    done
+    warn ""
+    warn "These should be removed for multi-repo mode to work correctly."
+    warn "Remove them now?"
+    read -p "[y/N] " response
+    if [ "$response" = "y" ] || [ "$response" = "Y" ]; then
+      for repo in "${existing_opencode[@]}"; do
+        cmd_clean "$target/$repo"
+      done
+      log "Cleaned ${#existing_opencode[@]} repos"
+    else
+      warn "Skipped cleanup — you may need to run './init.sh --clean <repo>' manually later"
+    fi
+  fi
 }
 
 generate_opencode_json "$TARGET"
@@ -292,8 +405,8 @@ echo ""
 echo "─── $TARGET"
 echo "├── state.json          (gitignored, created at runtime)"
 echo "├── opencode.json       (model fallback config, project-level)"
-echo "├── AGENTS.md"
-echo "└── .opencode/"
+echo "├── AGENTS.md           (gitignored)"
+echo "└── .opencode/          (gitignored)"
 echo "    ├── agent/"
 echo "    │   ├── builder.md"
 echo "    │   ├── builder-expert.md"

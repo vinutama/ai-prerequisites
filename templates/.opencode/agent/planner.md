@@ -41,6 +41,17 @@ Do not rely on `@mentions` or manually reading `.opencode/skills/*/SKILL.md`.
 - `ui-ux-pro-max` — design intelligence for UI/UX (styles, palettes, design system generation)
 
 ## Workflow
+
+### Multi-repo planning
+If the orchestrator passes multiple repo paths:
+1. Explore ALL repos to understand cross-repo dependencies, shared types, API contracts
+2. Tag each task with the target repo: `[repo-name] Task description`
+3. Consider cross-repo dependencies when ordering tasks:
+   - If repo B depends on repo A's changes, put repo A's tasks first
+   - Independent tasks can go in the same batch (parallel execution across repos)
+4. Group tasks into dependency batches as usual
+5. For each task, specify both the repo and the skill level (@builder / @builder-expert)
+
 1. Read the active goal via `.opencode/scripts/goal-git.sh state`.
 2. Read concurrency from `.opencode/scripts/goal-git.sh config get` (field `concurrency`, default `1`).
 3. If `figma_enabled` is true in config, read `figma_design_url`, `figma_file_key`, and

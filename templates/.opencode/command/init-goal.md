@@ -27,34 +27,61 @@ This command configures the goal workflow for this project. Ask the user the fol
    - `github` — uses `gh` CLI
    - `gitlab` — uses `glab` CLI
 
-4. **Concurrent subagents** — Should independent tasks run concurrently using git worktrees?
+4. **Repo selection** — (multi-repo only) Which repositories should this goal workflow cover?
+
+   Detect mode:
+   ```bash
+   if [ -d .git ]; then
+     echo "single-repo (no repo selection needed)"
+   else
+     echo "multi-repo"
+     for d in */; do [ -d "$d.git" ] && echo "  $(echo $d | sed 's|/||')"; done
+   fi
+   ```
+
+   - **Single-repo:** If `.git` exists in the current directory, skip this step. No `repos` field needed in config.
+   - **Multi-repo:** Show the detected repos above. Ask the user:
+
+     *"Which repos should goals cover? (all / comma-separated names)"*
+
+     - `all` → include all detected repos
+     - Specific names → e.g. `tije-smpob-api, tije-worker-v1`
+
+     Store selected repos in config:
+     ```bash
+     jq --argjson repos '["repo1","repo2"]' '.repos = $repos' .opencode/goal-config.json > .opencode/goal-config.json.tmp && mv .opencode/goal-config.json.tmp .opencode/goal-config.json
+     ```
+
+     Confirm: `jq '.repos' .opencode/goal-config.json`
+
+5. **Concurrent subagents** — Should independent tasks run concurrently using git worktrees?
    - `no` — sequential execution only (concurrency = 1)
    - `yes` — ask how many subagents max (e.g. 2, 3, 4). Store as `concurrency` integer.
 
-5. **Figma design lookup** — Connect Figma to look up preferred designs during UI goals?
+6. **Figma design lookup** — Connect Figma to look up preferred designs during UI goals?
    - `no` — skip (default)
-   - `yes` — continue to 5b and 5c below
+   - `yes` — continue to 6b and 6c below
 
-   **5b (only if yes):** Figma Personal Access Token
+   **6b (only if yes):** Figma Personal Access Token
    - Guide: Figma → Settings → Security → Personal access tokens
    - Warn: token is stored in `.opencode/figma.env` (project-level, gitignored)
    - Run: `.opencode/scripts/goal-git.sh figma setup "<token>"`
    - Optionally verify after sourcing env: `set -a && source .opencode/figma.env && set +a && opencode mcp list`
    - If verification fails, warn but continue
 
-   **5c (only if yes, after token saved):** Default Figma design link
+   **6c (only if yes, after token saved):** Default Figma design link
    - Ask: *"Which Figma design should agents use as the preferred reference for this project?"*
    - Accept full Figma URL (design file, legacy file link, or frame via `node-id`)
    - Example: `https://www.figma.com/design/FILE_KEY/Project-Name?node-id=1-2`
    - Run: `.opencode/scripts/goal-git.sh figma design set "<url>"`
    - Confirm parsed `figma_file_key` and optional `figma_node_id` from `figma status`
 
-6. **Auto-merge** — After review is clean (zero unresolved threads), merge the PR/MR into the target branch automatically?
+7. **Auto-merge** — After review is clean (zero unresolved threads), merge the PR/MR into the target branch automatically?
    - `no` — leave PR open; user merges manually (**default**)
    - `yes` — after LGTM + `pending` exit 0, orchestrator runs `goal-git.sh merge`
      - On merge conflict: **stop**, report conflict files; do **not** invent conflict resolutions. User or a follow-up `/goal --continue` with builders can fix.
 
-After collecting answers for questions 1–6 (including 5b/5c when Figma is enabled), persist core config:
+After collecting answers for questions 1–7 (including 6b/6c when Figma is enabled), persist core config:
 ```bash
 .opencode/scripts/goal-git.sh config set <goal_source> <target_branch> <platform> <concurrency> <auto_merge>
 ```

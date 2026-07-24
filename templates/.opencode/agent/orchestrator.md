@@ -73,6 +73,9 @@ Inspect `$ARGUMENTS` to determine the mode:
   3. Run `.opencode/scripts/goal-git.sh continue "<identifier>"`. Do NOT create a new branch or PR.
   4. Carry the continuation instruction forward for the PLAN step (does NOT overwrite `state.json`).
 - **New goal**: Resolve the goal text (see `/goal` command for source resolution), then run `.opencode/scripts/goal-git.sh start "<goal>"` (for jira: also pass `"<ticket>" "<task_type>"`) to create the branch and append to state history.
+- Detect multi-repo mode: check if `state.json` active goal has `repos` array with > 1 entries.
+  If multi-repo: track the repos list for this goal. Each repo has {path, pr_number, pr_url}.
+  If single-repo: proceed as before.
 
 Read concurrency from `.opencode/scripts/goal-git.sh config get` (field `concurrency`, default `1`).
 Read `auto_merge` from config (default `false`).
@@ -92,6 +95,8 @@ Read `auto_merge` from config (default `false`).
 
 ### 3. BUILD
 Read `concurrency` from config (default 1).
+- In multi-repo mode: cd into the repo path before delegating builders.
+  Pass `repo_path=<path>` in the builder prompt context.
 
 **Sequential mode (concurrency = 1):**
 - Parse the planner's output for `@builder` and `@builder-expert` tags.
@@ -114,6 +119,9 @@ Read `concurrency` from config (default 1).
 - Only proceed if analyze succeeds.
 
 ### 5. COMMIT & REVIEW
+- In multi-repo mode: per repo, cd into repo, commit, push, create PR.
+  Pass repo_path to reviewer and to goal-git.sh commands (pending, threads, comment, resolve).
+  Track per-repo review status.
 - Run `.opencode/scripts/goal-git.sh commit` with a conventional commit message
   summarizing the changes.
 - Run `.opencode/scripts/goal-git.sh push` and `.opencode/scripts/goal-git.sh pr`.
@@ -172,6 +180,7 @@ re-review because `pending` already returns 0.
    the latest push.
 
 ### 7. DONE
+- In multi-repo mode: report all PR URLs per repo.
 - Run `.opencode/scripts/goal-git.sh pending` one final time (must be exit 0).
 - Read `auto_merge` from `.opencode/scripts/goal-git.sh config get`.
 - If `auto_merge` is `true`:

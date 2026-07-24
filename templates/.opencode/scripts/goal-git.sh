@@ -71,6 +71,49 @@ config_read() {
   fi
 }
 
+get_repos() {
+  local repos
+  repos=$(config_read repos 2>/dev/null || true)
+  if [ -z "$repos" ] || [ "$repos" = "null" ]; then
+    echo "."
+  else
+    echo "$repos" | jq -r '.[]'
+  fi
+}
+
+repo_dir() {
+  local repo="$1"
+  if [ "$repo" = "." ]; then
+    echo "$PROJECT_ROOT"
+  else
+    echo "$PROJECT_ROOT/$repo"
+  fi
+}
+
+is_multi_repo() {
+  local repos
+  repos=$(jq -r '.[-1].repos // [] | length' "$STATE_FILE" 2>/dev/null || echo "0")
+  [ "$repos" -gt 1 ] && return 0 || return 1
+}
+
+get_state_pr_number() {
+  local repo_path="${1:-}"
+  if [ -z "$repo_path" ] || [ "$repo_path" = "." ]; then
+    jq -r '.[-1].pr_number // null' "$STATE_FILE"
+  else
+    jq -r --arg r "$repo_path" '.[-1].repos[]? | select(.path == $r) | .pr_number' "$STATE_FILE"
+  fi
+}
+
+get_state_pr_url() {
+  local repo_path="${1:-}"
+  if [ -z "$repo_path" ] || [ "$repo_path" = "." ]; then
+    jq -r '.[-1].pr_url // ""' "$STATE_FILE"
+  else
+    jq -r --arg r "$repo_path" '.[-1].repos[]? | select(.path == $r) | .pr_url // ""' "$STATE_FILE"
+  fi
+}
+
 # --- Platform Detection ---
 
 detect_platform() {
@@ -123,27 +166,40 @@ require_active_goal() {
 
 pr_number_active() {
   require_active_goal
+  local repo_path="${1:-}"
   local pr_number
-  pr_number=$(jq -r '.[-1].pr_number' "$STATE_FILE")
-  if [ "$pr_number" = "null" ] || [ -z "$pr_number" ]; then
-    err "No PR/MR yet — run 'goal-git.sh pr' first"
-    exit 1
+
+  if [ -n "$repo_path" ]; then
+    pr_number=$(jq -r --arg r "$repo_path" '.[-1].repos[]? | select(.path == $r) | .pr_number' "$STATE_FILE")
+    if [ "$pr_number" = "null" ] || [ -z "$pr_number" ]; then
+      err "No PR/MR yet for $repo_path — run 'goal-git.sh pr' first"
+      exit 1
+    fi
+  else
+    pr_number=$(jq -r '.[-1].pr_number' "$STATE_FILE")
+    if [ "$pr_number" = "null" ] || [ -z "$pr_number" ]; then
+      err "No PR/MR yet — run 'goal-git.sh pr' first"
+      exit 1
+    fi
   fi
+
   echo "$pr_number"
 }
 
 github_owner_repo() {
   require_cmd gh
+  local workdir="${1:-$PROJECT_ROOT}"
   local owner repo
-  owner=$(gh repo view --json owner -q '.owner.login')
-  repo=$(gh repo view --json name -q '.name')
+  owner=$(cd "$workdir" && gh repo view --json owner -q '.owner.login')
+  repo=$(cd "$workdir" && gh repo view --json name -q '.name')
   echo "$owner" "$repo"
 }
 
 gitlab_project_path() {
   require_cmd glab jq
+  local workdir="${1:-$PROJECT_ROOT}"
   local project_path encoded_path
-  project_path=$(glab repo view --output json 2>/dev/null | jq -r '.path_with_namespace // empty')
+  project_path=$(cd "$workdir" && glab repo view --output json 2>/dev/null | jq -r '.path_with_namespace // empty')
   [ -z "$project_path" ] && { err "Failed to get project path from glab repo view"; exit 1; }
   encoded_path=$(echo "$project_path" | jq -sRr @uri)
   echo "$project_path" "$encoded_path"
@@ -229,7 +285,7 @@ cmd_start() {
 
   local base branch goal_source ticket_slug type_slug
   base=$(detect_base)
-  goal_source="$(config_read goal_source)"
+  goal_source="${GOAL_SOURCE_OVERRIDE:-$(config_read goal_source)}"
 
   if [ "$goal_source" = "jira" ]; then
     if [ -z "$ticket" ]; then
@@ -250,19 +306,36 @@ cmd_start() {
   log "Base: $base"
   log "Branch: $branch"
 
-  git fetch origin "$base" 2>/dev/null || true
-  git checkout -b "$branch" "origin/$base" 2>/dev/null || git checkout "$branch" 2>/dev/null || true
+  local repos_json="[]"
+  while IFS= read -r repo; do
+    [ -z "$repo" ] && continue
+    local rd
+    rd=$(repo_dir "$repo")
+    log "Creating branch in: $repo"
+    (cd "$rd" && git fetch origin "$base" 2>/dev/null || true)
+    (cd "$rd" && git checkout -b "$branch" "origin/$base" 2>/dev/null || git checkout "$branch" 2>/dev/null || true)
+    repos_json=$(echo "$repos_json" | jq --arg path "$repo" '. + [{"path": $path, "pr_number": null, "pr_url": ""}]')
+  done < <(get_repos)
 
   local new_goal
-  new_goal=$(jq -n --arg goal "$goal" --arg branch "$branch" --arg base "$base" \
-    '{goal: $goal, branch: $branch, base_branch: $base, pr_number: null, pr_url: "", status: "in_progress"}')
+  local repo_count
+  repo_count=$(echo "$repos_json" | jq 'length')
+
+  if [ "$repo_count" -eq 1 ]; then
+    new_goal=$(jq -n --arg goal "$goal" --arg branch "$branch" --arg base "$base" \
+      '{goal: $goal, branch: $branch, base_branch: $base, pr_number: null, pr_url: "", status: "in_progress", repos: []}')
+    new_goal=$(echo "$new_goal" | jq --argjson r "$repos_json" '.repos = $r')
+  else
+    new_goal=$(jq -n --arg goal "$goal" --arg branch "$branch" --arg base "$base" --argjson repos "$repos_json" \
+      '{goal: $goal, branch: $branch, base_branch: $base, status: "in_progress", repos: $repos}')
+  fi
 
   if [ -f "$STATE_FILE" ]; then
     jq --argjson entry "$new_goal" '. + [$entry]' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
   else
     echo "[$new_goal]" > "$STATE_FILE"
   fi
-  log "Goal #$(jq 'length' "$STATE_FILE") started"
+  log "Goal #$(jq 'length' "$STATE_FILE") started ($repo_count repos)"
 }
 
 cmd_commit() {
@@ -278,78 +351,135 @@ cmd_push() {
   state_ensure_array
   local branch
   branch=$(jq -r '.[-1].branch' "$STATE_FILE")
-  git push -u origin "$branch" --force-with-lease 2>/dev/null || git push -u origin "$branch"
-  log "Pushed: $branch"
+  while IFS= read -r repo; do
+    [ -z "$repo" ] && continue
+    local rd
+    rd=$(repo_dir "$repo")
+    (cd "$rd" && git push -u origin "$branch" --force-with-lease 2>/dev/null) || (cd "$rd" && git push -u origin "$branch")
+    log "Pushed: $repo/$branch"
+  done < <(get_repos)
 }
 
 cmd_pr() {
   require_cmd jq
   require_vcs_cli
   state_ensure_array
-  local branch base goal pr_number title pr_url
+  local branch base goal title
   branch=$(jq -r '.[-1].branch' "$STATE_FILE")
   base=$(jq -r '.[-1].base_branch' "$STATE_FILE")
   goal=$(jq -r '.[-1].goal' "$STATE_FILE")
-  pr_number=$(jq -r '.[-1].pr_number' "$STATE_FILE")
+  title="${goal:0:250}"
 
-  if [ "$pr_number" != "null" ] && [ -n "$pr_number" ]; then
-    log "PR/MR already exists: #$pr_number"
+  local repos
+  repos=$(jq -r '.[-1].repos // []' "$STATE_FILE")
+
+  if [ "$repos" = "[]" ] || [ "$repos" = "null" ]; then
+    local pr_number
+    pr_number=$(jq -r '.[-1].pr_number' "$STATE_FILE")
+    if [ "$pr_number" != "null" ] && [ -n "$pr_number" ]; then
+      log "PR/MR already exists: #$pr_number"
+      return
+    fi
+    create_pr "" "$branch" "$base" "$title" "$goal"
+    local result_pr_number="${PR_RESULT_NUMBER:-}"
+    local result_pr_url="${PR_RESULT_URL:-}"
+    jq --argjson pn "$result_pr_number" --arg url "$result_pr_url" \
+      '.[-1].pr_number = $pn | .[-1].pr_url = $url' \
+      "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    log "Created: $result_pr_url"
     return
   fi
 
-  title="${goal:0:250}"
+  local repo_count repo_idx updated_repos
+  repo_count=$(echo "$repos" | jq 'length')
+  repo_idx=0
+  updated_repos="$repos"
 
+  while [ "$repo_idx" -lt "$repo_count" ]; do
+    local repo_path repo_pr
+    repo_path=$(echo "$updated_repos" | jq -r ".[$repo_idx].path")
+    repo_pr=$(echo "$updated_repos" | jq -r ".[$repo_idx].pr_number")
+
+    if [ "$repo_pr" != "null" ] && [ -n "$repo_pr" ]; then
+      log "PR/MR already exists for $repo_path: #$repo_pr"
+      repo_idx=$((repo_idx + 1))
+      continue
+    fi
+
+    create_pr "$repo_path" "$branch" "$base" "$title" "$goal"
+    local result_pr_number="${PR_RESULT_NUMBER:-}"
+    local result_pr_url="${PR_RESULT_URL:-}"
+
+    updated_repos=$(echo "$updated_repos" | jq --argjson idx "$repo_idx" --argjson pn "$result_pr_number" --arg url "$result_pr_url" \
+      ".[$repo_idx].pr_number = \$pn | .[$repo_idx].pr_url = \$url")
+    log "Created PR in $repo_path: $result_pr_url"
+    repo_idx=$((repo_idx + 1))
+  done
+
+  jq --argjson repos "$updated_repos" '.[-1].repos = $repos' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+}
+
+create_pr() {
+  local repo_path="$1" branch="$2" base="$3" title="$4" body="$5"
+  local workdir
+  if [ -z "$repo_path" ] || [ "$repo_path" = "." ]; then
+    workdir="$PROJECT_ROOT"
+  else
+    workdir="$PROJECT_ROOT/$repo_path"
+  fi
+
+  local pr_number pr_url
   case "$platform" in
     github)
-      pr_number=$(gh pr create --base "$base" --head "$branch" --title "$title" --body "$goal" --json number -q '.number')
+      pr_number=$(cd "$workdir" && gh pr create --base "$base" --head "$branch" --title "$title" --body "$body" --json number -q '.number')
       local gh_owner
-      gh_owner=$(gh repo view --json nameWithOwner -q '.nameWithOwner')
+      gh_owner=$(cd "$workdir" && gh repo view --json nameWithOwner -q '.nameWithOwner')
       pr_url="https://github.com/$gh_owner/pull/$pr_number"
       ;;
     gitlab)
       log "Creating MR: $title"
       local mr_output mr_number
-      mr_output=$(glab mr create --yes --source-branch "$branch" --target-branch "$base" --title "$title" --description "$goal" --output json 2>/dev/null || true)
+      mr_output=$(cd "$workdir" && glab mr create --yes --source-branch "$branch" --target-branch "$base" --title "$title" --description "$body" --output json 2>/dev/null || true)
       if echo "$mr_output" | jq -e '.iid' >/dev/null 2>&1; then
         mr_number=$(echo "$mr_output" | jq -r '.iid')
         pr_url=$(echo "$mr_output" | jq -r '.web_url // empty')
       else
-        mr_output=$(glab mr create --yes --source-branch "$branch" --target-branch "$base" --title "$title" --description "$goal" 2>&1)
+        mr_output=$(cd "$workdir" && glab mr create --yes --source-branch "$branch" --target-branch "$base" --title "$title" --description "$body" 2>&1)
         mr_number=$(echo "$mr_output" | grep -oE '\!([0-9]+)' | head -1 | tr -d '!')
       fi
       [ -z "$mr_number" ] && { err "Failed to extract MR number from glab output"; err "Output: $mr_output"; exit 1; }
       pr_number="$mr_number"
       if [ -z "$pr_url" ]; then
         local project_path remote_url
-        project_path=$(glab repo view --output json 2>/dev/null | jq -r '.path_with_namespace // empty' || echo "")
+        project_path=$(cd "$workdir" && glab repo view --output json 2>/dev/null | jq -r '.path_with_namespace // empty' || echo "")
         if [ -n "$project_path" ]; then
           pr_url="https://gitlab.com/$project_path/-/merge_requests/$pr_number"
         else
-          remote_url=$(git remote get-url origin 2>/dev/null | sed 's/\.git$//' | sed 's|^git@gitlab.com:|https://gitlab.com/|')
+          remote_url=$(cd "$workdir" && git remote get-url origin 2>/dev/null | sed 's/\.git$//' | sed 's|^git@gitlab.com:|https://gitlab.com/|')
           pr_url="${remote_url}/-/merge_requests/$pr_number"
         fi
       fi
       ;;
   esac
 
-  jq --argjson pn "$pr_number" --arg url "$pr_url" \
-    '.[-1].pr_number = $pn | .[-1].pr_url = $url' \
-    "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
-
-  log "Created: $pr_url"
+  PR_RESULT_NUMBER="$pr_number"
+  PR_RESULT_URL="$pr_url"
 }
 
 fetch_threads_json() {
   require_cmd jq
   require_vcs_cli
   local pr_number="$1"
+  local repo_path="${2:-}"
+  local workdir
+  workdir="$(repo_dir "${repo_path:-.}")"
 
   case "$platform" in
     github)
       local owner repo query result errors
-      read -r owner repo < <(github_owner_repo)
+      read -r owner repo < <(github_owner_repo "$workdir")
       query='query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){reviewThreads(first:100){nodes{id isResolved isOutdated path line comments(first:1){nodes{body}}}}}}}}'
-      result=$(gh api graphql -f query="$query" -F owner="$owner" -F repo="$repo" -F pr="$pr_number" 2>&1) || {
+      result=$(cd "$workdir" && gh api graphql -f query="$query" -F owner="$owner" -F repo="$repo" -F pr="$pr_number" 2>&1) || {
         err "Failed to fetch GitHub review threads for PR #$pr_number"
         echo "$result" >&2
         exit 1
@@ -376,8 +506,8 @@ fetch_threads_json() {
       ;;
     gitlab)
       local encoded_path result
-      read -r _ encoded_path < <(gitlab_project_path)
-      result=$(glab api "projects/$encoded_path/merge_requests/$pr_number/discussions" 2>&1) || {
+      read -r _ encoded_path < <(gitlab_project_path "$workdir")
+      result=$(cd "$workdir" && glab api "projects/$encoded_path/merge_requests/$pr_number/discussions" 2>&1) || {
         err "Failed to fetch GitLab discussions for MR #$pr_number"
         echo "$result" >&2
         exit 1
@@ -395,16 +525,19 @@ fetch_threads_json() {
 }
 
 cmd_threads() {
+  local repo_path="${1:-}"
   local pr_number
-  pr_number="$(pr_number_active)"
-  fetch_threads_json "$pr_number"
+  pr_number="$(pr_number_active "$repo_path")"
+  fetch_threads_json "$pr_number" "$repo_path"
 }
 
 cmd_pending() {
   require_cmd jq
-  local pr_number threads_json total unresolved
-  pr_number="$(pr_number_active)"
-  threads_json="$(fetch_threads_json "$pr_number")"
+  local repo_path="${1:-}"
+  local pr_number
+  pr_number="$(pr_number_active "$repo_path")"
+  local threads_json total unresolved
+  threads_json="$(fetch_threads_json "$pr_number" "$repo_path")"
   total=$(echo "$threads_json" | jq 'length')
   unresolved=$(echo "$threads_json" | jq '[.[] | select(.resolved == false)] | length')
 
@@ -422,62 +555,64 @@ cmd_pending() {
 cmd_comment() {
   require_cmd jq
   require_vcs_cli
-  local path="${1:-}" line="${2:-}" body="${3:-}"
+  local path="${1:-}" line="${2:-}" body="${3:-}" repo_path="${4:-}"
   [ -z "$path" ] || [ -z "$line" ] || [ -z "$body" ] && {
-    err "comment requires: <path> <line> <body>"
+    err "comment requires: <path> <line> <body> [repo_path]"
     exit 1
   }
 
-  local pr_number
-  pr_number="$(pr_number_active)"
+  local workdir pr_number
+  workdir="$(repo_dir "${repo_path:-.}")"
+  pr_number="$(pr_number_active "$repo_path")"
 
   case "$platform" in
     github)
       local owner repo head_sha
-      read -r owner repo < <(github_owner_repo)
-      head_sha=$(gh pr view "$pr_number" --json headRefOid -q '.headRefOid')
-      gh api "repos/$owner/$repo/pulls/$pr_number/comments" \
+      read -r owner repo < <(github_owner_repo "$workdir")
+      head_sha=$(cd "$workdir" && gh pr view "$pr_number" --json headRefOid -q '.headRefOid')
+      (cd "$workdir" && gh api "repos/$owner/$repo/pulls/$pr_number/comments" \
         -f commit_id="$head_sha" \
         -f path="$path" \
         -F line="$line" \
         -f side="RIGHT" \
-        -f body="$body" >/dev/null
+        -f body="$body" >/dev/null)
       ;;
     gitlab)
       local encoded_path versions base_sha head_sha start_sha
-      read -r _ encoded_path < <(gitlab_project_path)
-      versions=$(glab api "projects/$encoded_path/merge_requests/$pr_number/versions" | jq '.[0]')
+      read -r _ encoded_path < <(gitlab_project_path "$workdir")
+      versions=$(cd "$workdir" && glab api "projects/$encoded_path/merge_requests/$pr_number/versions" | jq '.[0]')
       base_sha=$(echo "$versions" | jq -r '.base_commit_sha')
       head_sha=$(echo "$versions" | jq -r '.head_commit_sha')
       start_sha=$(echo "$versions" | jq -r '.start_commit_sha // .base_commit_sha')
-      glab api --method POST "projects/$encoded_path/merge_requests/$pr_number/discussions" \
+      (cd "$workdir" && glab api --method POST "projects/$encoded_path/merge_requests/$pr_number/discussions" \
         -f "body=$body" \
         -f "position[position_type]=text" \
         -f "position[base_sha]=$base_sha" \
         -f "position[head_sha]=$head_sha" \
         -f "position[start_sha]=$start_sha" \
         -f "position[new_path]=$path" \
-        -f "position[new_line]=$line" >/dev/null
+        -f "position[new_line]=$line" >/dev/null)
       ;;
   esac
 
-  log "Posted inline comment on $path:$line"
+  log "Posted inline comment on $path:$line${repo_path:+ in $repo_path}"
 }
 
 cmd_resolve() {
   require_cmd jq
   require_vcs_cli
-  local thread_id="${1:-}"
-  [ -z "$thread_id" ] && { err "resolve requires <thread-id>"; exit 1; }
+  local thread_id="${1:-}" repo_path="${2:-}"
+  [ -z "$thread_id" ] && { err "resolve requires <thread-id> [repo_path]"; exit 1; }
 
-  local pr_number
-  pr_number="$(pr_number_active)"
+  local workdir pr_number
+  workdir="$(repo_dir "${repo_path:-.}")"
+  pr_number="$(pr_number_active "$repo_path")"
 
   case "$platform" in
     github)
       local mutation result errors is_resolved
       mutation="mutation { resolveReviewThread(input: {threadId: \"$thread_id\"}) { thread { isResolved } } }"
-      result=$(gh api graphql -f query="$mutation" 2>&1) || {
+      result=$(cd "$workdir" && gh api graphql -f query="$mutation" 2>&1) || {
         err "GraphQL resolve failed for thread $thread_id"
         echo "$result" >&2
         exit 1
@@ -496,8 +631,8 @@ cmd_resolve() {
       ;;
     gitlab)
       local encoded_path result
-      read -r _ encoded_path < <(gitlab_project_path)
-      result=$(glab api --method PUT "projects/$encoded_path/merge_requests/$pr_number/discussions/$thread_id?resolved=true" 2>&1) || {
+      read -r _ encoded_path < <(gitlab_project_path "$workdir")
+      result=$(cd "$workdir" && glab api --method PUT "projects/$encoded_path/merge_requests/$pr_number/discussions/$thread_id?resolved=true" 2>&1) || {
         err "Failed to resolve GitLab discussion $thread_id"
         echo "$result" >&2
         exit 1
@@ -542,7 +677,12 @@ cmd_continue() {
 
   local branch
   branch=$(jq -r '.[-1].branch' "$STATE_FILE")
-  git checkout "$branch" 2>/dev/null || true
+  while IFS= read -r repo; do
+    [ -z "$repo" ] && continue
+    local rd
+    rd=$(repo_dir "$repo")
+    (cd "$rd" && git checkout "$branch" 2>/dev/null || true)
+  done < <(get_repos)
   log "Continuing on branch: $branch"
   log "Goal: $(jq -r '.[-1].goal' "$STATE_FILE")"
 }
@@ -816,20 +956,57 @@ cmd_state_complete() {
 cmd_merge() {
   require_vcs_cli
   require_cmd jq
-  local pr_number pr_url
-  pr_number="$(pr_number_active)"
-  pr_url=$(jq -r '.[-1].pr_url // ""' "$STATE_FILE")
 
+  local repos
+  repos=$(jq -r '.[-1].repos // []' "$STATE_FILE")
+
+  if [ "$repos" = "[]" ] || [ "$repos" = "null" ]; then
+    local pr_number pr_url
+    pr_number="$(pr_number_active)"
+    pr_url=$(jq -r '.[-1].pr_url // ""' "$STATE_FILE")
+    merge_pr "$pr_number" "$pr_url"
+    return
+  fi
+
+  local repo_count repo_idx
+  repo_count=$(echo "$repos" | jq 'length')
+  repo_idx=0
+
+  while [ "$repo_idx" -lt "$repo_count" ]; do
+    local repo_path repo_pr repo_url repos_dir
+    repo_path=$(echo "$repos" | jq -r ".[$repo_idx].path")
+    repo_pr=$(echo "$repos" | jq -r ".[$repo_idx].pr_number")
+    repo_url=$(echo "$repos" | jq -r ".[$repo_idx].pr_url // \"\"")
+    repos_dir=$(repo_dir "$repo_path")
+
+    if [ "$repo_pr" = "null" ] || [ -z "$repo_pr" ]; then
+      log "No PR for $repo_path — skipping merge"
+      repo_idx=$((repo_idx + 1))
+      continue
+    fi
+
+    merge_pr_in_dir "$repos_dir" "$repo_pr" "$repo_url"
+    repo_idx=$((repo_idx + 1))
+  done
+}
+
+merge_pr() {
+  local pr_number="$1" pr_url="$2"
+  merge_pr_in_dir "$PROJECT_ROOT" "$pr_number" "$pr_url"
+}
+
+merge_pr_in_dir() {
+  local workdir="$1" pr_number="$2" pr_url="$3"
   case "$platform" in
     github)
-      if ! gh pr merge "$pr_number" --merge; then
-        err "PR merge failed — check for conflicts or branch protection"
+      if ! (cd "$workdir" && gh pr merge "$pr_number" --merge); then
+        err "PR merge failed for #$pr_number — check for conflicts or branch protection"
         exit 1
       fi
       ;;
     gitlab)
-      if ! glab mr merge "$pr_number"; then
-        err "MR merge failed — check for conflicts or branch protection"
+      if ! (cd "$workdir" && glab mr merge "$pr_number"); then
+        err "MR merge failed for #$pr_number — check for conflicts or branch protection"
         exit 1
       fi
       ;;
@@ -857,9 +1034,12 @@ cmd_diff() {
   require_cmd git jq
   [ ! -f "$STATE_FILE" ] && { err "No state found — run 'start' first"; exit 1; }
   state_ensure_array
+  local repo_path="${1:-}"
   local base
   base=$(jq -r '.[-1].base_branch' "$STATE_FILE")
-  git diff "origin/$base..HEAD"
+  local rd
+  rd=$(repo_dir "${repo_path:-.}")
+  (cd "$rd" && git diff "origin/$base..HEAD")
 }
 
 cmd_worktree_add() {
@@ -1009,10 +1189,10 @@ case "${1:-}" in
   commit)   cmd_commit "${2:-}" ;;
   push)     cmd_push ;;
   pr)       cmd_pr ;;
-  pending)  cmd_pending ;;
-  threads)  cmd_threads ;;
-  comment)  cmd_comment "${2:-}" "${3:-}" "${4:-}" ;;
-  resolve)  cmd_resolve "${2:-}" ;;
+  pending)  cmd_pending "${2:-}" ;;
+  threads)  cmd_threads "${2:-}" ;;
+  comment)  cmd_comment "${2:-}" "${3:-}" "${4:-}" "${5:-}" ;;
+  resolve)  cmd_resolve "${2:-}" "${3:-}" ;;
   analyze)  cmd_analyze ;;
   config)
     case "${2:-}" in
@@ -1030,7 +1210,7 @@ case "${1:-}" in
   merge)    cmd_merge ;;
   status)   cmd_status ;;
   restore)  shift; cmd_restore "$@" ;;
-  diff)     cmd_diff ;;
+  diff)     cmd_diff "${2:-}" ;;
   worktree)
     case "${2:-}" in
       add)    cmd_worktree_add "${3:-}" ;;
