@@ -1,0 +1,11 @@
+[agents]
+enabled = true
+max_depth = 2
+max_concurrent_threads_per_session = 1
+
+[sandbox_workspace_write]
+network_access = true
+
+# >>> goal-loop figma >>>
+# managed by goal-git.sh figma setup
+# <<< goal-loop figma <<<

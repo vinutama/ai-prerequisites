@@ -1,0 +1,87 @@
+{
+  "orchestrator": {
+    "model": "sonnet",
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "planner": {
+    "model": "opus",
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "builder": {
+    "model": "sonnet",
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "builder-expert": {
+    "model": "opus",
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "reviewer": {
+    "model": "opus",
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "visual-reviewer": {
+    "model": "sonnet",
+    "capabilities": {
+      "multimodal": true,
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  }
+}

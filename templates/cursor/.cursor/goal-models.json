@@ -1,0 +1,93 @@
+{
+  "orchestrator": {
+    "model": "inherit",
+    "readonly": false,
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "planner": {
+    "model": "inherit",
+    "readonly": true,
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "builder": {
+    "model": "inherit",
+    "readonly": false,
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "builder-expert": {
+    "model": "inherit",
+    "readonly": false,
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "reviewer": {
+    "model": "inherit",
+    "readonly": false,
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "visual-reviewer": {
+    "model": "inherit",
+    "readonly": false,
+    "capabilities": {
+      "multimodal": true,
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  }
+}

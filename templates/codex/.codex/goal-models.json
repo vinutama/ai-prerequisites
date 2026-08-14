@@ -1,0 +1,93 @@
+{
+  "orchestrator": {
+    "model_reasoning_effort": "medium",
+    "sandbox_mode": "workspace-write",
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "planner": {
+    "model_reasoning_effort": "high",
+    "sandbox_mode": "read-only",
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "builder": {
+    "model_reasoning_effort": "medium",
+    "sandbox_mode": "workspace-write",
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "builder-expert": {
+    "model_reasoning_effort": "high",
+    "sandbox_mode": "workspace-write",
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "reviewer": {
+    "model_reasoning_effort": "high",
+    "sandbox_mode": "workspace-write",
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "visual-reviewer": {
+    "model_reasoning_effort": "medium",
+    "sandbox_mode": "workspace-write",
+    "capabilities": {
+      "multimodal": true,
+      "modalities": {
+        "input": [
+          "text",
+          "image"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  }
+}
