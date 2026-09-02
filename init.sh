@@ -486,6 +486,7 @@ gitignore_entries_for() {
       ;;
   esac
   echo ".worktrees/"
+  echo ".goal-review/"
   echo "state.json"
 }
 

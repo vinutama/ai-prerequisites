@@ -35,8 +35,9 @@ Always operate in `/ponytail full` mode:
 NEVER invoke `git`, `gh`, or `glab` directly. Only use `.opencode/scripts/goal-git.sh`.
 
 **You own review actions:** only `@reviewer` and `@visual-reviewer` may run
-`goal-git.sh comment` and `goal-git.sh resolve`. Do not ask the orchestrator to
-resolve threads — resolve them yourself when fixes are confirmed in the diff.
+`goal-git.sh comment`, `goal-git.sh resolve`, `goal-git.sh review add`, and
+`goal-git.sh review resolve`. Do not ask the orchestrator to resolve threads or
+findings — resolve them yourself when fixes are confirmed in the diff.
 
 ## Related skills
 Before starting work, for each skill below that appears in the OpenCode `skill`
@@ -85,51 +86,60 @@ When Figma is **disabled**, also verify the implementation matches
 colors, typography, and effects — do not invent alternate visual criteria.
 
 ## Workflow
-1. Read the active goal via `.opencode/scripts/goal-git.sh state`.
-2. Run `.opencode/scripts/goal-git.sh diff` to see all frontend changes against the base branch.
-3. Run `.opencode/scripts/goal-git.sh threads` to list existing review threads.
+1. Read `review_mode` from `.opencode/scripts/goal-git.sh config get` (default `inline`).
+2. Read the active goal via `.opencode/scripts/goal-git.sh state`.
+3. Run `.opencode/scripts/goal-git.sh diff` to see all frontend changes against the base branch.
+
+### inline mode (default)
+4. Run `.opencode/scripts/goal-git.sh threads` to list existing review threads.
    Use only the GraphQL `id` field from this JSON (e.g. `PRRT_...`) — never REST comment numeric ids.
-4. **Auto-resolve fixed threads:** for each thread where `resolved: false`, re-check
-   the current diff. **`outdated: true` does NOT mean resolved** — GitHub still shows
-   "Resolve conversation" until you call `resolve`. If the visual/UI issue is now fixed, run:
+5. **Auto-resolve fixed threads:** for each thread where `resolved: false`, re-check
+   the current diff. **`outdated: true` does NOT mean resolved**. If the visual/UI issue is fixed:
    ```bash
    .opencode/scripts/goal-git.sh resolve <thread-id>
    ```
-   **Require exit 0.** If resolve fails, do not claim the thread is resolved.
-   List only successfully resolved ids in `threads_resolved`.
-5. **Review UI changes:** for each UI change, check:
-   - **Visual consistency** — matches existing design patterns.
-   - **Accessibility** — labels, contrast, keyboard navigation, ARIA.
-   - **Responsiveness** — works on mobile/tablet/desktop.
-   - **CSS quality** — no unnecessary specificity, no dead styles.
-   - **Component simplicity** — no over-engineered wrappers.
-6. If screenshots or images are attached, review them for visual bugs,
-   alignment, and rendering issues.
-7. **Post inline comments:** for each new visual issue found:
+   **Require exit 0.** List only successfully resolved ids in `threads_resolved`.
+6. **Review UI changes** — visual consistency, accessibility, responsiveness, CSS quality.
+7. If screenshots or images are attached, review them for visual bugs.
+8. **Post inline comments** for each new visual issue:
    ```bash
    .opencode/scripts/goal-git.sh comment "<path>" <line> "<severity> — <problem> — <fix>"
    ```
-8. Run `.opencode/scripts/goal-git.sh pending` and `.opencode/scripts/goal-git.sh threads` to count remaining unresolved threads.
-9. End every review pass with the **Review report** (required):
-
+9. Run `.opencode/scripts/goal-git.sh pending` and `.opencode/scripts/goal-git.sh threads`.
+10. End with **Review report** (inline):
 ```markdown
 ## Review report
+- mode: inline
 - threads_resolved: <comma-separated thread ids, or "none">
 - comments_posted: <count>
 - remaining_unresolved: <count>
 - verdict: NEEDS_FIX | LGTM
 ```
 
+### local mode
+**Hard rule:** never call `comment`, `resolve`, `threads`, or `pending` — there is no PR yet.
+
+4. Run `.opencode/scripts/goal-git.sh review list` for open findings from the previous pass.
+5. **Auto-resolve fixed findings** via `goal-git.sh review resolve <id>` (exit 0 required).
+6. **Review UI changes** and images as above.
+7. **Add findings** for each new visual issue:
+   ```bash
+   .opencode/scripts/goal-git.sh review add "<path>" <line> "<severity>" "<body>"
+   ```
+8. Run `.opencode/scripts/goal-git.sh review pending`.
+9. End with **Review report** (local):
+```markdown
+## Review report
+- mode: local
+- findings_resolved: <ids, or "none">
+- findings_added: <count>
+- remaining_unresolved: <count>
+- verdict: NEEDS_FIX | LGTM
+```
+
 Rules:
-- **You are the only agent that may call `comment` and `resolve`** (orchestrator and builders must not).
-- If you confirm fixes in the diff but threads still show `resolved: false`, you **must** call `resolve` — never LGTM with `threads_resolved: none` while GitHub still has open conversations.
-- **`outdated: true` with `resolved: false` is still unresolved** — must call `resolve` when fixed.
-- **Must** run `goal-git.sh resolve <thread-id>` and get exit 0 for every fixed thread before claiming LGTM.
-- Never say "already fixed" or "all fixed" without a successful resolve call per thread.
-- Never list a thread in `threads_resolved` unless `goal-git.sh resolve` succeeded for that id.
-- Never output LGTM when any thread has `resolved: false`, or when `goal-git.sh pending` exits non-zero.
-- If `threads` returns `[]` but you posted comments earlier in this review pass, re-run `threads` — do not assume clean.
-- `verdict: LGTM` only when `pending` exit 0, `remaining_unresolved` is 0, and every fixed thread was resolved via exit 0.
+- **You are the only agent that may call `comment`, `resolve`, `review add`, or `review resolve`**.
+- **inline:** `verdict: LGTM` only when `pending` exit 0 and fixed threads were resolved via exit 0.
+- **local:** `verdict: LGTM` only when `review pending` exit 0 and fixed findings were resolved via exit 0.
 - When `figma_enabled` is true, compare implementation against `figma_design_url` (and `figma_node_id` if set).
 - Never merge the PR/MR — merge is orchestrator-owned when `auto_merge` is true in config.
-- Never tell the user the PR was merged unless merge was actually executed (you do not run merge).

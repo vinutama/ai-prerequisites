@@ -1,6 +1,6 @@
 ---
 description: >-
-  Set, list, or continue goals. Usage: /goal <objective> | /goal --list | /goal --continue [id] [new instruction]
+  Set, list, continue, or run issue queue. Usage: /goal <objective> | /goal --list | /goal --issues [url] [count] | /goal --continue [id] [new instruction]
 agent: orchestrator
 subtask: true
 ---
@@ -16,6 +16,28 @@ Inspect `$ARGUMENTS` and follow the matching path:
 ### `/goal --list`
 Run `.opencode/scripts/goal-git.sh list` and display the output.
 If the state has `repos` with more than one entry, also show each repo path and its active branch from `state.json` (run `.opencode/scripts/goal-git.sh state | jq '.repos'`). Stop.
+
+### `/goal --issues [url] [count]`
+Fetch open issues from a GitHub/GitLab issue list URL and drive each to its own branch and PR.
+
+1. Parse remainder after `--issues`: optional `url`, optional `count` (integer).
+   - If `url` omitted → read `issue_list_url` from config.
+   - If `count` omitted → read `issue_limit` from config (default `3`).
+   - If `url` still missing, STOP and tell the user to run `/init-goal` or pass a URL.
+2. Export a run id for this invocation:
+   ```bash
+   export GOAL_RUN_ID="run-$(date +%s)-$$"
+   ```
+3. Fetch issues:
+   ```bash
+   .opencode/scripts/goal-git.sh issues list "<url>" <count>
+   ```
+4. Delegate `@orchestrator` in **ISSUE QUEUE** mode (see orchestrator agent): planner queue pass → per-issue batches → one PR per issue.
+   - Multi-repo: process **one issue at a time** (no concurrent issue worktrees).
+   - Single-repo with `concurrency` > 1: planner may batch independent issues; orchestrator uses `issues start <n> --worktree` per issue in a batch.
+5. Report **one PR URL per issue** when the run completes.
+
+Also run this path when `goal_source` is `issues` and the user invokes bare `/goal` with no args (use configured `issue_list_url` and `issue_limit`), or `/goal <count>` where `<count>` is only a number.
 
 ### `/goal --continue [id] [new instruction]`
 This continues an existing goal. No quotes required.
@@ -35,10 +57,14 @@ This continues an existing goal. No quotes required.
    - If it matches an existing goal → identifier = first token, instruction = remaining words (may be empty).
    - If it does NOT match → identifier = empty (active goal), instruction = whole remainder.
 3. Run `.opencode/scripts/goal-git.sh continue "<identifier>"` (empty identifier = active goal).
-4. Skip branch creation — you are on the goal's branch.
-5. If an instruction was parsed, pass it to `@planner` as the primary objective for
+4. **Issue run resume:** If `.opencode/scripts/goal-git.sh issues queue` returns a non-empty array with any entry where `status` is not `completed`, resume the **issue queue** for that `run_id`:
+   - Set `export GOAL_RUN_ID=<run_id from queue entries>`.
+   - For each incomplete entry in the queue (in batch order), set `GOAL_ISSUE=<issue.number>` on every `goal-git.sh` call and run PLAN → BUILD → ANALYZE → COMMIT → PR → REVIEW LOOP until `issues finish <n>`.
+   - Skip branch creation for entries that already have a branch in state.
+5. Otherwise skip branch creation — you are on the goal's branch.
+6. If an instruction was parsed, pass it to `@planner` as the primary objective for
    this pass (does NOT overwrite the stored goal in `state.json`).
-6. **Plan → Build → Analyze → Review → Loop until done**:
+7. **Plan → Build → Analyze → Review → Loop until done**:
    - Check if state.json has `repos` with more than one entry.
    - **Multi-repo mode (repos > 1)**:
      - For each repo in `state.json` repos: cd into the repo and checkout the branch listed in state.
@@ -47,10 +73,11 @@ This continues an existing goal. No quotes required.
      - For each batch: for each task with a `[repo-name]` tag, `cd <repo-path> && delegate @builder` (or `@builder-expert`) scoped to that repo. Builders in same batch can run in parallel.
      - After batch: for each repo that had changes, cd into repo, commit, push, create/update PR, delegate `@reviewer` scoped to that repo, run review loop.
    - **Single-repo mode (repos ≤ 1 or no repos field)**: follow existing Plan → Build → Analyze → Review → Loop flow unchanged.
-7. Report ALL PR URLs across all repos (multi-repo) or the single PR URL.
+8. Report ALL PR URLs across all repos (multi-repo) or the single PR URL.
 
 ### `/goal <objective>` (new goal)
-1. Determine `goal_source`: check if `$ARGUMENTS` begins with `--source <type>`. If so, pop both tokens and validate `<type>` is one of `jira|markdown|prompt`. Use it as the effective `goal_source` for this invocation (overrides config). Otherwise read from `.opencode/scripts/goal-git.sh config get` (field `goal_source`). If no config exists, treat as `prompt`.
+1. Determine `goal_source`: check if `$ARGUMENTS` begins with `--source <type>`. If so, pop both tokens and validate `<type>` is one of `jira|markdown|prompt|issues`. Use it as the effective `goal_source` for this invocation (overrides config). Otherwise read from `.opencode/scripts/goal-git.sh config get` (field `goal_source`). If no config exists, treat as `prompt`.
+   If `effective_source` is `issues` and `$ARGUMENTS` is empty or a single integer, follow **`/goal --issues`** above (optional count token only).
    Prefix all `goal-git.sh start` calls with `GOAL_SOURCE_OVERRIDE=<effective_source>` (e.g. `GOAL_SOURCE_OVERRIDE=prompt .opencode/scripts/goal-git.sh start ...`).
 2. Resolve the goal text based on source:
    - `prompt` — use `$ARGUMENTS` directly as the goal. If empty, STOP and ask the user for an objective.
@@ -61,8 +88,8 @@ This continues an existing goal. No quotes required.
    - `jira` — resolve ticket + task_type, then fetch the issue:
      1. Parse `$ARGUMENTS` tokens:
         - Optional leading `task_type` override if the first token is one of:
-          `feat`, `bugfix`, `chore`, `refactor`, `docs`, `test`, `perf`
-          (e.g. `/goal bugfix DEL-4123`).
+          `feat`, `bug`, `chore`, `refactor`, `docs`, `test`, `perf`
+          (`bugfix` and `fix` alias to `bug`; e.g. `/goal bugfix DEL-4123`).
         - Next token (or first token if no type override) is the ticket key.
         - If no ticket token → read `jira_ticket` from config.
         - If still missing, STOP and tell the user to run `/init-goal` or pass a ticket (e.g. `/goal PROJ-123`).
@@ -70,7 +97,7 @@ This continues an existing goal. No quotes required.
         - If unavailable, STOP and guide the user to connect the Atlassian MCP server in `opencode.json`, then retry.
      3. Fetch via `jira_get_issue` and use summary + description as the goal text.
      4. If `task_type` was not overridden from args, map Jira issue type (case-insensitive):
-        - Bug, Defect → `bugfix`
+        - Bug, Defect → `bug`
         - Story, Task, Feature, New Feature, Epic, Improvement, Enhancement → `feat`
         - Documentation → `docs`
         - Test → `test`
@@ -81,7 +108,7 @@ This continues an existing goal. No quotes required.
         ```bash
         GOAL_SOURCE_OVERRIDE=<effective_source> .opencode/scripts/goal-git.sh start "<resolved goal>" "<ticket-key>" "<task_type>"
         ```
-        Branch becomes `{task_type}/{lowercase-ticket}-{slug}` (e.g. `feat/del-4123-add-health-check`).
+        Branch becomes `{task_type}/{TICKET}-{slug}` (e.g. `feat/DEL-4123-add-health-check`).
 3. For `prompt` and `markdown` only: run `GOAL_SOURCE_OVERRIDE=<effective_source> .opencode/scripts/goal-git.sh start "<resolved goal>"` (branch `goal/<slug>`).
    For `jira`, start was already called in step 2.
 4. **Multi-repo orchestration (when repos > 1 in config)**:

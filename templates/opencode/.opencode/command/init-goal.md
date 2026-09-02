@@ -15,11 +15,20 @@ This command configures the goal workflow for this project. Ask the user the fol
    - `jira` — Jira ticket key passed as argument (e.g. `/goal PROJ-123`)
    - `markdown` — Path to a `.md` file passed as argument (e.g. `/goal docs/feature.md`)
    - `prompt` — Free-text objective passed as argument (e.g. `/goal Add health check endpoint`)
+   - `issues` — Open issues from a GitHub/GitLab issue list URL (e.g. `/goal --issues` or bare `/goal` when configured)
 
    **If the user selects `jira`:** before continuing, verify Atlassian MCP is connected:
    - Attempt a lightweight Jira MCP call (e.g. `jira_get_user_profile` or list available MCP tools for Atlassian).
    - If unavailable, do NOT save `jira` yet. Guide the user to connect the Atlassian MCP server in their project-level `opencode.json` under `mcp`, then re-run `/init-goal`. Offer to use `prompt` or `markdown` instead for now.
    - If available, confirm Jira connectivity and proceed.
+
+   **If the user selects `issues`:** before continuing, verify the forge CLI can read the list:
+   - Ask for the issue list URL (e.g. `https://github.com/org/repo/issues` or `https://gitlab.com/group/project/-/issues`)
+   - Ask how many issues per run (default `3`) — store as `issue_limit`
+   - Run: `.opencode/scripts/goal-git.sh issues list "<url>" 1`
+   - If the command fails, do NOT save `issues` yet. Guide the user to authenticate `gh` or `glab`, confirm the URL, then re-run `/init-goal`. Offer `prompt` or `markdown` instead for now.
+   - If successful, remember `issue_list_url` and `issue_limit` for persistence after `config set` (step below).
+   - Note: concurrent issue worktrees are **single-repo only**. Multi-repo + issues runs one issue at a time across repos.
 
 2. **Target branch** — What is the base/target branch for this project? (e.g. `main`, `develop`, `master`)
 
@@ -76,20 +85,35 @@ This command configures the goal workflow for this project. Ask the user the fol
    - Run: `.opencode/scripts/goal-git.sh figma design set "<url>"`
    - Confirm parsed `figma_file_key` and optional `figma_node_id` from `figma status`
 
-7. **Auto-merge** — After review is clean (zero unresolved threads), merge the PR/MR into the target branch automatically?
+7. **Auto-merge** — After review is clean (zero unresolved threads or local findings), merge the PR/MR into the target branch automatically?
    - `no` — leave PR open; user merges manually (**default**)
-   - `yes` — after LGTM + `pending` exit 0, orchestrator runs `goal-git.sh merge`
+   - `yes` — after LGTM + clean review gate, orchestrator runs `goal-git.sh merge`
      - On merge conflict: **stop**, report conflict files; do **not** invent conflict resolutions. User or a follow-up `/goal --continue` with builders can fix.
 
-After collecting answers for questions 1–7 (including 6b/6c when Figma is enabled), persist core config:
+8. **Review mode** — How should reviewers report findings?
+   - `inline` (**default**) — create PR first; reviewers post inline comments on GitHub/GitLab and resolve threads (`goal-git.sh pending` gates the loop).
+   - `local` — reviewers read the diff locally, record findings via `goal-git.sh review add`, orchestrator delegates builders immediately. **No PR until review is clean** (push + `pr` happen only in DONE).
+     - If `local`: ask max review iterations before stopping (default `5`) — store as `review_max_iterations`.
+
+After collecting answers for questions 1–8 (including 6b/6c when Figma is enabled), persist core config:
 ```bash
-.opencode/scripts/goal-git.sh config set <goal_source> <target_branch> <platform> <concurrency> <auto_merge>
+.opencode/scripts/goal-git.sh config set <goal_source> <target_branch> <platform> <concurrency> <auto_merge> <review_mode> <review_max_iterations>
 ```
 Use `1` for concurrency when the user chose sequential only.
 Use `false` for `auto_merge` when the user chose manual merge (default).
 Use `true` when the user chose auto-merge.
+Use `inline` for `review_mode` when the user chose inline PR comments (default).
+Use `local` when the user chose local review.
+Use `5` for `review_max_iterations` when local mode and the user did not specify a cap.
 
-If Figma was enabled (question 5 = yes), run `figma setup` and `figma design set` **after** `config set` (order: config set → figma setup → figma design set).
+If `issues` was selected, after `config set` persist issue settings:
+```bash
+jq --arg url "<issue_list_url>" --argjson limit <issue_limit> \
+  '.issue_list_url = $url | .issue_limit = $limit' \
+  .opencode/goal-config.json > .opencode/goal-config.json.tmp && mv .opencode/goal-config.json.tmp .opencode/goal-config.json
+```
+
+If Figma was enabled (question 6 = yes), run `figma setup` and `figma design set` **after** `config set` (and after issue jq when applicable).
 
 Confirm the saved config:
 ```bash
@@ -99,7 +123,7 @@ Confirm the saved config:
 
 Then run `.opencode/scripts/goal-git.sh selfcheck` to verify the platform CLI is available and authenticated.
 
-Tell the user they can now run `/goal <objective>` to start a goal.
+Tell the user they can now run `/goal <objective>` or `/goal --issues [count]` to start a goal (when `goal_source` is `issues`, bare `/goal` uses configured URL and limit).
 If Figma was configured, remind them to launch OpenCode with secrets loaded:
 ```bash
 .opencode/scripts/run-opencode.sh

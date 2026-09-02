@@ -35,9 +35,12 @@ UI/UX/frontend design intelligence (`uipro init --ai opencode`).
 7. **Ponytail full**: every agent operates in ponytail full mode — YAGNI
    first, reuse over rewrite, shortest working diff wins.
 8. **Conventional commits**: all commits use the Conventional Commits format.
-9. **Inline review**: reviewers post comments on the PR/MR and resolve threads
+9. **Inline review** (`review_mode: inline`, default): reviewers post comments on the PR/MR and resolve threads
    when issues are fixed (use GraphQL thread `id` from `threads`; require resolve exit 0);
    each pass outputs a structured **Review report**.
+9b. **Local review** (`review_mode: local`): no PR during review — reviewers read `diff`, record findings in
+   gitignored `.goal-review/`, orchestrator loops on `review pending`; PR is created only after review is clean.
+   Iteration cap (`review_max_iterations`, default 5) stops runaway loops via `review iterate`.
 10. **Builder handoff**: builders stage changes, pass `analyze`, then emit **Handoff**
    (`FIXES_COMPLETE` or `BLOCKED`). Orchestrator resumes immediately — no idle wait.
 11. **Visual review for UI**: planner marks `@visual-reviewer` required for UI goals;
@@ -55,8 +58,8 @@ UI/UX/frontend design intelligence (`uipro init --ai opencode`).
 | `planner` | Architecture and implementation plans — tags tasks @builder or @builder-expert | Read-only |
 | `builder` | Routine execution (CRUD, UI, refactors, config, tests) across frontend and backend | Full |
 | `builder-expert` | Complex execution (algorithms, concurrency, security, perf, state machines, distributed coordination) | Full |
-| `reviewer` | Code correctness, security, tests — posts inline PR comments | Bash (goal-git.sh only) |
-| `visual-reviewer` | UI quality, accessibility, visuals — posts inline PR comments | Bash (goal-git.sh only) |
+| `reviewer` | Code correctness, security, tests — inline PR comments or local findings | Bash (goal-git.sh only) |
+| `visual-reviewer` | UI quality, accessibility, visuals — inline PR comments or local findings | Bash (goal-git.sh only) |
 
 ## Delegation logic
 The planner analyzes task complexity and tags each planned item:
@@ -76,11 +79,15 @@ Project-level only — pinned to the project root, never global.
 [
   {
     "goal": "the task objective",
-    "branch": "goal/<slug> | feat/del-4123-<slug>",
+    "branch": "goal/<slug> | feat/DEL-4123-<slug>",
     "base_branch": "main",
     "pr_number": null,
     "pr_url": "",
     "status": "in_progress|completed|failed",
+    "run_id": "run-1700000000-12345",
+    "batch": 1,
+    "worktree": ".worktrees/issue-42",
+    "issue": {"number": 42, "url": "https://...", "title": "..."},
     "repos": [
       {"path": "repo-name", "pr_number": null, "pr_url": ""}
     ]
@@ -89,7 +96,7 @@ Project-level only — pinned to the project root, never global.
 ```
 The last entry is the active goal. Read via `goal-git.sh state`.
 Branch format: `goal/<slug>` for prompt/markdown; `{task_type}/{ticket}-{slug}` for jira
-(e.g. `feat/del-4123-add-health-check`).
+(e.g. `feat/DEL-4123-add-health-check`).
 
 **Single-repo:** `repos` field absent or `[{path: ".", ...}]`. Top-level `pr_number`/`pr_url` still present for backward compat.
 
@@ -99,11 +106,15 @@ Branch format: `goal/<slug>` for prompt/markdown; `{task_type}/{ticket}-{slug}` 
 Project-level only — set via `/init-goal`.
 ```json
 {
-  "goal_source": "prompt|markdown|jira",
+  "goal_source": "prompt|markdown|jira|issues",
   "target_branch": "main",
   "platform": "github|gitlab",
   "concurrency": 1,
   "auto_merge": false,
+  "review_mode": "inline",
+  "review_max_iterations": 5,
+  "issue_list_url": "https://github.com/org/repo/issues",
+  "issue_limit": 3,
   "repos": ["repo1", "repo2"],
   "figma_enabled": false,
   "figma_design_url": "https://www.figma.com/design/...",
@@ -115,6 +126,9 @@ Project-level only — set via `/init-goal`.
 via git worktrees.
 
 `repos` — array of repository paths (relative to PROJECT_ROOT). Absent in single-repo mode (defaults to `["."]`). Set by `/init-goal` repo selection step. Used by `goal-git.sh` to create branches/PRs in all selected repos.
+
+`.worktrees/` — isolated git worktrees for concurrent tasks (gitignored).
+`.goal-review/` — local review findings JSON per goal branch (gitignored; used when `review_mode` is `local`).
 
 Figma PAT is stored separately in `.opencode/figma.env` (gitignored). MCP config
 is in project `opencode.json`. Commands:
@@ -154,7 +168,7 @@ regenerates `opencode.json`. Only `visual-reviewer` handles image input.
 
 ## Git Helper (`.opencode/scripts/goal-git.sh`)
 ```bash
-.opencode/scripts/goal-git.sh start <goal> [ticket] [task_type]  # create branch (jira: task_type/ticket-slug)
+.opencode/scripts/goal-git.sh start <goal> [ticket] [task_type]  # create branch (jira: task_type/TICKET-slug)
 .opencode/scripts/goal-git.sh continue [id]    # resume active or switch goal (/goal --continue [id] [instruction])
 .opencode/scripts/goal-git.sh list             # list all goals
 .opencode/scripts/goal-git.sh state            # print active goal JSON
@@ -166,6 +180,12 @@ regenerates `opencode.json`. Only `visual-reviewer` handles image input.
 .opencode/scripts/goal-git.sh threads          # list review threads as JSON
 .opencode/scripts/goal-git.sh comment <path> <line> <body>  # post inline comment
 .opencode/scripts/goal-git.sh resolve <thread-id>  # resolve thread
+.opencode/scripts/goal-git.sh review init [repo_path]  # init local findings file
+.opencode/scripts/goal-git.sh review add <path> <line> <severity> <body> [repo_path]
+.opencode/scripts/goal-git.sh review list [repo_path]  # list local findings JSON
+.opencode/scripts/goal-git.sh review resolve <id> [repo_path]
+.opencode/scripts/goal-git.sh review pending [repo_path]  # exit 0 if no unresolved findings
+.opencode/scripts/goal-git.sh review iterate [repo_path]  # increment iteration (exit 1 if cap exceeded)
 .opencode/scripts/goal-git.sh merge            # merge PR/MR (when auto_merge enabled)
 .opencode/scripts/goal-git.sh state complete   # mark goal completed
 .opencode/scripts/goal-git.sh analyze          # npx gitnexus analyze && rtk gain
@@ -177,4 +197,8 @@ regenerates `opencode.json`. Only `visual-reviewer` handles image input.
 .opencode/scripts/goal-git.sh worktree merge <slug>  # merge into goal branch
 .opencode/scripts/goal-git.sh worktree list          # list worktrees
 .opencode/scripts/goal-git.sh worktree remove <slug>  # discard worktree
+.opencode/scripts/goal-git.sh issues list [url] [limit]  # list open issues from forge URL
+.opencode/scripts/goal-git.sh issues start <n> [--worktree]  # start issue goal (branch off base)
+.opencode/scripts/goal-git.sh issues queue  # current run's issue entries
+.opencode/scripts/goal-git.sh issues finish <n>  # complete issue + remove worktree
 ```

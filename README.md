@@ -71,8 +71,8 @@ but subdirectories have `.git` → multi-repo mode.
 
 ## What it installs
 
-Shared across every target: `state.json` (gitignored, project root) and
-`.worktrees/` (gitignored). Runtime config lives per-target.
+Shared across every target: `state.json` (gitignored, project root),
+`.worktrees/` and `.goal-review/` (gitignored). Runtime config lives per-target.
 
 | Target | Paths | Invoke |
 |---|---|---|
@@ -92,9 +92,10 @@ and the `goal-loop` skill.
 | `./init.sh --<agent> <path>` | Scaffold the selected agent(s) into a project (single-repo) or parent directory (multi-repo) |
 | `./init.sh --all <path>` | Scaffold all four agents |
 | `./init.sh --clean --<agent> <path>` | Remove that agent's scaffold |
-| `/init-goal` or `$init-goal` | One-time setup: goal source, target branch, git platform, concurrency, auto_merge, repos (multi-repo), optional Figma |
+| `/init-goal` or `$init-goal` | One-time setup: goal source, target branch, git platform, concurrency, auto_merge, review_mode, repos (multi-repo), optional Figma |
 | `/init-skills` or `$init-skills` | Optional: inject curated skills from agentic-awesome-skills |
 | `/goal <objective>` or `$goal <objective>` | Start a new goal. Use `--source <type>` to override goal_source per invocation |
+| `/goal --issues [url] [count]` or `$goal --issues [url] [count]` | Fetch open issues from a list URL and drive each to its own PR |
 | `/goal --list` or `$goal --list` | List all goals |
 | `/goal --continue [id] [instruction]` | Resume a goal; optional new instruction for this pass |
 
@@ -199,6 +200,8 @@ re-init needed.
 /goal --source prompt Add health check
 /goal --source markdown docs/feature.md
 /goal --source jira PROJ-123
+/goal --source issues
+/goal --issues https://github.com/org/repo/issues 5
 ```
 
 ## Features
@@ -208,10 +211,34 @@ When `concurrency` > 1 (set via `/init-goal`), independent tasks run in
 parallel using isolated git worktrees. The planner groups tasks into
 concurrency batches; the orchestrator merges results back into the goal branch.
 
-### Inline PR/MR review
+### Issue-driven goals (GitHub/GitLab)
+When `goal_source` is `issues` (set via `/init-goal`), `/goal --issues` fetches
+open issues from a configured or passed issue list URL, takes the first N
+(`issue_limit`), and drives **each issue to its own branch and PR**. The planner
+reorders by dependency and groups independent issues into concurrency batches;
+the orchestrator runs parallel builders in isolated worktrees (single-repo only).
+Multi-repo + issues processes one issue at a time across repos. Resume a partial
+run with `/goal --continue`. Requires `gh` or `glab` authenticated for the repo
+in the list URL.
+
+```
+/init-goal          # goal_source: issues, paste list URL, set issue_limit
+/goal --issues 5    # or bare /goal when configured
+```
+
+Branch format: `{task_type}/{number}-{slug}` (e.g. `bug/42-health-check`).
+PR bodies include `Closes #N` so merging closes the forge issue.
+
+### Inline PR/MR review (`review_mode: inline`, default)
 Reviewers post inline comments on GitHub/GitLab and **must** resolve threads when
 issues are fixed (`goal-git.sh resolve`). The orchestrator never fixes code itself —
 it re-delegates to builders until `pending` returns exit 0.
+
+### Local review (`review_mode: local`)
+Reviewers read `goal-git.sh diff` and record findings in gitignored `.goal-review/`
+via `review add` / `review resolve`. No PR is created until review is clean; the
+orchestrator commits locally during the fix loop, then `push` + `pr` in DONE.
+Gate: `review pending` exit 0. Cap: `review_max_iterations` (default 5) via `review iterate`.
 
 ### Auto-merge (opt-in)
 When `auto_merge` is `true` (set via `/init-goal`), the orchestrator runs
@@ -242,6 +269,11 @@ live in `goal-config.json`. Launch with secrets via the per-target wrapper:
 ### Jira goal source
 When configured, `/goal PROJ-123` fetches ticket content via Atlassian MCP.
 `/init-goal` verifies MCP connectivity before saving.
+
+### GitHub/GitLab issues goal source
+When configured, `/goal --issues` or bare `/goal` fetches open issues from
+`issue_list_url` via `gh` or `glab`, limited by `issue_limit`. `/init-goal`
+verifies list access with `goal-git.sh issues list <url> 1` before saving.
 
 ### Skill injection (optional)
 Run `/init-skills` to install a filtered subset of

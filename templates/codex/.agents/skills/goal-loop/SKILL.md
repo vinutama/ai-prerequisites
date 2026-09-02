@@ -4,6 +4,7 @@ description: >-
   Goal Architecture Loop Engineering — a persistent workflow pattern where an
   orchestrator agent drives a task through plan → build → analyze → review
   cycles, looping until the resulting PR has zero unresolved review threads.
+  Uses ponytail full mode for all agents.
 ---
 
 # Goal Architecture Loop Engineering
@@ -13,11 +14,11 @@ description: >-
 /GOAL → PLAN → BUILD → ANALYZE → REVIEW → LOOP (until PR clean)
 ```
 
-Extra domain skills can be injected project-level via `$init-skills` (from
+Extra domain skills can be injected project-level via `/init-skills` (from
 [agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills)).
 Optionally also install
 [ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) for
-UI/UX/frontend design intelligence (`uipro init --ai codex`).
+UI/UX/frontend design intelligence (`uipro init --ai opencode`).
 
 ## Rules
 1. **Single source of truth**: `state.json` in the project root (project-level only).
@@ -29,13 +30,17 @@ UI/UX/frontend design intelligence (`uipro init --ai codex`).
    `npx gitnexus analyze && rtk gain`. If either fails, STOP.
 5. **Consensus gate**: PR must have zero unresolved review threads before
    the loop exits. Reviewers must run `goal-git.sh resolve` (exit 0) for fixed threads before LGTM.
-6. **Skills via `$skill-name`**: agents load installed skills by invoking them — not `@mentions` or Read on SKILL.md paths.
+6. **Skills via OpenCode tool**: agents load installed skills with
+   `skill({ name: "<skill-name>" })` from the native `skill` tool — not `@mentions` or Read on SKILL.md paths.
 7. **Ponytail full**: every agent operates in ponytail full mode — YAGNI
    first, reuse over rewrite, shortest working diff wins.
 8. **Conventional commits**: all commits use the Conventional Commits format.
-9. **Inline review**: reviewers post comments on the PR/MR and resolve threads
+9. **Inline review** (`review_mode: inline`, default): reviewers post comments on the PR/MR and resolve threads
    when issues are fixed (use GraphQL thread `id` from `threads`; require resolve exit 0);
    each pass outputs a structured **Review report**.
+9b. **Local review** (`review_mode: local`): no PR during review — reviewers read `diff`, record findings in
+   gitignored `.goal-review/`, orchestrator loops on `review pending`; PR is created only after review is clean.
+   Iteration cap (`review_max_iterations`, default 5) stops runaway loops via `review iterate`.
 10. **Builder handoff**: builders stage changes, pass `analyze`, then emit **Handoff**
    (`FIXES_COMPLETE` or `BLOCKED`). Orchestrator resumes immediately — no idle wait.
 11. **Visual review for UI**: planner marks `@visual-reviewer` required for UI goals;
@@ -53,8 +58,8 @@ UI/UX/frontend design intelligence (`uipro init --ai codex`).
 | `planner` | Architecture and implementation plans — tags tasks @builder or @builder-expert | Read-only |
 | `builder` | Routine execution (CRUD, UI, refactors, config, tests) across frontend and backend | Full |
 | `builder-expert` | Complex execution (algorithms, concurrency, security, perf, state machines, distributed coordination) | Full |
-| `reviewer` | Code correctness, security, tests — posts inline PR comments | Bash (goal-git.sh only) |
-| `visual-reviewer` | UI quality, accessibility, visuals — posts inline PR comments | Bash (goal-git.sh only) |
+| `reviewer` | Code correctness, security, tests — inline PR comments or local findings | Bash (goal-git.sh only) |
+| `visual-reviewer` | UI quality, accessibility, visuals — inline PR comments or local findings | Bash (goal-git.sh only) |
 
 ## Delegation logic
 The planner analyzes task complexity and tags each planned item:
@@ -74,11 +79,15 @@ Project-level only — pinned to the project root, never global.
 [
   {
     "goal": "the task objective",
-    "branch": "goal/<slug> | feat/del-4123-<slug>",
+    "branch": "goal/<slug> | feat/DEL-4123-<slug>",
     "base_branch": "main",
     "pr_number": null,
     "pr_url": "",
     "status": "in_progress|completed|failed",
+    "run_id": "run-1700000000-12345",
+    "batch": 1,
+    "worktree": ".worktrees/issue-42",
+    "issue": {"number": 42, "url": "https://...", "title": "..."},
     "repos": [
       {"path": "repo-name", "pr_number": null, "pr_url": ""}
     ]
@@ -87,21 +96,25 @@ Project-level only — pinned to the project root, never global.
 ```
 The last entry is the active goal. Read via `goal-git.sh state`.
 Branch format: `goal/<slug>` for prompt/markdown; `{task_type}/{ticket}-{slug}` for jira
-(e.g. `feat/del-4123-add-health-check`).
+(e.g. `feat/DEL-4123-add-health-check`).
 
 **Single-repo:** `repos` field absent or `[{path: ".", ...}]`. Top-level `pr_number`/`pr_url` still present for backward compat.
 
 **Multi-repo:** `repos` array contains {path, pr_number, pr_url} per repo. Top-level `pr_number`/`pr_url` may be absent.
 
 ## Config (`.codex/goal-config.json`)
-Project-level only — set via `$init-goal`.
+Project-level only — set via `/init-goal`.
 ```json
 {
-  "goal_source": "prompt|markdown|jira",
+  "goal_source": "prompt|markdown|jira|issues",
   "target_branch": "main",
   "platform": "github|gitlab",
   "concurrency": 1,
   "auto_merge": false,
+  "review_mode": "inline",
+  "review_max_iterations": 5,
+  "issue_list_url": "https://github.com/org/repo/issues",
+  "issue_limit": 3,
   "repos": ["repo1", "repo2"],
   "figma_enabled": false,
   "figma_design_url": "https://www.figma.com/design/...",
@@ -112,16 +125,26 @@ Project-level only — set via `$init-goal`.
 `concurrency` = 1 means sequential only. Values > 1 enable parallel builders
 via git worktrees.
 
-`repos` — array of repository paths (relative to PROJECT_ROOT). Absent in single-repo mode (defaults to `["."]`). Set by `$init-goal` repo selection step. Used by `goal-git.sh` to create branches/PRs in all selected repos.
+`repos` — array of repository paths (relative to PROJECT_ROOT). Absent in single-repo mode (defaults to `["."]`). Set by `/init-goal` repo selection step. Used by `goal-git.sh` to create branches/PRs in all selected repos.
+
+`.worktrees/` — isolated git worktrees for concurrent tasks (gitignored).
+`.goal-review/` — local review findings JSON per goal branch (gitignored; used when `review_mode` is `local`).
 
 Figma PAT is stored separately in `.codex/figma.env` (gitignored). MCP config
-is in `.codex/config.toml`. Commands:
+is in project `.codex/mcp.json`. Commands:
 ```bash
 .codex/scripts/goal-git.sh figma setup <token>
 .codex/scripts/goal-git.sh figma design set <url>
 .codex/scripts/goal-git.sh figma status
-.codex/scripts/run-codex.sh   # launch Codex with FIGMA_API_KEY loaded
+.codex/scripts/run-opencode.sh   # launch opencode with FIGMA_API_KEY loaded
 ```
+
+## Model fallback (`.codex/mcp.json`)
+Project-level — generated by `init.sh` from `goal-models.json`.
+Loads `@razroo/opencode-model-fallback` with per-agent `model` +
+`fallback_models` in `.codex/mcp.json`. Plugin settings in
+`.codex/opencode-model-fallback.json`. On rate limit or API error, the
+plugin tries fallbacks in order.
 
 ## Model capabilities (`goal-models.json`)
 Single source of truth for per-agent models and input modalities:
@@ -129,8 +152,8 @@ Single source of truth for per-agent models and input modalities:
 ```json
 {
   "visual-reviewer": {
-    "model_reasoning_effort": "medium",
-    "sandbox_mode": "workspace-write",
+    "preferred_models": ["opencode-go/mimo-v2.5-pro"],
+    "fallback_models": ["opencode/mimo-v2.5-free"],
     "capabilities": {
       "multimodal": true,
       "modalities": { "input": ["text", "image"], "output": ["text"] }
@@ -140,12 +163,13 @@ Single source of truth for per-agent models and input modalities:
 ```
 
 Text-only agents set `"multimodal": false` and `"input": ["text"]`.
-`init.sh` syncs `model_reasoning_effort` / `sandbox_mode` into agent `.toml` files. Only `visual-reviewer` handles image input.
+`init.sh` syncs `preferred_models[0]` into agent `.md` frontmatter and
+regenerates `.codex/mcp.json`. Only `visual-reviewer` handles image input.
 
 ## Git Helper (`.codex/scripts/goal-git.sh`)
 ```bash
-.codex/scripts/goal-git.sh start <goal> [ticket] [task_type]  # create branch (jira: task_type/ticket-slug)
-.codex/scripts/goal-git.sh continue [id]    # resume active or switch goal ($goal --continue [id] [instruction])
+.codex/scripts/goal-git.sh start <goal> [ticket] [task_type]  # create branch (jira: task_type/TICKET-slug)
+.codex/scripts/goal-git.sh continue [id]    # resume active or switch goal (/goal --continue [id] [instruction])
 .codex/scripts/goal-git.sh list             # list all goals
 .codex/scripts/goal-git.sh state            # print active goal JSON
 .codex/scripts/goal-git.sh stage <file>...   # stage specific files
@@ -156,6 +180,12 @@ Text-only agents set `"multimodal": false` and `"input": ["text"]`.
 .codex/scripts/goal-git.sh threads          # list review threads as JSON
 .codex/scripts/goal-git.sh comment <path> <line> <body>  # post inline comment
 .codex/scripts/goal-git.sh resolve <thread-id>  # resolve thread
+.codex/scripts/goal-git.sh review init [repo_path]  # init local findings file
+.codex/scripts/goal-git.sh review add <path> <line> <severity> <body> [repo_path]
+.codex/scripts/goal-git.sh review list [repo_path]  # list local findings JSON
+.codex/scripts/goal-git.sh review resolve <id> [repo_path]
+.codex/scripts/goal-git.sh review pending [repo_path]  # exit 0 if no unresolved findings
+.codex/scripts/goal-git.sh review iterate [repo_path]  # increment iteration (exit 1 if cap exceeded)
 .codex/scripts/goal-git.sh merge            # merge PR/MR (when auto_merge enabled)
 .codex/scripts/goal-git.sh state complete   # mark goal completed
 .codex/scripts/goal-git.sh analyze          # npx gitnexus analyze && rtk gain
@@ -167,4 +197,8 @@ Text-only agents set `"multimodal": false` and `"input": ["text"]`.
 .codex/scripts/goal-git.sh worktree merge <slug>  # merge into goal branch
 .codex/scripts/goal-git.sh worktree list          # list worktrees
 .codex/scripts/goal-git.sh worktree remove <slug>  # discard worktree
+.codex/scripts/goal-git.sh issues list [url] [limit]  # list open issues from forge URL
+.codex/scripts/goal-git.sh issues start <n> [--worktree]  # start issue goal (branch off base)
+.codex/scripts/goal-git.sh issues queue  # current run's issue entries
+.codex/scripts/goal-git.sh issues finish <n>  # complete issue + remove worktree
 ```

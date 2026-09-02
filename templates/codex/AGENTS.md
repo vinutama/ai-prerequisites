@@ -1,26 +1,27 @@
 # AGENTS.md
 
-## $goal workflow
+## /goal workflow
 
 This project uses **Goal Architecture Loop Engineering** — a persistent
 workflow where AI agents drive a task from plan to merged PR, looping until
 zero unresolved review threads remain.
 
 ### Setup
-Run `$init-goal` once after `init.sh` to configure goal source, target branch,
+Run `/init-goal` once after `init.sh` to configure goal source, target branch,
 git platform, concurrency, and optional Figma design lookup. Settings are stored in
 `.codex/goal-config.json` (project-level, gitignored as part of `.codex/`).
 Figma PAT is stored in `.codex/figma.env` (gitignored as part of `.codex/`).
 
-Optionally run `$init-skills` to inject curated skills from
+Optionally run `/init-skills` to inject curated skills from
 [agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills)
-into `.agents/skills/` (project-level, filtered by category and risk), and
+into `.codex/skills/` (project-level, filtered by category and risk), and
 optionally install [ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
 for UI/UX/frontend design intelligence.
 Use the **recommended** preset to install skills that goal-loop agents look for.
-Each agent loads related skills by invoking `$skill-name` when installed.
-Do not use `@mentions` or manually read `.agents/skills/*/SKILL.md`.
-If a skill is absent, the agent proceeds normally. Re-run `$init-skills` with
+Each agent loads related skills via OpenCode's native `skill` tool
+(`skill({ name: "<skill-name>" })`) when they appear in `available_skills`.
+Do not use `@mentions` or manually read `.codex/skills/*/SKILL.md`.
+If a skill is absent, the agent proceeds normally. Re-run `/init-skills` with
 **recommended** (includes `development`) to install skills like `api-endpoint-builder`.
 
 | Agent | Related skills (when installed) |
@@ -34,11 +35,11 @@ If a skill is absent, the agent proceeds normally. Re-run `$init-skills` with
 
 ### How to use
 ```
-$init-goal                              # one-time project setup
-$init-skills                            # optional: inject domain skills
-$goal <your objective>                  # start a new goal
-$goal --list                            # list all goals
-$goal --continue [id] [new instruction]  # resume a goal; optional new instruction
+/init-goal                              # one-time project setup
+/init-skills                            # optional: inject domain skills
+/goal <your objective>                  # start a new goal
+/goal --list                            # list all goals
+/goal --continue [id] [new instruction]  # resume a goal; optional new instruction
 ```
 
 Continue parsing (no quotes): first token is checked against existing goals via
@@ -46,23 +47,24 @@ Continue parsing (no quotes): first token is checked against existing goals via
 the new instruction; if not, the whole remainder is the instruction for the
 active goal.
 
-Goal source (configured via `$init-goal`):
-- `prompt` — free-text objective (e.g. `$goal Add health check endpoint`); branch `goal/<slug>`
-- `markdown` — reads a `.md` file as the goal (`$goal` uses `markdown_path` from config; `$goal docs/other.md` overrides); branch `goal/<slug>`
-- `jira` — fetches a Jira ticket as the goal (`$goal` uses `jira_ticket` from config; `$goal OTHER-123` or `$goal bugfix DEL-4123` overrides) — requires Atlassian MCP; branch `{task_type}/{ticket}-{slug}` (e.g. `feat/del-4123-add-health-check`)
+Goal source (configured via `/init-goal`):
+- `prompt` — free-text objective (e.g. `/goal Add health check endpoint`); branch `goal/<slug>`
+- `markdown` — reads a `.md` file as the goal (`/goal` uses `markdown_path` from config; `/goal docs/other.md` overrides); branch `goal/<slug>`
+- `jira` — fetches a Jira ticket as the goal (`/goal` uses `jira_ticket` from config; `/goal OTHER-123` or `/goal bugfix DEL-4123` overrides) — requires Atlassian MCP; branch `{task_type}/{TICKET}-{slug}` (e.g. `feat/DEL-4123-add-health-check`)
+- `issues` — fetches open issues from a GitHub/GitLab issue list URL (`/goal --issues [url] [count]` or bare `/goal` when configured); **one branch + one PR per issue**; branch `{task_type}/{number}-{slug}`; planner orders by dependency and batches concurrent work (single-repo only; multi-repo processes one issue at a time)
 
 ### Agent roles
 | Agent | Role | Model |
 |---|---|---|
-| `orchestrator` | Manages the full loop | inherit (medium effort) |
-| `planner` | Architecture & plans — tags tasks @builder or @builder-expert | inherit (high effort) |
-| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | inherit (medium effort) |
-| `builder-expert` | Complex execution (algorithms, concurrency, security, perf) | inherit (high effort) |
-| `reviewer` | Code review + inline PR comments | inherit (high effort) |
-| `visual-reviewer` | UI/multimodal review + inline PR comments | inherit (medium effort) |
+| `orchestrator` | Manages the full loop | opencode-go/deepseek-v4-flash |
+| `planner` | Architecture & plans — tags tasks @builder or @builder-expert | opencode-go/qwen3.7-max |
+| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | opencode-go/deepseek-v4-flash |
+| `builder-expert` | Complex execution (algorithms, concurrency, security, perf) | opencode-go/kimi-k2.7-code |
+| `reviewer` | Code review + inline PR comments | opencode-go/deepseek-v4-pro |
+| `visual-reviewer` | UI/multimodal review + inline PR comments | opencode-go/mimo-v2.5-pro |
 
-`goal-models.json` is the single source of truth for effort and sandbox.
-`init.sh` syncs `model_reasoning_effort` and `sandbox_mode` into each agent `.toml`. Codex has no closed model-id enum; agents inherit the session model.
+`goal-models.json` is the single source of truth for models and capabilities.
+`init.sh` syncs `model` into each agent `.md` and generates `.codex/mcp.json`.
 
 | Agent | Multimodal | Input modalities |
 |---|---|---|
@@ -76,7 +78,11 @@ Goal source (configured via `$init-goal`):
 Only `visual-reviewer` handles screenshots and image attachments. The
 orchestrator routes UI/visual review exclusively to that agent.
 
-Codex has no model-fallback plugin. Custom prompts were removed in CLI 0.117.0 — invoke `$goal`, `$init-goal`, `$init-skills`. Requires Codex CLI 0.138.0+. `.codex/config.toml` loads only for trusted projects.
+Model fallbacks are configured in project-level `.codex/mcp.json` (plugin +
+per-agent `fallback_models`, generated from `.codex/goal-models.json` by
+`init.sh`) and `.codex/opencode-model-fallback.json`. On rate limit or API
+error, the `@razroo/opencode-model-fallback` plugin tries `fallback_models`
+in order.
 
 ### Delegation
 The planner tags every task:
@@ -86,7 +92,7 @@ The planner tags every task:
 
 The orchestrator delegates tasks to the tagged agent automatically.
 
-When `concurrency` > 1 (set via `$init-goal`), the planner groups independent
+When `concurrency` > 1 (set via `/init-goal`), the planner groups independent
 tasks into concurrency batches. The orchestrator spawns parallel builders in
 isolated git worktrees, then merges back into the goal branch.
 
@@ -99,17 +105,17 @@ isolated git worktrees, then merges back into the goal branch.
 - Non-trivial logic leaves one runnable check behind.
 
 ### Platform detection
-Platform is read from `.codex/goal-config.json` (set via `$init-goal`).
+Platform is read from `.codex/goal-config.json` (set via `/init-goal`).
 Fallback: auto-detect from origin remote URL. Override with
 `GOAL_PLATFORM=github|gitlab`.
 
 ### State and config (project-level only)
-- `.codex/` — agents, scripts, config, secrets. Gitignored — generated by `init.sh`, never committed.
-- `.agents/skills/` — `$goal`, `$init-goal`, `$init-skills`, and `goal-loop`. Gitignored as part of the scaffold.
+- `.codex/` — entire directory (agents, commands, skills, scripts, config, secrets). Gitignored — generated by `init.sh`, never committed.
 - `AGENTS.md` — project conventions. Gitignored — generated by `init.sh`, never committed.
 - `state.json` — goal history, branch, PR number. Gitignored, project root only.
-- `.codex/config.toml` — agents.max_depth, sandbox network, Figma MCP. Loads only when the project is trusted.
+- `.codex/mcp.json` — model fallback config + Figma MCP block. Project-level, generated by init.sh / init-goal.
 - `.worktrees/` — isolated git worktrees for concurrent tasks (gitignored).
+- `.goal-review/` — local review findings per goal branch (gitignored; `review_mode: local`).
 - `design-system/` — durable UI design reference from `ui-ux-pro-max` (`MASTER.md` + optional page overrides). **Not** gitignored — commit it with the project.
 
 Both state and config files are pinned to the project root. Agents read state via
@@ -119,7 +125,7 @@ Both state and config files are pinned to the project root. Agents read state vi
 NEVER invoke `git`, `gh`, or `glab` directly. ALL git and state operations
 MUST go through `.codex/scripts/goal-git.sh`:
 ```bash
-.codex/scripts/goal-git.sh start <goal> [ticket] [task_type]  # create branch (jira: task_type/ticket-slug)
+.codex/scripts/goal-git.sh start <goal> [ticket] [task_type]  # create branch (jira: task_type/TICKET-slug)
 .codex/scripts/goal-git.sh continue [id]     # resume goal by branch/text
 .codex/scripts/goal-git.sh list              # list all goals
 .codex/scripts/goal-git.sh state            # print active goal JSON
@@ -131,6 +137,12 @@ MUST go through `.codex/scripts/goal-git.sh`:
 .codex/scripts/goal-git.sh threads            # list review threads as JSON
 .codex/scripts/goal-git.sh comment <path> <line> <body>  # post inline comment
 .codex/scripts/goal-git.sh resolve <thread-id>  # resolve a thread
+.codex/scripts/goal-git.sh review init [repo_path]  # init local findings file
+.codex/scripts/goal-git.sh review add <path> <line> <severity> <body> [repo_path]
+.codex/scripts/goal-git.sh review list [repo_path]
+.codex/scripts/goal-git.sh review resolve <id> [repo_path]
+.codex/scripts/goal-git.sh review pending [repo_path]  # local review gate
+.codex/scripts/goal-git.sh review iterate [repo_path]
 .codex/scripts/goal-git.sh merge              # merge PR/MR (when auto_merge enabled)
 .codex/scripts/goal-git.sh state complete     # mark goal completed
 .codex/scripts/goal-git.sh analyze            # npx gitnexus analyze && rtk gain
@@ -142,6 +154,10 @@ MUST go through `.codex/scripts/goal-git.sh`:
 .codex/scripts/goal-git.sh worktree merge <slug>  # merge worktree into goal branch
 .codex/scripts/goal-git.sh worktree list          # list worktrees
 .codex/scripts/goal-git.sh worktree remove <slug> # discard worktree
+.codex/scripts/goal-git.sh issues list [url] [limit]  # list open issues from forge URL
+.codex/scripts/goal-git.sh issues start <n> [--worktree]  # start issue goal (branch off base)
+.codex/scripts/goal-git.sh issues queue  # current run's issue entries
+.codex/scripts/goal-git.sh issues finish <n>  # complete issue + remove worktree
 .codex/scripts/goal-git.sh figma setup <token>   # store PAT + enable Figma MCP
 .codex/scripts/goal-git.sh figma design set <url>  # set default design link
 .codex/scripts/goal-git.sh figma status          # show Figma integration status
@@ -150,7 +166,7 @@ MUST go through `.codex/scripts/goal-git.sh`:
 
 Launch OpenCode with Figma secrets loaded:
 ```bash
-.codex/scripts/run-codex.sh
+.codex/scripts/run-opencode.sh
 ```
 
 ### Review loop
@@ -159,8 +175,8 @@ Launch OpenCode with Figma secrets loaded:
 - Builders must finish with a structured **Handoff** (`status`, `files_staged`, `analyze`, `notes`)
   after staging changes and passing `goal-git.sh analyze`. They do not commit or push.
 - After a builder returns `FIXES_COMPLETE`, the orchestrator **immediately** resumes —
-  no user input — with ANALYZE → commit → push → **mandatory re-spawn reviewers**.
-  Never idle in REVIEW LOOP. Never skip re-review because `pending` is already 0.
+  no user input — with ANALYZE → commit → push → **mandatory re-delegate reviewers**.
+  Never idle in REVIEW LOOP. Never skip re-review because `pending` or `review pending` is already 0.
 - **Only reviewers resolve threads** — the orchestrator must never run
   `goal-git.sh resolve` or `goal-git.sh comment`. Reviewers resolve after confirming fixes.
 - After code changes, run `.codex/scripts/goal-git.sh analyze` (gitnexus + rtk gain).
@@ -172,34 +188,34 @@ Launch OpenCode with Figma secrets loaded:
   Each pass ends with a structured **Review report** (`threads_resolved`, `comments_posted`, `remaining_unresolved`, `verdict`).
 - For UI/visual goals, the planner requires `@visual-reviewer`; the orchestrator always
   delegates visual review when the plan says so, Figma is enabled, or UI files changed.
-- Run `.codex/scripts/goal-git.sh pending` to check PR threads.
+- Run `.codex/scripts/goal-git.sh pending` (inline) or `review pending` (local) to check review status.
 - Loop until exit 0 (zero unresolved threads).
 - When `auto_merge` is `false` (default), report "Ready for manual merge" — never claim merged.
 - When `auto_merge` is `true`, orchestrator runs `.codex/scripts/goal-git.sh merge` after
   `pending` exit 0; on conflict, stop and report (do not auto-resolve conflicts).
 
 ### Jira goal source
-When `goal_source` is `jira`, the Atlassian MCP must be connected in `.codex/config.toml`.
-`$init-goal` verifies connectivity before saving. `$goal` re-checks before fetching tickets.
-Jira branches use `{task_type}/{lowercase-ticket}-{slug}` (task_type from issue type or
-`$goal bugfix DEL-4123` override). Prompt/markdown branches use `goal/<slug>`.
+When `goal_source` is `jira`, the Atlassian MCP must be connected in `.codex/mcp.json`.
+`/init-goal` verifies connectivity before saving. `/goal` re-checks before fetching tickets.
+Jira branches use `{task_type}/{TICKET}-{slug}` (task_type from issue type or
+`/goal bugfix DEL-4123` override — `bugfix` aliases to `bug`). Prompt/markdown branches use `goal/<slug>`.
 
 ### Figma design lookup (optional)
-When enabled via `$init-goal`, agents use Figma MCP (`figma-developer-mcp`) with a PAT in
+When enabled via `/init-goal`, agents use Figma MCP (`figma-developer-mcp`) with a PAT in
 `.codex/figma.env` and a default design link in `goal-config.json`:
 `figma_design_url`, `figma_file_key`, `figma_node_id`. Planner, builder, and
-visual-reviewer consult Figma for UI work. Use `run-codex.sh` to load secrets.
+visual-reviewer consult Figma for UI work. Use `run-opencode.sh` to load secrets.
 
 ### UI/UX Pro Max (optional)
-Install via `$init-skills` question **UI/UX Pro Max**
-(`npx -y ui-ux-pro-max-cli init --ai codex` → `.agents/skills/ui-ux-pro-max/`).
+Install via `/init-skills` question **UI/UX Pro Max**
+(`npx -y ui-ux-pro-max-cli init --ai opencode` → `.codex/skills/ui-ux-pro-max/`).
 Requires `python3` for design-system generation (stdlib only; agents never install Python).
 
 For UI/frontend goals when the skill is installed:
 - **Figma enabled** — Figma is the visual source of truth. `ui-ux-pro-max` supplies
   stack guidelines, accessibility, and the pre-delivery checklist only.
 - **No Figma** — planner generates/reuses `design-system/MASTER.md` via
-  `python3 .agents/skills/ui-ux-pro-max/scripts/search.py ... --design-system --persist`.
+  `python3 .codex/skills/ui-ux-pro-max/scripts/search.py ... --design-system --persist`.
   Builders implement against that file (page overrides under `design-system/pages/` win).
 - **visual-reviewer** always checks the skill's pre-delivery checklist / anti-patterns,
   and compares to Figma or `design-system/MASTER.md` as appropriate.

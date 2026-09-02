@@ -37,6 +37,35 @@ If the orchestrator passes multiple repo paths:
 4. Group tasks into dependency batches as usual
 5. For each task, specify both the repo and the skill level (@builder / @builder-expert)
 
+### Issue queue planning (queue mode)
+When the orchestrator passes a JSON issue list from `goal-git.sh issues list` (not a single active goal):
+
+1. Read concurrency from config (`concurrency`, default `1`).
+2. Explore the codebase lightly to predict which files each issue will touch.
+3. Reorder issues by **dependency** (not only forge order). Issues that depend on another issue's output must run in a later batch.
+4. Group issues into numbered **batches** for parallel execution:
+   - Issues in the same batch must have **disjoint predicted file paths** and **no dependency** on each other.
+   - Batch width must not exceed `concurrency`.
+   - When `concurrency` = 1, every batch has one issue.
+5. Output **only** the issue-level plan (no per-issue implementation tasks yet):
+
+```markdown
+## Issue Execution Plan
+
+### Batch 1 (parallel)
+- #42 Add /health endpoint — no deps — touches src/health/**
+- #47 Update API docs — no deps — touches docs/**
+
+### Batch 2 (depends on batch 1)
+- #51 Health check consumer — depends on #42 — touches src/worker/**
+
+### Conflict analysis
+- #42 and #47 touch disjoint paths — safe to parallelize
+- #51 imports handler from #42 — must follow batch 1
+```
+
+6. When the orchestrator later starts a single issue (`GOAL_ISSUE` set), produce the normal **Implementation Plan** for that issue only.
+
 1. Read the active goal via `.codex/scripts/goal-git.sh state`.
 2. Read concurrency from `.codex/scripts/goal-git.sh config get` (field `concurrency`, default `1`).
 3. If `figma_enabled` is true in config, read `figma_design_url`, `figma_file_key`, and
