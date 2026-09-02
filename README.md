@@ -108,7 +108,7 @@ and the `goal-loop` skill.
 | `/goal --issues [url] [count]` or `$goal --issues [url] [count]` | Fetch open issues from a list URL and drive each to its own PR |
 | `/goal --list` or `$goal --list` | List all goals |
 | `/goal --continue [id] [instruction]` | Resume a goal; optional new instruction for this pass |
-| `/create-issues <path.md>` | **OpenCode only** — create GitHub/GitLab issues from a markdown file (one `##` heading per issue) |
+| `/create-issues <path.md>` | **OpenCode only** — create GitHub/GitLab issues from a markdown epic (one task checkbox under `### Tasks` per issue) |
 
 ## Usage patterns
 

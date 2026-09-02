@@ -93,7 +93,7 @@ require_vcs_cli() {
   esac
 }
 
-# Parse markdown ## blocks into normalized JSON via awk + jq.
+# Parse markdown epics (##) and emit one issue per task checkbox under ### Tasks.
 parse_markdown_file() {
   local file="$1"
   [ -f "$file" ] || { err "File not found: $file"; exit 1; }
@@ -104,14 +104,16 @@ parse_markdown_file() {
 
   awk '
     BEGIN {
-      in_issue = 0
-      in_meta = 0
-      body = ""
-      labels = ""
-      assignees = ""
-      milestone = ""
-      title = ""
-      count = 0
+      state = "outside"
+      epic_title = ""
+      epic_summary = ""
+      epic_labels = ""
+      epic_assignees = ""
+      epic_milestone = ""
+      acceptance = ""
+      current_phase = ""
+      current_phase_full = ""
+      task_count = 0
     }
 
     function trim(s) {
@@ -120,74 +122,187 @@ parse_markdown_file() {
       return s
     }
 
-    function flush_issue(   i, line) {
-      if (title == "") return
-      count++
-      print "TITLE\t" title
-      print "LABELS\t" labels
-      print "ASSIGNEES\t" assignees
-      print "MILESTONE\t" milestone
+    function append_summary(line) {
+      if (epic_summary == "") epic_summary = line
+      else epic_summary = epic_summary "\n" line
+    }
+
+    function append_acceptance(line) {
+      if (acceptance == "") acceptance = line
+      else acceptance = acceptance "\n" line
+    }
+
+    function extract_phase_tag(phase_line,   m) {
+      if (match(phase_line, /Phase[ \t]+[0-9]+/)) {
+        return substr(phase_line, RSTART, RLENGTH)
+      }
+      return ""
+    }
+
+    function phase_display(phase_line) {
+      gsub(/^\*\*|\*\*$/, "", phase_line)
+      return trim(phase_line)
+    }
+
+    function truncate_title(s,   max) {
+      max = 200
+      if (length(s) <= max) return s
+      return substr(s, 1, max - 3) "..."
+    }
+
+    function build_body(context_title, summary, phase_full, acceptance_text, task_text,   body) {
+      body = "## Context\n" context_title
+      if (summary != "") body = body "\n\n" summary
+      body = body "\n\n## Phase\n"
+      if (phase_full == "") body = body "(none)"
+      else body = body phase_full
+      body = body "\n\n## Acceptance\n"
+      if (acceptance_text == "") body = body "(none)"
+      else body = body acceptance_text
+      body = body "\n\n## Task\n" task_text
+      return body
+    }
+
+    function emit_task(task_text,   issue_title, phase_tag, body, i, n, lines) {
+      phase_tag = extract_phase_tag(current_phase)
+      if (phase_tag != "") issue_title = "[" phase_tag "] " task_text
+      else issue_title = task_text
+      issue_title = truncate_title(issue_title)
+      body = build_body(epic_title, epic_summary, current_phase_full, acceptance, task_text)
+      task_count++
+      print "TITLE\t" issue_title
+      print "LABELS\t" epic_labels
+      print "ASSIGNEES\t" epic_assignees
+      print "MILESTONE\t" epic_milestone
       n = split(body, lines, "\n")
       for (i = 1; i <= n; i++) {
         print "BODY\t" lines[i]
       }
       print "END"
-      title = ""
-      body = ""
-      labels = ""
-      assignees = ""
-      milestone = ""
-      in_meta = 0
     }
 
-    function append_body(line) {
-      if (body == "") body = line
-      else body = body "\n" line
+    function reset_epic() {
+      epic_title = ""
+      epic_summary = ""
+      epic_labels = ""
+      epic_assignees = ""
+      epic_milestone = ""
+      acceptance = ""
+      current_phase = ""
+      current_phase_full = ""
+      state = "outside"
+    }
+
+    function start_epic(title) {
+      reset_epic()
+      epic_title = title
+      state = "epic_meta"
+    }
+
+    function consume_meta(line) {
+      if (line ~ /^Labels?:[ \t]*/) {
+        epic_labels = trim(substr(line, index(line, ":") + 1))
+        return 1
+      }
+      if (line ~ /^Assignees?:[ \t]*/) {
+        epic_assignees = trim(substr(line, index(line, ":") + 1))
+        return 1
+      }
+      if (line ~ /^Milestone:[ \t]*/) {
+        epic_milestone = trim(substr(line, index(line, ":") + 1))
+        return 1
+      }
+      return 0
+    }
+
+    function handle_h3(line,   h3) {
+      h3 = trim(substr(line, 4))
+      if (tolower(h3) == "acceptance") {
+        state = "acceptance"
+        return
+      }
+      if (tolower(h3) == "tasks") {
+        state = "tasks"
+        return
+      }
+      if (state == "epic_body") {
+        append_summary(line)
+      }
     }
 
     /^## / {
-      flush_issue()
-      title = trim(substr($0, 4))
-      in_issue = 1
-      in_meta = 1
+      start_epic(trim(substr($0, 4)))
       next
     }
 
-    in_issue && in_meta {
-      if ($0 ~ /^Labels?:[ \t]*/) {
-        labels = trim(substr($0, index($0, ":") + 1))
+    state == "epic_meta" {
+      if (consume_meta($0)) next
+      if ($0 ~ /^### /) {
+        state = "epic_body"
+        handle_h3($0)
         next
       }
-      if ($0 ~ /^Assignees?:[ \t]*/) {
-        assignees = trim(substr($0, index($0, ":") + 1))
-        next
-      }
-      if ($0 ~ /^Milestone:[ \t]*/) {
-        milestone = trim(substr($0, index($0, ":") + 1))
-        next
-      }
-      in_meta = 0
+      state = "epic_body"
+      append_summary($0)
+      next
     }
 
-    in_issue {
-      append_body($0)
+    state == "epic_body" {
+      if ($0 ~ /^### /) {
+        handle_h3($0)
+        next
+      }
+      append_summary($0)
+      next
+    }
+
+    state == "acceptance" {
+      if ($0 ~ /^## /) {
+        start_epic(trim(substr($0, 4)))
+        next
+      }
+      if ($0 ~ /^### /) {
+        handle_h3($0)
+        next
+      }
+      append_acceptance($0)
+      next
+    }
+
+    state == "tasks" {
+      if ($0 ~ /^## /) {
+        start_epic(trim(substr($0, 4)))
+        next
+      }
+      if ($0 ~ /^### /) {
+        next
+      }
+      if ($0 ~ /^\*\*Phase/) {
+        current_phase = $0
+        current_phase_full = phase_display($0)
+        next
+      }
+      if ($0 ~ /^- \[[ xX]\][ \t]*/) {
+        emit_task(trim(substr($0, index($0, "]") + 1)))
+        next
+      }
+      next
     }
 
     END {
-      flush_issue()
-      if (count == 0) exit 2
+      if (task_count == 0) exit 2
     }
   ' "$file" > "$tmp_records" 2>/dev/null || {
     rm -f "$tmp_records"
-    err "No ## headings found in $file"
-    err "Expected one issue per ## heading. See .opencode/skills/create-issues/SKILL.md"
+    err "No task checkboxes found under ### Tasks in $file"
+    err "Expected - [ ] items under ### Tasks within a ## epic. See .opencode/skills/create-issues/SKILL.md"
     exit 1
   }
 
   if ! grep -q '^TITLE' "$tmp_records" 2>/dev/null; then
     rm -f "$tmp_records"
-    err "No ## headings found in $file"
-    err "Expected one issue per ## heading. See .opencode/skills/create-issues/SKILL.md"
+    err "No task checkboxes found under ### Tasks in $file"
+    err "Expected - [ ] items under ### Tasks within a ## epic. See .opencode/skills/create-issues/SKILL.md"
     exit 1
   fi
 
@@ -232,8 +347,8 @@ parse_markdown_file() {
   rm -f "$tmp_records"
 
   if [ "$issue_count" -eq 0 ]; then
-    err "No ## headings found in $file"
-    err "Expected one issue per ## heading. See .opencode/skills/create-issues/SKILL.md"
+    err "No task checkboxes found under ### Tasks in $file"
+    err "Expected - [ ] items under ### Tasks within a ## epic. See .opencode/skills/create-issues/SKILL.md"
     exit 1
   fi
 

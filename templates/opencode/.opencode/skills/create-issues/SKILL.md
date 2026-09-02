@@ -1,42 +1,52 @@
 ---
 name: create-issues
 description: >-
-  Create GitHub or GitLab issues from a markdown file — one issue per ## heading.
-  Standalone utility outside the /goal workflow; uses create-issues.sh, not goal-git.sh.
+  Create GitHub or GitLab issues from a markdown epic file — one issue per task
+  checkbox under ### Tasks. Standalone utility outside the /goal workflow.
 ---
 
 # Create Issues from Markdown
 
-Bulk-create GitHub or GitLab issues from a markdown file. **Unrelated to `/goal`** —
+Bulk-create GitHub or GitLab issues from a markdown epic file. **Unrelated to `/goal`** —
 does not touch `state.json`, branches, or PRs.
 
 ## Markdown format
 
-Preamble before the first `##` is ignored. Each `##` heading starts one issue.
+One `##` epic wraps many task issues. Each `- [ ]` under `### Tasks` becomes one issue.
+`### Acceptance` checklists are context only (copied into every task body, not issues).
 
 ```markdown
-## Add health-check endpoint
-Labels: enhancement, backend
+## Set up dev and prod data infrastructure stack
+Labels: infra, enhancement
 Assignee: @me
-Milestone: v1.2
 
-Expose `GET /healthz` returning 200 with build SHA.
+Epic summary paragraph(s) describing scope and deviations...
 
 ### Acceptance
-- [ ] Returns 200
+- [ ] `make dev-up` brings up Traefik, Postgres, Redis, MinIO, MailHog
+- [ ] Cross-database isolation holds
 
-## Fix flaky auth test
-Labels: bug
+### Tasks
+
+**Phase 1 — Repo scaffolding**
+- [ ] Remove the stray empty `Users/` directory; extend `.gitignore`
+- [ ] Create tree: `traefik/{dev,prod}/`, `postgres/init/{dev,prod}/`
+
+**Phase 2 — Postgres init**
+- [ ] `postgres/init/dev/01-databases.sql`: roles and REVOKE lines
 ```
 
 ### Rules
-- **Title** — text after `##` on the heading line.
-- **Body** — everything below the heading until the next `##`. `###` and deeper headings stay in the body.
-- **Metadata** — consecutive lines immediately after the heading (before any body line):
-  - `Labels:` or `Label:` — comma-separated label names
-  - `Assignee:` or `Assignees:` — comma-separated logins (`@me` works on GitHub)
+- **Epic (`##`)** — title plus optional metadata immediately after the heading:
+  - `Labels:` / `Label:` — comma-separated (inherited by every task issue)
+  - `Assignee:` / `Assignees:` — comma-separated (`@me` on GitHub)
   - `Milestone:` — milestone name
-- Empty body is allowed.
+- **Epic summary** — prose between metadata and the first `###`.
+- **Acceptance** — `### Acceptance` section; checklist items are **not** issues; text is embedded in each task body.
+- **Tasks** — `### Tasks` section; only `- [ ]` / `- [x]` lines here become issues.
+- **Phase** — bold line `**Phase N — …**` before a task group; issue title becomes `[Phase N] <task text>`.
+- **Issue title** — `[Phase N] <checkbox text>` (truncated at 200 chars); no phase prefix when no phase line yet.
+- **Issue body** — Context (epic title + summary), Phase, Acceptance, Task sections.
 
 ## Script
 
@@ -62,9 +72,9 @@ Pass `--allow-duplicates` to disable.
 
 1. Load this skill: `skill({ name: "create-issues" })`
 2. Resolve the markdown path from user arguments (error if missing).
-3. Run `create-issues.sh parse <file>` and show a numbered preview (title, labels, milestone, body excerpt).
+3. Run `create-issues.sh parse <file>` and show a numbered preview (phase-prefixed title, labels, assignees, body excerpt).
 4. Run `create-issues.sh create <file> --dry-run` and show the commands.
-5. Ask the user to confirm.
+5. Ask the user to confirm (report total task count).
 6. Run `create-issues.sh create <file>` (forward `--repo`, `--platform`, `--label`, `--milestone` from arguments when present).
 7. Report created URLs and the summary line (`created` / `skipped` / `failed`).
 

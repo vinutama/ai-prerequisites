@@ -1,6 +1,6 @@
 ---
 description: >-
-  Create GitHub/GitLab issues from a markdown file. Usage: /create-issues <path.md> [--dry-run] [--repo owner/repo] [--platform github|gitlab]
+  Create GitHub/GitLab issues from a markdown epic file (one issue per task under ### Tasks). Usage: /create-issues <path.md> [--dry-run] [--repo owner/repo] [--platform github|gitlab]
 subtask: true
 ---
 
@@ -35,24 +35,27 @@ Arguments: $ARGUMENTS
 1. Run `.opencode/scripts/create-issues.sh status` (with `--repo` / `--platform` when provided) and note platform/auth.
 
 2. Run `.opencode/scripts/create-issues.sh parse "<path>"` and display a numbered preview:
-   - title, labels, assignees, milestone (if any)
-   - first ~3 lines of body (or "(empty body)")
+   - phase-prefixed title (e.g. `[Phase 1] Remove the stray empty Users/ directory`)
+   - inherited labels, assignees, milestone (from the parent `##` epic)
+   - first ~3 lines of body (Context / Phase / Acceptance excerpt)
 
-3. Build the create command with the same flags the user passed. Always run dry-run first unless the user passed `--dry-run` and explicitly asked to skip preview:
+3. State the total task count (number of `- [ ]` items under `### Tasks`, not Acceptance items).
+
+4. Build the create command with the same flags the user passed. Always run dry-run first unless the user passed `--dry-run` and explicitly asked to skip preview:
    ```bash
    .opencode/scripts/create-issues.sh create "<path>" [flags] --dry-run
    ```
    Show each printed command.
 
-4. If the user included `--dry-run` in `$ARGUMENTS`, stop after the dry-run output.
+5. If the user included `--dry-run` in `$ARGUMENTS`, stop after the dry-run output.
 
-5. Otherwise ask: **Create N issue(s) on {platform}?** Wait for confirmation.
+6. Otherwise ask: **Create N task issue(s) on {platform}?** Wait for confirmation.
 
-6. On confirm, run create without `--dry-run`:
+7. On confirm, run create without `--dry-run`:
    ```bash
    .opencode/scripts/create-issues.sh create "<path>" [flags]
    ```
 
-7. Report each `created <url>` line and the final summary. If any failed, list them and suggest `--allow-duplicates` or fixing auth/repo.
+8. Report each `created <url>` line and the final summary. If any failed, list them and suggest `--allow-duplicates` or fixing auth/repo.
 
 Only use `.opencode/scripts/create-issues.sh` for issue creation — never run `gh`, `glab`, or `git` directly.

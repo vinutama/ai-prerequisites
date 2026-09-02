@@ -226,8 +226,7 @@ Create GitHub or GitLab issues from a markdown file — **outside** the `/goal` 
 Does not use `goal-git.sh`, `state.json`, branches, or PRs.
 
 ### Markdown format
-One issue per `##` heading. Optional metadata lines immediately after the heading:
-`Labels:`, `Assignee:`/`Assignees:`, `Milestone:` (comma-separated values).
+One `##` epic with task issues from each `- [ ]` under `### Tasks`. Metadata on the epic (`Labels:`, `Assignee:`/`Assignees:`, `Milestone:`) applies to every task. `### Acceptance` is context only.
 See `.opencode/skills/create-issues/SKILL.md` for the full contract.
 
 ### How to use
