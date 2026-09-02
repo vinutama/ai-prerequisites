@@ -4,7 +4,7 @@ Scaffold AI agent prerequisites for **Goal Architecture Loop Engineering** — a
 persistent workflow that drives tasks from plan to merged PR, looping until
 zero unresolved review threads remain.
 
-Supports **OpenCode**, **Cursor**, **Claude Code**, and **Codex**. The loop is
+Supports **OpenCode**, **Cursor**, **Claude Code**, **Codex**, and **Qoder**. The loop is
 the same on every target; only the native config layout and invocation syntax
 differ.
 
@@ -51,6 +51,15 @@ $goal Add a health-check endpoint
 Codex removed custom prompts in 0.117.0. Entry points are skills invoked with
 `$goal`, `$init-goal`, `$init-skills` — not slash commands.
 
+### Qoder
+```bash
+./init.sh --qoder /path/to/your/project
+cd /path/to/your/project
+qoder
+/init-goal
+/goal Add a health-check endpoint
+```
+
 ### Multiple agents in one repo
 ```bash
 ./init.sh --cursor --claude /path/to/your/project
@@ -76,10 +85,11 @@ Shared across every target: `state.json` (gitignored, project root),
 
 | Target | Paths | Invoke |
 |---|---|---|
-| OpenCode | `AGENTS.md`, `.opencode/` (agents, commands, skills, scripts), `opencode.json` | `/goal` |
+| OpenCode | `AGENTS.md`, `.opencode/` (agents, commands, skills, scripts), `opencode.json`, `create-issues.sh` | `/goal`, `/create-issues` |
 | Cursor | `AGENTS.md`, `.cursor/` (agents, skills, scripts) | `/goal` (skills with `disable-model-invocation`) |
 | Claude Code | `CLAUDE.md`, `.claude/` (agents, commands, skills, scripts) | `/goal` |
 | Codex | `AGENTS.md`, `.codex/` (TOML agents, scripts, `config.toml`), `.agents/skills/` | `$goal` |
+| Qoder | `AGENTS.md`, `.qoder/` (agents, commands, skills, scripts), `.qoder/settings.json` (Figma MCP) | `/goal` |
 
 Each tree includes the same 6 agents (`planner`, `builder`, `builder-expert`,
 `reviewer`, `visual-reviewer`, `orchestrator`), `goal-git.sh`, `goal-models.json`,
@@ -90,7 +100,7 @@ and the `goal-loop` skill.
 | Command | Description |
 |---|---|
 | `./init.sh --<agent> <path>` | Scaffold the selected agent(s) into a project (single-repo) or parent directory (multi-repo) |
-| `./init.sh --all <path>` | Scaffold all four agents |
+| `./init.sh --all <path>` | Scaffold all five agents |
 | `./init.sh --clean --<agent> <path>` | Remove that agent's scaffold |
 | `/init-goal` or `$init-goal` | One-time setup: goal source, target branch, git platform, concurrency, auto_merge, review_mode, repos (multi-repo), optional Figma |
 | `/init-skills` or `$init-skills` | Optional: inject curated skills from agentic-awesome-skills |
@@ -98,6 +108,7 @@ and the `goal-loop` skill.
 | `/goal --issues [url] [count]` or `$goal --issues [url] [count]` | Fetch open issues from a list URL and drive each to its own PR |
 | `/goal --list` or `$goal --list` | List all goals |
 | `/goal --continue [id] [instruction]` | Resume a goal; optional new instruction for this pass |
+| `/create-issues <path.md>` | **OpenCode only** — create GitHub/GitLab issues from a markdown file (one `##` heading per issue) |
 
 ## Usage patterns
 
@@ -250,7 +261,7 @@ manual merge. On merge conflict, agents stop and report; they do not invent reso
 `@razroo/opencode-model-fallback` plugin and per-agent `fallback_models`
 (from `goal-models.json`). Plugin settings live in
 `.opencode/opencode-model-fallback.json`. On rate limit or API error, agents
-automatically try fallback models in order. Cursor, Claude Code, and Codex have
+automatically try fallback models in order. Cursor, Claude Code, Codex, and Qoder have
 no equivalent plugin.
 
 ### Multimodal review
@@ -262,9 +273,12 @@ definitions.
 ### Figma design lookup (optional)
 During `/init-goal`, connect Figma with a Personal Access Token and default design link.
 PAT is stored in `<agent-dir>/figma.env` (gitignored); design URL and parsed file key
-live in `goal-config.json`. Launch with secrets via the per-target wrapper:
+live in `goal-config.json`. Figma MCP is written to `opencode.json` (OpenCode),
+`.mcp.json` (Claude Code), `.codex/config.toml` (Codex), or `.qoder/settings.json`
+(Qoder). Launch with secrets via the per-target wrapper:
 `.opencode/scripts/run-opencode.sh`, `.cursor/scripts/run-cursor.sh`,
-`.claude/scripts/run-claude.sh`, or `.codex/scripts/run-codex.sh`.
+`.claude/scripts/run-claude.sh`, `.codex/scripts/run-codex.sh`, or
+`.qoder/scripts/run-qoder.sh`.
 
 ### Jira goal source
 When configured, `/goal PROJ-123` fetches ticket content via Atlassian MCP.
@@ -292,14 +306,14 @@ filter: `safe,none`.
 
 ## Agent roles
 
-| Agent | Role | OpenCode | Claude | Cursor | Codex |
-|---|---|---|---|---|---|
-| `planner` | Architecture & plans — tags tasks @builder or @builder-expert | `opencode-go/qwen3.7-max` | `opus` | inherit | inherit, high effort, read-only sandbox |
-| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | inherit, medium effort |
-| `builder-expert` | Complex execution (algorithms, concurrency, security, perf) | `opencode-go/kimi-k2.7-code` | `opus` | inherit | inherit, high effort |
-| `reviewer` | Code review + inline PR comments | `opencode-go/deepseek-v4-pro` | `opus` | inherit | inherit, high effort |
-| `orchestrator` | Workflow manager | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | inherit, medium effort |
-| `visual-reviewer` | UI/multimodal review + inline PR comments | `opencode-go/mimo-v2.5-pro` | `sonnet` | inherit | inherit, medium effort |
+| Agent | Role | OpenCode | Claude | Cursor | Codex | Qoder |
+|---|---|---|---|---|---|---|
+| `planner` | Architecture & plans — tags tasks @builder or @builder-expert | `opencode-go/qwen3.7-max` | `opus` | inherit | inherit, high effort, read-only sandbox | performance |
+| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | inherit, medium effort | efficient |
+| `builder-expert` | Complex execution (algorithms, concurrency, security, perf) | `opencode-go/kimi-k2.7-code` | `opus` | inherit | inherit, high effort | performance |
+| `reviewer` | Code review + inline PR comments | `opencode-go/deepseek-v4-pro` | `opus` | inherit | inherit, high effort | performance |
+| `orchestrator` | Workflow manager | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | inherit, medium effort | efficient |
+| `visual-reviewer` | UI/multimodal review + inline PR comments | `opencode-go/mimo-v2.5-pro` | `sonnet` | inherit | inherit, medium effort | inherit |
 
 Every agent operates in `/ponytail full` mode.
 
@@ -309,7 +323,7 @@ The planner tags every task:
 - `@builder-expert` — novel algorithms, concurrency, auth/security,
   performance hot paths, complex state machines, distributed coordination.
 
-The orchestrator delegates automatically (OpenCode `@mentions`, Cursor/Claude
+The orchestrator delegates automatically (OpenCode `@mentions`, Cursor/Claude/Qoder
 subagent launch, Codex `spawn_agent` with `agent_type`).
 
 ## Fidelity gaps
@@ -342,3 +356,4 @@ Per target:
 - **Cursor**: Cursor IDE or `cursor-agent` CLI
 - **Claude Code**: `claude` CLI
 - **Codex**: `codex` CLI >= 0.138.0; project must be trusted so `.codex/config.toml` loads
+- **Qoder**: `qoder` CLI

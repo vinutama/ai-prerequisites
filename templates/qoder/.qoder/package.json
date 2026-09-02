@@ -1,0 +1,6 @@
+{
+  "name": "@qoder/goal-loop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Goal Architecture Loop Engineering — qoder scaffolding for /goal workflow"
+}

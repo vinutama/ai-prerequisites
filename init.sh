@@ -14,11 +14,11 @@ err()  { echo -e "${RED}[init]${NC} $*" >&2; }
 info() { echo -e "${CYAN}[init]${NC} $*"; }
 warn() { echo -e "${CYAN}[init]${NC} Warning: $*" >&2; }
 
-ALL_AGENTS=(opencode cursor claude codex)
+ALL_AGENTS=(opencode cursor claude codex qoder)
 
 usage() {
   cat <<EOF
-Usage: init.sh --opencode|--cursor|--claude|--codex|--all [--clean] <target-project-path>
+Usage: init.sh --opencode|--cursor|--claude|--codex|--qoder|--all [--clean] <target-project-path>
 
 Scaffold Goal Architecture Loop Engineering into an existing project.
 A target flag is required.
@@ -27,7 +27,8 @@ A target flag is required.
   --cursor     Cursor    (.cursor/ + AGENTS.md). Invoke /goal
   --claude     Claude Code (.claude/ + CLAUDE.md). Invoke /goal
   --codex      Codex     (.codex/ + .agents/skills/ + AGENTS.md). Invoke \$goal
-  --all        All four targets
+  --qoder      Qoder     (.qoder/ + AGENTS.md). Invoke /goal
+  --all        All five targets
   --clean      Remove the selected target(s) from a project
 
 Examples:
@@ -53,7 +54,8 @@ parse_args() {
       --cursor)   TARGETS+=("cursor") ;;
       --claude)   TARGETS+=("claude") ;;
       --codex)    TARGETS+=("codex") ;;
-      --all)      TARGETS=(opencode cursor claude codex) ;;
+      --qoder)    TARGETS+=("qoder") ;;
+      --all)      TARGETS=(opencode cursor claude codex qoder) ;;
       --clean)    CLEAN_MODE=true ;;
       -h|--help)  usage ;;
       --*)        err "Unknown flag: $1"; usage ;;
@@ -69,7 +71,7 @@ parse_args() {
   done
 
   if [ ${#TARGETS[@]} -eq 0 ]; then
-    err "Specify at least one agent: --opencode, --cursor, --claude, --codex, or --all"
+    err "Specify at least one agent: --opencode, --cursor, --claude, --codex, --qoder, or --all"
     usage
   fi
 
@@ -97,6 +99,7 @@ agent_dir() {
     cursor)   echo ".cursor" ;;
     claude)   echo ".claude" ;;
     codex)    echo ".codex" ;;
+    qoder)    echo ".qoder" ;;
   esac
 }
 
@@ -113,6 +116,7 @@ agent_run_hint() {
     cursor)   echo "cursor-agent  then  /init-goal  then  /goal <objective>" ;;
     claude)   echo "claude  then  /init-goal  then  /goal <objective>" ;;
     codex)    echo "codex  then  \$init-goal  then  \$goal <objective>  (CLI >= 0.138.0; trust the project)" ;;
+    qoder)    echo "qoder  then  /init-goal  then  /goal <objective>" ;;
   esac
 }
 
@@ -330,7 +334,7 @@ sync_agent_models() {
 
   if [ "$name" = "codex" ]; then
     agents_dir="$dest/$dir/agents"
-  elif [ "$name" = "cursor" ] || [ "$name" = "claude" ]; then
+  elif [ "$name" = "cursor" ] || [ "$name" = "claude" ] || [ "$name" = "qoder" ]; then
     agents_dir="$dest/$dir/agents"
   else
     agents_dir="$dest/$dir/agent"
@@ -484,6 +488,10 @@ gitignore_entries_for() {
       echo ".agents/skills/goal-loop/"
       echo "AGENTS.md"
       ;;
+    qoder)
+      echo ".qoder/"
+      echo "AGENTS.md"
+      ;;
   esac
   echo ".worktrees/"
   echo ".goal-review/"
@@ -566,7 +574,7 @@ cmd_clean() {
   still_has_agents_md=false
   still_has_claude=false
   still_has_any=false
-  for name in opencode cursor claude codex; do
+  for name in opencode cursor claude codex qoder; do
     dir="$(agent_dir "$name")"
     [ -d "$dest/$dir" ] || continue
     still_has_any=true
@@ -634,7 +642,7 @@ auto_detect_and_cleanup() {
     if [ -d "$dir.git" ]; then
       repo="$(basename "$dir")"
       git_repos+=("$repo")
-      for marker in .opencode .cursor .claude .codex; do
+      for marker in .opencode .cursor .claude .codex .qoder; do
         if [ -d "$dir$marker" ]; then
           existing+=("$repo/$marker")
         fi
@@ -690,9 +698,9 @@ print_tree() {
       echo "├── AGENTS.md           (gitignored)"
       echo "└── .opencode/          (gitignored)"
       echo "    ├── agent/          (6 specialized agents)"
-      echo "    ├── command/        (/goal, /init-goal, /init-skills)"
-      echo "    ├── scripts/        (goal-git.sh, run-opencode.sh)"
-      echo "    ├── skills/goal-loop/"
+      echo "    ├── command/        (/goal, /init-goal, /init-skills, /create-issues)"
+      echo "    ├── scripts/        (goal-git.sh, create-issues.sh, run-opencode.sh)"
+      echo "    ├── skills/         (goal-loop, create-issues)"
       echo "    └── goal-models.json"
       ;;
     cursor)
@@ -723,6 +731,17 @@ print_tree() {
       echo "    ├── agents/         (6 specialized agents, TOML)"
       echo "    ├── scripts/        (goal-git.sh, run-codex.sh)"
       echo "    ├── config.toml     (max_depth=2, network_access, Figma MCP)"
+      echo "    └── goal-models.json"
+      ;;
+    qoder)
+      echo "├── state.json          (gitignored, created at runtime)"
+      echo "├── AGENTS.md           (gitignored)"
+      echo "└── .qoder/             (gitignored)"
+      echo "    ├── agents/         (6 specialized agents)"
+      echo "    ├── commands/       (/goal, /init-goal, /init-skills)"
+      echo "    ├── scripts/        (goal-git.sh, run-qoder.sh)"
+      echo "    ├── skills/goal-loop/"
+      echo "    ├── settings.json   (Figma MCP, created by /init-goal)"
       echo "    └── goal-models.json"
       ;;
   esac

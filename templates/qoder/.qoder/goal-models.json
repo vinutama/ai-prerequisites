@@ -1,12 +1,6 @@
 {
-  "planner": {
-    "preferred_models": [
-      "opencode-go/qwen3.8-max"
-    ],
-    "fallback_models": [
-      "opencode-go/qwen3.8-flash",
-      "opencode-go/deepseek-v4-flash"
-    ],
+  "orchestrator": {
+    "model": "efficient",
     "capabilities": {
       "multimodal": false,
       "modalities": {
@@ -19,13 +13,8 @@
       }
     }
   },
-  "reviewer": {
-    "preferred_models": [
-      "opencode-go/deepseek-v4-pro"
-    ],
-    "fallback_models": [
-      "opencode-go/deepseek-v4-flash"
-    ],
+  "planner": {
+    "model": "performance",
     "capabilities": {
       "multimodal": false,
       "modalities": {
@@ -39,12 +28,7 @@
     }
   },
   "builder": {
-    "preferred_models": [
-      "opencode-go/deepseek-v4-flash"
-    ],
-    "fallback_models": [
-      "opencode-go/deepseek-v4-flash"
-    ],
+    "model": "efficient",
     "capabilities": {
       "multimodal": false,
       "modalities": {
@@ -58,12 +42,7 @@
     }
   },
   "builder-expert": {
-    "preferred_models": [
-      "opencode-go/kimi-k2.7-code"
-    ],
-    "fallback_models": [
-      "opencode-go/deepseek-v4-flash"
-    ],
+    "model": "performance",
     "capabilities": {
       "multimodal": false,
       "modalities": {
@@ -76,13 +55,8 @@
       }
     }
   },
-  "orchestrator": {
-    "preferred_models": [
-      "opencode-go/deepseek-v4-flash"
-    ],
-    "fallback_models": [
-      "opencode-go/deepseek-v4-flash"
-    ],
+  "reviewer": {
+    "model": "performance",
     "capabilities": {
       "multimodal": false,
       "modalities": {
@@ -96,12 +70,7 @@
     }
   },
   "visual-reviewer": {
-    "preferred_models": [
-      "opencode-go/mimo-v2.5-pro"
-    ],
-    "fallback_models": [
-      "opencode/mimo-v2.5-free"
-    ],
+    "model": "inherit",
     "capabilities": {
       "multimodal": true,
       "modalities": {
