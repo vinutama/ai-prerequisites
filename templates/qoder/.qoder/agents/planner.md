@@ -7,6 +7,7 @@ description: >-
   complexity. Groups independent tasks into concurrency batches when enabled.
 model: performance
 temperature: 0.2
+permissionMode: bypassPermissions
 tools: [Read, Grep, Glob, Bash]
 disallowedTools: [Write, Edit]
 ---

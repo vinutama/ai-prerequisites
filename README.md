@@ -260,7 +260,8 @@ manual merge. On merge conflict, agents stop and report; they do not invent reso
 `init.sh --opencode` generates project-level `opencode.json` with the
 `@razroo/opencode-model-fallback` plugin and per-agent `fallback_models`
 (from `goal-models.json`). Plugin settings live in
-`.opencode/opencode-model-fallback.json`. On rate limit or API error, agents
+`.opencode/opencode-model-fallback.json` (HTTP retries, `MessageAbortedError`
+patterns, 30s TTFT). On rate limit, API error, or provider hang, agents
 automatically try fallback models in order. Cursor, Claude Code, Codex, and Qoder have
 no equivalent plugin.
 
@@ -334,6 +335,7 @@ The loop is the same. These are the harness limits:
 - **Codex CLI 0.138.0+** is required. 0.137.0 hid `agent_type` from `spawn_agent`, which blocks custom-agent delegation.
 - **Codex `.codex/config.toml` loads only for trusted projects.** Without trust, `max_depth`, network access, and the Figma MCP block are ignored. Confirm with `/status` after first launch.
 - **Codex and Cursor cannot machine-enforce `edit: deny`** on `orchestrator`, `reviewer`, or `visual-reviewer`. That rule is prompt-enforced. (Claude Code uses a `tools` allowlist; OpenCode uses `permission.edit: deny`.)
+- **Goal-loop installs auto-approve tool prompts** (paths, bash, MCP) on all five targets so agents are not interrupted for permission dialogs. Orchestrator/planner/reviewer still cannot edit application source via role tool limits.
 - **Cursor allows two levels of subagent nesting.** `/goal` (main) → `orchestrator` → `builder` fits; builders must never spawn subagents.
 - **Model fallback is OpenCode-only.**
 - **Cursor and Codex have no `$ARGUMENTS` expansion.** Command skills read the text typed after `/goal` or `$goal` from the user message.

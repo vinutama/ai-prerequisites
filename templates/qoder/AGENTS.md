@@ -85,6 +85,9 @@ isolated git worktrees, then merges back into the goal branch.
 - Mark deliberate simplifications with `ponytail:` comments.
 - Non-trivial logic leaves one runnable check behind.
 
+Agents use `permissionMode: bypassPermissions` so path/bash/MCP prompts are
+auto-approved; orchestrator/planner/reviewer still have `disallowedTools: [Write, Edit]`.
+
 ### Platform detection
 Platform is read from `.qoder/goal-config.json` (set via `/init-goal`).
 Fallback: auto-detect from origin remote URL. Override with

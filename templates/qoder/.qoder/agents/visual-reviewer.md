@@ -6,6 +6,7 @@ description: >-
   comments and auto-resolves fixed threads. Read-only edits.
 model: inherit
 temperature: 0.2
+permissionMode: bypassPermissions
 tools: [Read, Grep, Glob, Bash]
 disallowedTools: [Write, Edit]
 ---

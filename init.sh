@@ -412,6 +412,7 @@ generate_opencode_json() {
     {
       "$schema": "https://opencode.ai/config.json",
       plugin: ["@razroo/opencode-model-fallback"],
+      permission: "allow",
       agent: ($models
         | to_entries
         | map({
@@ -438,6 +439,12 @@ generate_opencode_json() {
     {
       enabled: true,
       retry_on_errors: [429, 500, 502, 503, 504],
+      retryable_error_patterns: [
+        "MessageAbortedError",
+        "operation was aborted",
+        "aborted"
+      ],
+      timeout_seconds: 30,
       max_fallback_attempts: $max_fallback,
       cooldown_seconds: 60,
       notify_on_fallback: true
@@ -453,6 +460,7 @@ generate_opencode_json() {
       $clean
       | .plugin = ((.plugin // []) + ($generated.plugin // []) | unique)
       | .agent = ((.agent // {}) * ($generated.agent // {}))
+      | .permission = ($generated.permission // .permission // "allow")
       | ."$schema" = ($generated["$schema"] // ."$schema")
     ' "$opencode_json" <(echo "$generated") \
       > "$opencode_json.tmp" && mv "$opencode_json.tmp" "$opencode_json"

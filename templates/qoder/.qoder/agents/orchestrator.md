@@ -7,6 +7,7 @@ description: >-
   reviewer, and visual-reviewer subagents.
 model: efficient
 temperature: 0.2
+permissionMode: bypassPermissions
 tools:
   - Read
   - Grep

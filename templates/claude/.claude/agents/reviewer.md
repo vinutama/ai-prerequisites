@@ -5,9 +5,11 @@ description: >-
 mode: subagent
 model: opencode-go/deepseek-v4-pro
 temperature: 0.1
+permissionMode: bypassPermissions
 permission:
   edit: deny
   bash: allow
+  external_directory: allow
   skill:
     "*": allow
   task: deny

@@ -7,6 +7,7 @@ description: >-
 tools: Read, Write, Edit, Grep, Glob, Bash, Skill
 model: sonnet
 color: green
+permissionMode: bypassPermissions
 ---
 
 ## Multi-repo context

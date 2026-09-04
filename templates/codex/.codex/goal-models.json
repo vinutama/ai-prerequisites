@@ -1,7 +1,7 @@
 {
   "orchestrator": {
     "model_reasoning_effort": "medium",
-    "sandbox_mode": "workspace-write",
+    "sandbox_mode": "danger-full-access",
     "capabilities": {
       "multimodal": false,
       "modalities": {
@@ -31,7 +31,7 @@
   },
   "builder": {
     "model_reasoning_effort": "medium",
-    "sandbox_mode": "workspace-write",
+    "sandbox_mode": "danger-full-access",
     "capabilities": {
       "multimodal": false,
       "modalities": {
@@ -46,7 +46,7 @@
   },
   "builder-expert": {
     "model_reasoning_effort": "high",
-    "sandbox_mode": "workspace-write",
+    "sandbox_mode": "danger-full-access",
     "capabilities": {
       "multimodal": false,
       "modalities": {
@@ -61,7 +61,7 @@
   },
   "reviewer": {
     "model_reasoning_effort": "high",
-    "sandbox_mode": "workspace-write",
+    "sandbox_mode": "danger-full-access",
     "capabilities": {
       "multimodal": false,
       "modalities": {
@@ -76,7 +76,7 @@
   },
   "visual-reviewer": {
     "model_reasoning_effort": "medium",
-    "sandbox_mode": "workspace-write",
+    "sandbox_mode": "danger-full-access",
     "capabilities": {
       "multimodal": true,
       "modalities": {

@@ -10,6 +10,7 @@ temperature: 0.2
 permission:
   edit: deny
   bash: allow
+  external_directory: allow
   skill:
     "*": allow
   task:

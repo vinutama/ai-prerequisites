@@ -5,6 +5,7 @@ description: >-
   Posts inline PR/MR comments and auto-resolves fixed threads. Read-only edits.
 model: performance
 temperature: 0.1
+permissionMode: bypassPermissions
 tools: [Read, Grep, Glob, Bash]
 disallowedTools: [Write, Edit]
 ---

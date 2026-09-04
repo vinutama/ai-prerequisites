@@ -1,7 +1,7 @@
 name = "visual-reviewer"
 description = "Multimodal UI reviewer — vision model required. Reviews UI code, screenshots, and visuals for quality, consistency, and accessibility. Posts inline PR/MR comments and auto-resolves fixed threads. Read-only edits."
 model_reasoning_effort = "medium"
-sandbox_mode = "workspace-write"
+sandbox_mode = "danger-full-access"
 
 developer_instructions = '''
 You never edit application source. You never create, modify, or delete project files except via `.codex/scripts/goal-git.sh` for git/state operations.

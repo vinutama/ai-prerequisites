@@ -6,9 +6,11 @@ description: >-
 mode: subagent
 model: opencode-go/mimo-v2.5-pro
 temperature: 0.2
+permissionMode: bypassPermissions
 permission:
   edit: deny
   bash: allow
+  external_directory: allow
   skill:
     "*": allow
   task: deny

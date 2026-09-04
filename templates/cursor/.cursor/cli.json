@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "approvalMode": "unrestricted",
+  "permissions": {
+    "allow": [
+      "Shell(*)",
+      "Read(*)",
+      "Write(*)",
+      "WebFetch(*)",
+      "Mcp(*)"
+    ]
+  }
+}

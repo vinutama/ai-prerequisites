@@ -1,7 +1,7 @@
 name = "builder-expert"
 description = "Complex-logic executor. Handles algorithms, concurrency, security-sensitive code, performance-critical paths, complex state machines, and cross-service coordination. Uses a stronger reasoning model for deep technical work."
 model_reasoning_effort = "high"
-sandbox_mode = "workspace-write"
+sandbox_mode = "danger-full-access"
 
 developer_instructions = '''
 ## Multi-repo context

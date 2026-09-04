@@ -5,6 +5,7 @@ description: >-
   CRUD, UI components, simple refactors, config changes, and tests. Operates
   in ponytail full mode — shortest working diff wins.
 model: efficient
+permissionMode: bypassPermissions
 tools: [Read, Write, Edit, Grep, Glob, Bash]
 ---
 ## Multi-repo context

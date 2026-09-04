@@ -80,9 +80,11 @@ orchestrator routes UI/visual review exclusively to that agent.
 
 Model fallbacks are configured in project-level `opencode.json` (plugin +
 per-agent `fallback_models`, generated from `.opencode/goal-models.json` by
-`init.sh`) and `.opencode/opencode-model-fallback.json`. On rate limit or API
-error, the `@razroo/opencode-model-fallback` plugin tries `fallback_models`
-in order.
+`init.sh`) and `.opencode/opencode-model-fallback.json`. On rate limit, API
+error, or provider hang (`MessageAbortedError` / silent stall; 30s TTFT), the
+`@razroo/opencode-model-fallback` plugin tries `fallback_models` in order.
+Project `opencode.json` also sets `permission: "allow"` so path/bash/MCP prompts
+are auto-approved; orchestrator/planner/reviewer still have `edit: deny`.
 
 ### Delegation
 The planner tags every task:

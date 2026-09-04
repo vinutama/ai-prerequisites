@@ -78,6 +78,8 @@ Only `visual-reviewer` handles screenshots and image attachments. The
 orchestrator routes UI/visual review exclusively to that agent.
 
 Claude Code has no model-fallback plugin; each agent uses the model in its frontmatter.
+`.claude/settings.json` and agent `permissionMode: bypassPermissions` auto-approve
+tool prompts; orchestrator/planner/reviewer still cannot Write/Edit via tools allowlists.
 
 ### Delegation
 The planner tags every task:

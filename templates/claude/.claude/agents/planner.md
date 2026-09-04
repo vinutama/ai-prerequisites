@@ -8,6 +8,7 @@ description: >-
 tools: Read, Grep, Glob, Bash, Skill
 model: opus
 color: blue
+permissionMode: bypassPermissions
 ---
 
 You are a software architect and technical planner. Your job is to produce a

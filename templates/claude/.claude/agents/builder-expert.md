@@ -7,6 +7,7 @@ description: >-
 tools: Read, Write, Edit, Grep, Glob, Bash, Skill
 model: opus
 color: purple
+permissionMode: bypassPermissions
 ---
 
 ## Multi-repo context

@@ -5,6 +5,7 @@ description: >-
   hot paths, state machines, and distributed coordination. Operates in ponytail
   full mode — shortest working diff wins.
 model: performance
+permissionMode: bypassPermissions
 tools: [Read, Write, Edit, Grep, Glob, Bash]
 ---
 ## Multi-repo context
