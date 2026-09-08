@@ -1,5 +1,6 @@
 name = "builder"
 description = "General executor for routine frontend and backend tasks. Implements standard CRUD, UI components, simple refactors, config changes, and tests. Operates in ponytail full mode — shortest working diff wins."
+model = "gpt-5.3-codex-spark"
 model_reasoning_effort = "medium"
 sandbox_mode = "danger-full-access"
 

@@ -5,7 +5,8 @@ description: >-
   detailed implementation plans before any code is written. Read-only — never
   edits files. Tags each task with @builder or @builder-expert based on
   complexity. Groups independent tasks into concurrency batches when enabled.
-model: performance
+model: Qwen3.8-Max
+effort: high
 temperature: 0.2
 permissionMode: bypassPermissions
 tools: [Read, Grep, Glob, Bash]

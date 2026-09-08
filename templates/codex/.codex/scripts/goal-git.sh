@@ -38,6 +38,9 @@ Commands:
   resolve <thread-id>       Resolve a review thread/discussion
   analyze                   Run gitnexus analyze && rtk gain
   selfcheck                 Run platform detection self-check
+  models                    Print full goal-models.json
+  models <role>             Print model, effort, and fallbacks for a role (TAB-separated)
+  models <role> --next <m>  Print next fallback after model <m> (exit 1 if exhausted)
   config set <source> <target> <platform> [concurrency] [auto_merge] [review_mode] [review_max_iterations]  Write goal-config.json
   config get                Print goal-config.json
   state                     Print active goal JSON from state.json
@@ -1684,6 +1687,60 @@ cmd_review_iterate() {
   fi
 }
 
+cmd_models() {
+  require_cmd jq
+  local models_file="$PROJECT_ROOT/$AGENT_CONFIG_DIR/goal-models.json"
+  if [ ! -f "$models_file" ]; then
+    err "goal-models.json not found: $models_file"
+    exit 1
+  fi
+
+  local role="${1:-}"
+  if [ -z "$role" ]; then
+    jq . "$models_file"
+    return 0
+  fi
+
+  if ! jq -e --arg role "$role" 'has($role)' "$models_file" >/dev/null; then
+    err "Unknown role: $role"
+    exit 1
+  fi
+
+  if [ "${2:-}" = "--next" ]; then
+    local current="${3:-}"
+    if [ -z "$current" ]; then
+      err "models <role> --next requires a model"
+      exit 1
+    fi
+    local next
+    next="$(jq -r --arg role "$role" --arg current "$current" '
+      .[$role] as $r
+      | ([$r.model] + ($r.fallback_models // [])) as $chain
+      | ($chain | index($current)) as $i
+      | if $i == null then empty
+        elif ($i + 1) < ($chain | length) then $chain[$i + 1]
+        else empty
+        end
+    ' "$models_file")"
+    if [ -z "$next" ]; then
+      err "No fallback remaining for role '$role' after model '$current'"
+      exit 1
+    fi
+    printf '%s\n' "$next"
+    return 0
+  fi
+
+  jq -r --arg role "$role" '
+    .[$role] as $r
+    | [
+        ($r.model // "inherit"),
+        ($r.model_reasoning_effort // $r.effort // "medium"),
+        (($r.fallback_models // []) | join(","))
+      ]
+    | @tsv
+  ' "$models_file"
+}
+
 cmd_selfcheck() {
   require_cmd git jq
   log "selfcheck: start"
@@ -1767,6 +1824,7 @@ case "${1:-}" in
     esac
     ;;
   selfcheck) cmd_selfcheck ;;
+  models)   shift; cmd_models "$@" ;;
   issues)
     case "${2:-}" in
       list)   cmd_issues_list "${3:-}" "${4:-}" ;;

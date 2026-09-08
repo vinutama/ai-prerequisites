@@ -274,7 +274,7 @@ migrate_cursor_assets() {
 
 is_vision_model() {
   local model="$1"
-  echo "$model" | grep -qiE 'mimo|gpt-4o|gpt-4\.1|claude.*sonnet|sonnet|gemini.*(pro|flash|vision)|llava|qwen.*vl|inherit'
+  echo "$model" | grep -qiE 'mimo|gpt-4o|gpt-4\.1|gpt-5|claude.*sonnet|sonnet|gemini.*(pro|flash|vision)|llava|qwen|kimi|glm|cantus|minimax|performance|ultimate|auto|inherit'
 }
 
 validate_multimodal_models() {
@@ -296,14 +296,18 @@ sync_agent_frontmatter_key() {
   local key="$2"
   local value="$3"
   awk -v key="$key" -v value="$value" '
-    BEGIN { fm = 0 }
+    BEGIN { fm = 0; found = 0 }
     /^---$/ {
+      if (fm == 1 && !found) {
+        print key ": " value
+      }
       fm++
       print
       next
     }
     fm == 1 && $0 ~ ("^" key ":") {
       print key ": " value
+      found = 1
       next
     }
     { print }
@@ -314,15 +318,28 @@ sync_agent_toml_key() {
   local file="$1"
   local key="$2"
   local value="$3"
-  awk -v key="$key" -v value="$value" '
-    BEGIN { done = 0 }
-    !done && $0 ~ ("^" key " = ") {
-      print key " = \"" value "\""
-      done = 1
-      next
-    }
-    { print }
-  ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+  if grep -qE "^${key} = " "$file"; then
+    awk -v key="$key" -v value="$value" '
+      BEGIN { done = 0 }
+      !done && $0 ~ ("^" key " = ") {
+        print key " = \"" value "\""
+        done = 1
+        next
+      }
+      { print }
+    ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+  else
+    awk -v key="$key" -v value="$value" '
+      BEGIN { done = 0 }
+      !done && /^description = / {
+        print
+        print key " = \"" value "\""
+        done = 1
+        next
+      }
+      { print }
+    ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+  fi
 }
 
 sync_agent_models() {
@@ -372,7 +389,24 @@ sync_agent_models() {
       [ -n "$effort" ] && sync_agent_toml_key "$agent_file" model_reasoning_effort "$effort"
       [ -n "$sandbox" ] && sync_agent_toml_key "$agent_file" sandbox_mode "$sandbox"
       [ -n "$model" ] && sync_agent_toml_key "$agent_file" model "$model"
-      log "Synced model for $name agent: $agent_name"
+      log "Synced model for $name agent: $agent_name → ${model:-<effort/sandbox only>}"
+    done
+  elif [ "$name" = "qoder" ]; then
+    jq -r 'to_entries[] | "\(.key)\t\(.value.model // "inherit")\t\(.value.effort // "")\t\(.value.readonly // "")"' "$models_file" | while IFS=$'\t' read -r agent_name model effort readonly; do
+      [ -n "$agent_name" ] || continue
+      local agent_file="$agents_dir/$agent_name.md"
+      if [ ! -f "$agent_file" ]; then
+        warn "Agent file not found for $agent_name: $agent_file"
+        continue
+      fi
+      sync_agent_frontmatter_key "$agent_file" model "$model"
+      [ -n "$effort" ] && sync_agent_frontmatter_key "$agent_file" effort "$effort"
+      if [ -n "$readonly" ]; then
+        local readonly_bool
+        readonly_bool=$( [ "$readonly" = "true" ] && echo true || echo false )
+        sync_agent_frontmatter_key "$agent_file" readonly "$readonly_bool"
+      fi
+      log "Synced model for $name agent: $agent_name → $model (effort=${effort:-none})"
     done
   else
     jq -r 'to_entries[] | "\(.key)\t\(.value.model // "inherit")\t\(.value.readonly // "")"' "$models_file" | while IFS=$'\t' read -r agent_name model readonly; do
@@ -470,6 +504,62 @@ generate_opencode_json() {
 
   echo "$fallback_settings" > "$fallback_config"
   log "Generated/updated opencode.json and .opencode/opencode-model-fallback.json"
+}
+
+generate_qoder_settings() {
+  local dest="$1"
+  local models_file="$dest/.qoder/goal-models.json"
+  local settings_json="$dest/.qoder/settings.json"
+
+  if [ ! -f "$models_file" ]; then
+    warn "goal-models.json not found, skipping .qoder/settings.json generation"
+    return
+  fi
+
+  command -v jq >/dev/null 2>&1 || { err "jq required for .qoder/settings.json generation"; return 1; }
+
+  local overrides
+  overrides=$(jq '
+    . as $models |
+    {
+      agents: {
+        overrides: (
+          $models
+          | to_entries
+          | map({
+              key: .key,
+              value: {
+                enabled: true,
+                modelConfig: (
+                  { model: .value.model }
+                  + (if (.value.effort // "") != "" then
+                      { generateContentConfig: { effort: .value.effort } }
+                    else {} end)
+                )
+              }
+            })
+          | from_entries
+        )
+      }
+    }
+  ' "$models_file")
+
+  mkdir -p "$dest/.qoder"
+  if [ -f "$settings_json" ]; then
+    log "Merging agent model overrides into existing .qoder/settings.json"
+    jq -s '
+      .[0] as $existing |
+      .[1] as $generated |
+      $existing
+      | .agents = ((.agents // {}) * ($generated.agents // {}))
+      | .agents.overrides = ((.agents.overrides // {}) * ($generated.agents.overrides // {}))
+    ' "$settings_json" <(echo "$overrides") \
+      > "$settings_json.tmp" && mv "$settings_json.tmp" "$settings_json"
+  else
+    echo "$overrides" > "$settings_json"
+  fi
+
+  log "Generated/updated .qoder/settings.json agent model overrides"
 }
 
 gitignore_entries_for() {
@@ -738,7 +828,7 @@ print_tree() {
       echo "└── .codex/             (gitignored)"
       echo "    ├── agents/         (6 specialized agents, TOML)"
       echo "    ├── scripts/        (goal-git.sh, run-codex.sh)"
-      echo "    ├── config.toml     (max_depth=2, network_access, Figma MCP)"
+      echo "    ├── config.toml     (agents + multi_agent_v2 model routing, Figma MCP)"
       echo "    └── goal-models.json"
       ;;
     qoder)
@@ -749,7 +839,7 @@ print_tree() {
       echo "    ├── commands/       (/goal, /init-goal, /init-skills)"
       echo "    ├── scripts/        (goal-git.sh, run-qoder.sh)"
       echo "    ├── skills/goal-loop/"
-      echo "    ├── settings.json   (Figma MCP, created by /init-goal)"
+      echo "    ├── settings.json   (agent model overrides + Figma MCP)"
       echo "    └── goal-models.json"
       ;;
   esac
@@ -782,6 +872,9 @@ for local_name in "${TARGETS[@]}"; do
   migrate_cursor_assets "$TARGET" "$local_name"
   if [ "$local_name" = "opencode" ]; then
     generate_opencode_json "$TARGET"
+  fi
+  if [ "$local_name" = "qoder" ]; then
+    generate_qoder_settings "$TARGET"
   fi
   sync_agent_models "$TARGET" "$local_name"
 done

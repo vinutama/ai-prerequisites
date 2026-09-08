@@ -54,17 +54,18 @@ Goal source (configured via `/init-goal`):
 - `issues` — fetches open issues from a GitHub/GitLab issue list URL (`/goal --issues [url] [count]` or bare `/goal` when configured); **one branch + one PR per issue**; branch `{task_type}/{number}-{slug}`; planner orders by dependency and batches concurrent work (single-repo only; multi-repo processes one issue at a time)
 
 ### Agent roles
-| Agent | Role | Model |
-|---|---|---|
-| `orchestrator` | Manages the full loop | opencode-go/deepseek-v4-flash |
-| `planner` | Architecture & plans — tags tasks @builder or @builder-expert | opencode-go/qwen3.7-max |
-| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | opencode-go/deepseek-v4-flash |
-| `builder-expert` | Complex execution (algorithms, concurrency, security, perf) | opencode-go/kimi-k2.7-code |
-| `reviewer` | Code review + inline PR comments | opencode-go/deepseek-v4-pro |
-| `visual-reviewer` | UI/multimodal review + inline PR comments | opencode-go/mimo-v2.5-pro |
+| Agent | Role | Model | Effort |
+|---|---|---|---|
+| `orchestrator` | Manages the full loop | gpt-5.6 | medium |
+| `planner` | Architecture & plans — tags tasks @builder or @builder-expert | gpt-5.6 | high |
+| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | gpt-5.3-codex-spark | medium |
+| `builder-expert` | Complex execution (algorithms, concurrency, security, perf) | gpt-5.6 | high |
+| `reviewer` | Code review + inline PR comments | gpt-5.6-terra | high |
+| `visual-reviewer` | UI/multimodal review + inline PR comments | gpt-5.6 | medium |
 
 `goal-models.json` is the single source of truth for models and capabilities.
-`init.sh` syncs `model` into each agent `.md` and generates `.codex/mcp.json`.
+`init.sh` syncs `model` / `model_reasoning_effort` into each agent `.toml`
+and registers roles in `.codex/config.toml`.
 
 | Agent | Multimodal | Input modalities |
 |---|---|---|
@@ -78,11 +79,19 @@ Goal source (configured via `/init-goal`):
 Only `visual-reviewer` handles screenshots and image attachments. The
 orchestrator routes UI/visual review exclusively to that agent.
 
-Model fallbacks are configured in project-level `.codex/mcp.json` (plugin +
-per-agent `fallback_models`, generated from `.codex/goal-models.json` by
-`init.sh`) and `.codex/opencode-model-fallback.json`. On rate limit or API
-error, the `@razroo/opencode-model-fallback` plugin tries `fallback_models`
-in order.
+### Model routing
+Codex does not use the OpenCode fallback plugin. Per-agent models are pinned in
+two layers:
+
+1. **Durable** — each `.codex/agents/<role>.toml` sets `model` and
+   `model_reasoning_effort` (synced from `goal-models.json` by `init.sh`).
+   `.codex/config.toml` also sets `default_subagent_model` and
+   `hide_spawn_agent_metadata = false` so spawn-time overrides are visible.
+2. **Spawn-time** — the orchestrator resolves the model via
+   `.codex/scripts/goal-git.sh models <role>` and always passes
+   `agent_type` + `model` + `reasoning_effort` to `spawn_agent`.
+   On model-unavailable / rate-limit, it calls `models <role> --next <model>`
+   and re-spawns. Never downgrade `visual-reviewer` to a text-only model.
 
 ### Delegation
 The planner tags every task:
@@ -162,11 +171,14 @@ MUST go through `.codex/scripts/goal-git.sh`:
 .codex/scripts/goal-git.sh figma design set <url>  # set default design link
 .codex/scripts/goal-git.sh figma status          # show Figma integration status
 .codex/scripts/goal-git.sh figma disable         # disable Figma integration
+.codex/scripts/goal-git.sh models                # print goal-models.json
+.codex/scripts/goal-git.sh models <role>         # model + effort + fallbacks
+.codex/scripts/goal-git.sh models <role> --next <m>  # next fallback after <m>
 ```
 
-Launch OpenCode with Figma secrets loaded:
+Launch Codex with Figma secrets loaded:
 ```bash
-.codex/scripts/run-opencode.sh
+.codex/scripts/run-codex.sh
 ```
 
 ### Review loop
@@ -204,7 +216,7 @@ Jira branches use `{task_type}/{TICKET}-{slug}` (task_type from issue type or
 When enabled via `/init-goal`, agents use Figma MCP (`figma-developer-mcp`) with a PAT in
 `.codex/figma.env` and a default design link in `goal-config.json`:
 `figma_design_url`, `figma_file_key`, `figma_node_id`. Planner, builder, and
-visual-reviewer consult Figma for UI work. Use `run-opencode.sh` to load secrets.
+visual-reviewer consult Figma for UI work. Use `run-codex.sh` to load secrets.
 
 ### UI/UX Pro Max (optional)
 Install via `/init-skills` question **UI/UX Pro Max**

@@ -1,5 +1,6 @@
 name = "orchestrator"
 description = "Goal-loop orchestrator. Manages the full /goal workflow: plan → build → analyze → review → push → loop until PR threads resolved. Never edits code — delegates fixes to builders. Delegates to planner, builder, builder-expert, reviewer, and visual-reviewer subagents."
+model = "gpt-5.6"
 model_reasoning_effort = "medium"
 sandbox_mode = "danger-full-access"
 
@@ -37,6 +38,31 @@ Do not rely on `@mentions` or manually reading `.agents/skills/*/SKILL.md`.
 - `parallel-agents` — multi-agent orchestration for independent parallel tasks
 - `multi-agent-patterns` — orchestrator, peer-to-peer, and hierarchical patterns
 - `verification-before-completion` — verify work before claiming done or opening PRs
+
+## MODEL ROUTING
+Every spawn MUST pin a concrete model. Never inherit the parent session model.
+
+1. Before spawning a role, resolve its model:
+   ```bash
+   .codex/scripts/goal-git.sh models <role>
+   ```
+   Output is TAB-separated: `model`, `reasoning_effort`, `fallback,fallback`.
+2. Spawn with all three fields explicit:
+   ```
+   spawn_agent({ agent_type: "<role>", model: "<model>", reasoning_effort: "<effort>" })
+   ```
+   Always pass `agent_type`, `model`, and `reasoning_effort`. Do not omit any of them.
+3. On model-unavailable, rate-limit, or provider failure:
+   ```bash
+   .codex/scripts/goal-git.sh models <role> --next <failed-model>
+   ```
+   Re-spawn with the returned fallback (keep the same `reasoning_effort` from step 1).
+   If `--next` exits non-zero, STOP and report that fallbacks are exhausted.
+4. Never downgrade `visual-reviewer` to a text-only model. Prefer staying on the
+   multimodal preferred model (or an image-capable fallback) even if slower.
+5. Preferred models live in `.codex/goal-models.json` and are also pinned in each
+   `.codex/agents/<role>.toml` — agent-file pins are the durable layer; spawn-time
+   overrides are the second layer.
 
 ## Workflow — follow this exactly
 

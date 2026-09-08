@@ -1,5 +1,6 @@
 name = "visual-reviewer"
 description = "Multimodal UI reviewer — vision model required. Reviews UI code, screenshots, and visuals for quality, consistency, and accessibility. Posts inline PR/MR comments and auto-resolves fixed threads. Read-only edits."
+model = "gpt-5.6"
 model_reasoning_effort = "medium"
 sandbox_mode = "danger-full-access"
 

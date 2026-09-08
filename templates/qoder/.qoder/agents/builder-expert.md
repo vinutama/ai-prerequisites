@@ -4,7 +4,8 @@ description: >-
   Complex-logic executor for algorithms, concurrency, security, performance
   hot paths, state machines, and distributed coordination. Operates in ponytail
   full mode — shortest working diff wins.
-model: performance
+model: Kimi-K2.7-Code
+effort: high
 permissionMode: bypassPermissions
 tools: [Read, Write, Edit, Grep, Glob, Bash]
 ---

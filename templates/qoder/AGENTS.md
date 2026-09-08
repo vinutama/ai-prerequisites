@@ -53,17 +53,43 @@ Goal source (configured via `/init-goal`):
 - `issues` — fetches open issues from a GitHub/GitLab issue list URL (`/goal --issues [url] [count]` or bare `/goal` when configured); **one branch + one PR per issue**; branch `{task_type}/{number}-{slug}`; planner orders by dependency and batches concurrent work (single-repo only; multi-repo processes one issue at a time)
 
 ### Agent roles
-| Agent | Role | Model tier |
-|---|---|---|
-| `orchestrator` | Manages the full loop | efficient |
-| `planner` | Architecture & plans — tags tasks @builder or @builder-expert | performance |
-| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | efficient |
-| `builder-expert` | Complex execution (algorithms, concurrency, security, perf) | performance |
-| `reviewer` | Code review + inline PR comments | performance |
-| `visual-reviewer` | UI/multimodal review + inline PR comments | inherit |
+| Agent | Role | Model | Effort |
+|---|---|---|---|
+| `orchestrator` | Manages the full loop | Qwen3.8-Flash | medium |
+| `planner` | Architecture & plans — tags tasks @builder or @builder-expert | Qwen3.8-Max | high |
+| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | Qwen3.8-Flash | medium |
+| `builder-expert` | Complex execution (algorithms, concurrency, security, perf) | Kimi-K2.7-Code | high |
+| `reviewer` | Code review + inline PR comments | GLM-5.3 | high |
+| `visual-reviewer` | UI/multimodal review + inline PR comments | Qwen3.8-Flash | medium |
 
 `goal-models.json` is the single source of truth for models and capabilities.
-`init.sh` syncs `model` into each agent `.md`.
+`init.sh` syncs `model` / `effort` into each agent `.md` and writes
+`.qoder/settings.json` `agents.overrides` (without clobbering Figma MCP).
+Use concrete `/model` names (e.g. `Qwen3.8-Flash`) — not only tier aliases.
+
+| Agent | Multimodal | Input modalities |
+|---|---|---|
+| `orchestrator` | no | text |
+| `planner` | no | text |
+| `builder` | no | text |
+| `builder-expert` | no | text |
+| `reviewer` | no | text |
+| `visual-reviewer` | **yes** | text, image |
+
+Only `visual-reviewer` handles screenshots and image attachments. The
+orchestrator routes UI/visual review exclusively to that agent.
+
+### Model routing
+Per-agent models are pinned in two layers:
+
+1. **Durable** — each `.qoder/agents/<role>.md` frontmatter sets `model` and
+   `effort` (synced from `goal-models.json` by `init.sh`). The same mapping is
+   merged into `.qoder/settings.json` under `agents.overrides`.
+2. **Spawn-time** — the orchestrator resolves the model via
+   `.qoder/scripts/goal-git.sh models <role>` and always names `model` +
+   `effort` when calling the Agent tool. On model-unavailable / rate-limit,
+   it calls `models <role> --next <model>` and re-delegates. Never downgrade
+   `visual-reviewer` to a non-vision model.
 
 ### Delegation
 The planner tags every task:
@@ -146,6 +172,9 @@ MUST go through `.qoder/scripts/goal-git.sh`:
 .qoder/scripts/goal-git.sh figma design set <url>  # set default design link
 .qoder/scripts/goal-git.sh figma status          # show Figma integration status
 .qoder/scripts/goal-git.sh figma disable         # disable Figma integration
+.qoder/scripts/goal-git.sh models                # print goal-models.json
+.qoder/scripts/goal-git.sh models <role>         # model + effort + fallbacks
+.qoder/scripts/goal-git.sh models <role> --next <m>  # next fallback after <m>
 ```
 
 Launch Qoder with Figma secrets loaded:

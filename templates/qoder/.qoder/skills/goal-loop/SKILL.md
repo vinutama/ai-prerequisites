@@ -139,18 +139,24 @@ is in `.qoder/settings.json`. Commands:
 .qoder/scripts/run-qoder.sh   # launch qoder with FIGMA_API_KEY loaded
 ```
 
-## Model tiers (Qoder)
-Qoder uses tier aliases (`efficient`, `performance`, `inherit`) from `goal-models.json`
-synced into agent frontmatter via `init.sh`. No automatic model-fallback plugin.
+## Model routing (`goal-models.json` + orchestrator)
+Qoder accepts concrete `/model` names (e.g. `Qwen3.8-Flash`, `Kimi-K2.7-Code`)
+plus optional `effort`, synced into agent frontmatter and
+`.qoder/settings.json` `agents.overrides` via `init.sh`. Tier aliases
+(`efficient`, `performance`, `ultimate`, `auto`) still work as fallbacks.
 
-## Model capabilities (`goal-models.json`)
-Single source of truth for per-agent models and input modalities:
+1. Orchestrator runs `.qoder/scripts/goal-git.sh models <role>` before each
+   Agent delegation and always names `model` + `effort`.
+2. On failure, `models <role> --next <model>` picks the next
+   `fallback_models` entry. Exhausted fallbacks → STOP and report.
+3. Never downgrade `visual-reviewer` to a non-vision model.
 
 ```json
 {
   "visual-reviewer": {
-    "preferred_models": ["qoder/mimo-v2.5-pro"],
-    "fallback_models": ["qoder/mimo-v2.5-free"],
+    "model": "Qwen3.8-Flash",
+    "effort": "medium",
+    "fallback_models": ["Qwen3.8-Max", "Qwen3.7-Plus"],
     "capabilities": {
       "multimodal": true,
       "modalities": { "input": ["text", "image"], "output": ["text"] }
@@ -160,8 +166,7 @@ Single source of truth for per-agent models and input modalities:
 ```
 
 Text-only agents set `"multimodal": false` and `"input": ["text"]`.
-`init.sh` syncs `preferred_models[0]` into agent `.md` frontmatter and
-regenerates `.mcp.json`. Only `visual-reviewer` handles image input.
+Only `visual-reviewer` handles image input.
 
 ## Git Helper (`.qoder/scripts/goal-git.sh`)
 ```bash
@@ -186,6 +191,9 @@ regenerates `.mcp.json`. Only `visual-reviewer` handles image input.
 .qoder/scripts/goal-git.sh merge            # merge PR/MR (when auto_merge enabled)
 .qoder/scripts/goal-git.sh state complete   # mark goal completed
 .qoder/scripts/goal-git.sh analyze          # npx gitnexus analyze && rtk gain
+.qoder/scripts/goal-git.sh models           # print goal-models.json
+.qoder/scripts/goal-git.sh models <role>    # model + effort + fallbacks (TSV)
+.qoder/scripts/goal-git.sh models <role> --next <m>  # next fallback after <m>
 .qoder/scripts/goal-git.sh status           # working tree status
 .qoder/scripts/goal-git.sh restore <file>   # restore files to HEAD
 .qoder/scripts/goal-git.sh diff             # diff against base branch

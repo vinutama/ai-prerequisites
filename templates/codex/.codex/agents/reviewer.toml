@@ -1,5 +1,6 @@
 name = "reviewer"
 description = "Code reviewer. Checks correctness, security, performance, and missing tests. Posts inline PR/MR comments and auto-resolves fixed threads. Read-only edits."
+model = "gpt-5.6-terra"
 model_reasoning_effort = "high"
 sandbox_mode = "danger-full-access"
 

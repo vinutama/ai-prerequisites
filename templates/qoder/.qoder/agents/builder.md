@@ -4,7 +4,8 @@ description: >-
   General executor for routine frontend and backend tasks. Implements standard
   CRUD, UI components, simple refactors, config changes, and tests. Operates
   in ponytail full mode — shortest working diff wins.
-model: efficient
+model: Qwen3.8-Flash
+effort: medium
 permissionMode: bypassPermissions
 tools: [Read, Write, Edit, Grep, Glob, Bash]
 ---

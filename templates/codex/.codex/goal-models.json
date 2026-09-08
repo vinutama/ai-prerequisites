@@ -1,6 +1,11 @@
 {
   "orchestrator": {
+    "model": "gpt-5.6",
     "model_reasoning_effort": "medium",
+    "fallback_models": [
+      "gpt-5.6-terra",
+      "gpt-5.6-luna"
+    ],
     "sandbox_mode": "danger-full-access",
     "capabilities": {
       "multimodal": false,
@@ -15,7 +20,12 @@
     }
   },
   "planner": {
+    "model": "gpt-5.6",
     "model_reasoning_effort": "high",
+    "fallback_models": [
+      "gpt-5.6-terra",
+      "gpt-5.6-luna"
+    ],
     "sandbox_mode": "read-only",
     "capabilities": {
       "multimodal": false,
@@ -30,7 +40,12 @@
     }
   },
   "builder": {
+    "model": "gpt-5.3-codex-spark",
     "model_reasoning_effort": "medium",
+    "fallback_models": [
+      "gpt-5.6-terra",
+      "gpt-5.6-luna"
+    ],
     "sandbox_mode": "danger-full-access",
     "capabilities": {
       "multimodal": false,
@@ -45,7 +60,12 @@
     }
   },
   "builder-expert": {
+    "model": "gpt-5.6",
     "model_reasoning_effort": "high",
+    "fallback_models": [
+      "gpt-5.6-terra",
+      "gpt-5.6-luna"
+    ],
     "sandbox_mode": "danger-full-access",
     "capabilities": {
       "multimodal": false,
@@ -60,7 +80,12 @@
     }
   },
   "reviewer": {
+    "model": "gpt-5.6-terra",
     "model_reasoning_effort": "high",
+    "fallback_models": [
+      "gpt-5.6",
+      "gpt-5.6-luna"
+    ],
     "sandbox_mode": "danger-full-access",
     "capabilities": {
       "multimodal": false,
@@ -75,7 +100,11 @@
     }
   },
   "visual-reviewer": {
+    "model": "gpt-5.6",
     "model_reasoning_effort": "medium",
+    "fallback_models": [
+      "gpt-5.6"
+    ],
     "sandbox_mode": "danger-full-access",
     "capabilities": {
       "multimodal": true,

@@ -5,7 +5,8 @@ description: >-
   analyze → review → push → loop until PR threads resolved. Never edits code —
   delegates fixes to builders. Delegates to planner, builder, builder-expert,
   reviewer, and visual-reviewer subagents.
-model: efficient
+model: Qwen3.8-Flash
+effort: medium
 temperature: 0.2
 permissionMode: bypassPermissions
 tools:
@@ -51,6 +52,33 @@ Do not rely on `@mentions` or manually reading `.qoder/skills/*/SKILL.md`.
 - `parallel-agents` — multi-agent orchestration for independent parallel tasks
 - `multi-agent-patterns` — orchestrator, peer-to-peer, and hierarchical patterns
 - `verification-before-completion` — verify work before claiming done or opening PRs
+
+## MODEL ROUTING
+Every Agent delegation MUST pin a concrete model. Never inherit the parent session model.
+
+1. Before delegating to a role, resolve its model:
+   ```bash
+   .qoder/scripts/goal-git.sh models <role>
+   ```
+   Output is TAB-separated: `model`, `effort`, `fallback,fallback`.
+2. When calling the Agent tool, name the model and effort explicitly in the
+   delegation (and in the prompt if the tool UI requires it). Example:
+   ```
+   Agent(planner) with model=<model> effort=<effort>
+   ```
+   Always pass both. Do not omit either field.
+3. On model-unavailable, rate-limit, or provider failure:
+   ```bash
+   .qoder/scripts/goal-git.sh models <role> --next <failed-model>
+   ```
+   Re-delegate with the returned fallback (keep the same `effort` from step 1).
+   If `--next` exits non-zero, STOP and report that fallbacks are exhausted.
+4. Never downgrade `visual-reviewer` to a non-vision model. Prefer
+   staying on an image-capable model even if slower.
+5. Preferred models live in `.qoder/goal-models.json` and are also pinned in each
+   `.qoder/agents/<role>.md` frontmatter plus `.qoder/settings.json`
+   `agents.overrides` — file/settings pins are the durable layer; spawn-time
+   overrides are the second layer.
 
 ## Workflow — follow this exactly
 

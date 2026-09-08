@@ -4,7 +4,8 @@ description: >-
   Multimodal UI reviewer — vision model required. Reviews UI code, screenshots,
   and visuals for quality, consistency, and accessibility. Posts inline PR/MR
   comments and auto-resolves fixed threads. Read-only edits.
-model: inherit
+model: Qwen3.8-Flash
+effort: medium
 temperature: 0.2
 permissionMode: bypassPermissions
 tools: [Read, Grep, Glob, Bash]

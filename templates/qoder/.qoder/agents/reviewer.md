@@ -3,7 +3,8 @@ name: reviewer
 description: >-
   Code reviewer. Checks correctness, security, performance, and missing tests.
   Posts inline PR/MR comments and auto-resolves fixed threads. Read-only edits.
-model: performance
+model: GLM-5.3
+effort: high
 temperature: 0.1
 permissionMode: bypassPermissions
 tools: [Read, Grep, Glob, Bash]
