@@ -1,9 +1,8 @@
 ---
+name: init-skills
 description: >-
   Install curated agentic-awesome-skills into this project, then optionally
   install ui-ux-pro-max for UI/UX/frontend design intelligence. Usage: /init-skills
-agent: orchestrator
-context: fork
 ---
 
 Read the project README and AGENTS.md to understand conventions first.

@@ -1,23 +1,27 @@
 ---
+name: goal-arch
 description: >-
-  Set, list, continue, or run issue queue. Usage: /goal <objective> | /goal --list | /goal --issues [url] [count] | /goal --continue [id] [new instruction]
-agent: orchestrator
-subtask: true
+  Goal Architecture Loop Engineering. Start, list, continue, or run an issue
+  queue. Usage: /goal-arch <objective> | /goal-arch --list | /goal-arch --issues
+  [url] [count] | /goal-arch --continue [id] [new instruction].
+  Distinct from Qoder built-in /goal.
 ---
 
 Read the project README and AGENTS.md to understand conventions first.
 
-Arguments: $ARGUMENTS
+Invoke the project `orchestrator` subagent (`@orchestrator`) to run this
+workflow. Pass `$ARGUMENTS` through unchanged. Do not use Qoder's built-in
+`/goal` for this — that is a different feature.
 
 ## Dispatch
 
 Inspect `$ARGUMENTS` and follow the matching path:
 
-### `/goal --list`
+### `/goal-arch --list`
 Run `.qoder/scripts/goal-git.sh list` and display the output.
 If the state has `repos` with more than one entry, also show each repo path and its active branch from `state.json` (run `.qoder/scripts/goal-git.sh state | jq '.repos'`). Stop.
 
-### `/goal --issues [url] [count]`
+### `/goal-arch --issues [url] [count]`
 Fetch open issues from a GitHub/GitLab issue list URL and drive each to its own branch and PR.
 
 1. Parse remainder after `--issues`: optional `url`, optional `count` (integer).
@@ -37,17 +41,17 @@ Fetch open issues from a GitHub/GitLab issue list URL and drive each to its own 
    - Single-repo with `concurrency` > 1: planner may batch independent issues; orchestrator uses `issues start <n> --worktree` per issue in a batch.
 5. Report **one PR URL per issue** when the run completes.
 
-Also run this path when `goal_source` is `issues` and the user invokes bare `/goal` with no args (use configured `issue_list_url` and `issue_limit`), or `/goal <count>` where `<count>` is only a number.
+Also run this path when `goal_source` is `issues` and the user invokes bare `/goal-arch` with no args (use configured `issue_list_url` and `issue_limit`), or `/goal-arch <count>` where `<count>` is only a number.
 
-### `/goal --continue [id] [new instruction]`
+### `/goal-arch --continue [id] [new instruction]`
 This continues an existing goal. No quotes required.
 
 **Examples:**
 ```
-/goal --continue                                    # resume active goal, no new instruction
-/goal --continue add-health                         # switch to goal "add-health", no new instruction
-/goal --continue add-health fix the healthcheck API # switch to "add-health" AND apply new instruction
-/goal --continue fix the healthcheck API            # active goal + new instruction
+/goal-arch --continue                                    # resume active goal, no new instruction
+/goal-arch --continue add-health                         # switch to goal "add-health", no new instruction
+/goal-arch --continue add-health fix the healthcheck API # switch to "add-health" AND apply new instruction
+/goal-arch --continue fix the healthcheck API            # active goal + new instruction
 ```
 
 **Parse the remainder** (after stripping `--continue`):
@@ -75,24 +79,24 @@ This continues an existing goal. No quotes required.
    - **Single-repo mode (repos ≤ 1 or no repos field)**: follow existing Plan → Build → Analyze → Review → Loop flow unchanged.
 8. Report ALL PR URLs across all repos (multi-repo) or the single PR URL.
 
-### `/goal <objective>` (new goal)
+### `/goal-arch <objective>` (new goal)
 1. Determine `goal_source`: check if `$ARGUMENTS` begins with `--source <type>`. If so, pop both tokens and validate `<type>` is one of `jira|markdown|prompt|issues`. Use it as the effective `goal_source` for this invocation (overrides config). Otherwise read from `.qoder/scripts/goal-git.sh config get` (field `goal_source`). If no config exists, treat as `prompt`.
-   If `effective_source` is `issues` and `$ARGUMENTS` is empty or a single integer, follow **`/goal --issues`** above (optional count token only).
+   If `effective_source` is `issues` and `$ARGUMENTS` is empty or a single integer, follow **`/goal-arch --issues`** above (optional count token only).
    Prefix all `goal-git.sh start` calls with `GOAL_SOURCE_OVERRIDE=<effective_source>` (e.g. `GOAL_SOURCE_OVERRIDE=prompt .qoder/scripts/goal-git.sh start ...`).
 2. Resolve the goal text based on source:
    - `prompt` — use `$ARGUMENTS` directly as the goal. If empty, STOP and ask the user for an objective.
    - `markdown` — resolve the file path:
      - If `$ARGUMENTS` is non-empty → use it as the path.
-     - If `$ARGUMENTS` is empty → read `markdown_path` from config; if missing, STOP and tell the user to run `/init-goal` or pass a path (e.g. `/goal docs/feature.md`).
+     - If `$ARGUMENTS` is empty → read `markdown_path` from config; if missing, STOP and tell the user to run `/init-goal` or pass a path (e.g. `/goal-arch docs/feature.md`).
      - Read the file contents as the goal. If the file does not exist, STOP and report the path.
    - `jira` — resolve ticket + task_type, then fetch the issue:
      1. Parse `$ARGUMENTS` tokens:
         - Optional leading `task_type` override if the first token is one of:
           `feat`, `bug`, `chore`, `refactor`, `docs`, `test`, `perf`
-          (`bugfix` and `fix` alias to `bug`; e.g. `/goal bugfix DEL-4123`).
+          (`bugfix` and `fix` alias to `bug`; e.g. `/goal-arch bugfix DEL-4123`).
         - Next token (or first token if no type override) is the ticket key.
         - If no ticket token → read `jira_ticket` from config.
-        - If still missing, STOP and tell the user to run `/init-goal` or pass a ticket (e.g. `/goal PROJ-123`).
+        - If still missing, STOP and tell the user to run `/init-goal` or pass a ticket (e.g. `/goal-arch PROJ-123`).
      2. Verify Atlassian MCP is available (attempt `jira_get_issue` or check MCP tools).
         - If unavailable, STOP and guide the user to connect the Atlassian MCP server in `.mcp.json`, then retry.
      3. Fetch via `jira_get_issue` and use summary + description as the goal text.

@@ -155,7 +155,7 @@ plus optional `effort`, synced into agent frontmatter and
 {
   "visual-reviewer": {
     "model": "Qwen3.8-Flash",
-    "effort": "medium",
+    "effort": "low",
     "fallback_models": ["Qwen3.8-Max", "Qwen3.7-Plus"],
     "capabilities": {
       "multimodal": true,
@@ -165,13 +165,16 @@ plus optional `effort`, synced into agent frontmatter and
 }
 ```
 
+Effort values are model-specific — omit `effort` for models like
+`Kimi-K2.7-Code` that reject configurable reasoning effort.
+
 Text-only agents set `"multimodal": false` and `"input": ["text"]`.
 Only `visual-reviewer` handles image input.
 
 ## Git Helper (`.qoder/scripts/goal-git.sh`)
 ```bash
 .qoder/scripts/goal-git.sh start <goal> [ticket] [task_type]  # create branch (jira: task_type/TICKET-slug)
-.qoder/scripts/goal-git.sh continue [id]    # resume active or switch goal (/goal --continue [id] [instruction])
+.qoder/scripts/goal-git.sh continue [id]    # resume active or switch goal (/goal-arch --continue [id] [instruction])
 .qoder/scripts/goal-git.sh list             # list all goals
 .qoder/scripts/goal-git.sh state            # print active goal JSON
 .qoder/scripts/goal-git.sh stage <file>...   # stage specific files

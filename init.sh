@@ -27,7 +27,7 @@ A target flag is required.
   --cursor     Cursor    (.cursor/ + AGENTS.md). Invoke /goal
   --claude     Claude Code (.claude/ + CLAUDE.md). Invoke /goal
   --codex      Codex     (.codex/ + .agents/skills/ + AGENTS.md). Invoke \$goal
-  --qoder      Qoder     (.qoder/ + AGENTS.md). Invoke /goal
+  --qoder      Qoder     (.qoder/ + AGENTS.md). Invoke /goal-arch
   --all        All five targets
   --clean      Remove the selected target(s) from a project
 
@@ -116,7 +116,7 @@ agent_run_hint() {
     cursor)   echo "cursor-agent  then  /init-goal  then  /goal <objective>" ;;
     claude)   echo "claude  then  /init-goal  then  /goal <objective>" ;;
     codex)    echo "codex  then  \$init-goal  then  \$goal <objective>  (CLI >= 0.138.0; trust the project)" ;;
-    qoder)    echo "qoder  then  /init-goal  then  /goal <objective>" ;;
+    qoder)    echo "qoder  then  /init-goal  then  /goal-arch <objective>" ;;
   esac
 }
 
@@ -314,6 +314,17 @@ sync_agent_frontmatter_key() {
   ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
 }
 
+remove_agent_frontmatter_key() {
+  local file="$1"
+  local key="$2"
+  awk -v key="$key" '
+    BEGIN { fm = 0 }
+    /^---$/ { fm++; print; next }
+    fm == 1 && $0 ~ ("^" key ":") { next }
+    { print }
+  ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+}
+
 sync_agent_toml_key() {
   local file="$1"
   local key="$2"
@@ -400,7 +411,12 @@ sync_agent_models() {
         continue
       fi
       sync_agent_frontmatter_key "$agent_file" model "$model"
-      [ -n "$effort" ] && sync_agent_frontmatter_key "$agent_file" effort "$effort"
+      if [ -n "$effort" ]; then
+        sync_agent_frontmatter_key "$agent_file" effort "$effort"
+      else
+        # Some models (e.g. Kimi-K2.7-Code) reject any reasoning effort.
+        remove_agent_frontmatter_key "$agent_file" effort
+      fi
       if [ -n "$readonly" ]; then
         local readonly_bool
         readonly_bool=$( [ "$readonly" = "true" ] && echo true || echo false )
@@ -533,7 +549,7 @@ generate_qoder_settings() {
                 modelConfig: (
                   { model: .value.model }
                   + (if (.value.effort // "") != "" then
-                      { generateContentConfig: { effort: .value.effort } }
+                      { effort: .value.effort }
                     else {} end)
                 )
               }
@@ -836,7 +852,7 @@ print_tree() {
       echo "├── AGENTS.md           (gitignored)"
       echo "└── .qoder/             (gitignored)"
       echo "    ├── agents/         (6 specialized agents)"
-      echo "    ├── commands/       (/goal, /init-goal, /init-skills)"
+      echo "    ├── commands/       (/goal-arch, /init-goal, /init-skills)"
       echo "    ├── scripts/        (goal-git.sh, run-qoder.sh)"
       echo "    ├── skills/goal-loop/"
       echo "    ├── settings.json   (agent model overrides + Figma MCP)"

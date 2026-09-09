@@ -6,7 +6,7 @@ description: >-
   edits files. Tags each task with @builder or @builder-expert based on
   complexity. Groups independent tasks into concurrency batches when enabled.
 model: Qwen3.8-Max
-effort: high
+effort: xhigh
 temperature: 0.2
 permissionMode: bypassPermissions
 tools: [Read, Grep, Glob, Bash]

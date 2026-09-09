@@ -1,7 +1,7 @@
 {
   "orchestrator": {
     "model": "Qwen3.8-Flash",
-    "effort": "medium",
+    "effort": "low",
     "fallback_models": [
       "Qwen3.7-Plus",
       "Qwen3.8-Flash"
@@ -20,7 +20,7 @@
   },
   "planner": {
     "model": "Qwen3.8-Max",
-    "effort": "high",
+    "effort": "xhigh",
     "fallback_models": [
       "Qwen3.7-Max",
       "Qwen3.8-Flash"
@@ -39,10 +39,10 @@
   },
   "builder": {
     "model": "Qwen3.8-Flash",
-    "effort": "medium",
+    "effort": "low",
     "fallback_models": [
       "Qwen3.7-Plus",
-      "Kimi-K2.7-Code"
+      "GLM-5.3"
     ],
     "capabilities": {
       "multimodal": false,
@@ -58,7 +58,6 @@
   },
   "builder-expert": {
     "model": "Kimi-K2.7-Code",
-    "effort": "high",
     "fallback_models": [
       "Kimi-K3",
       "Qwen3.8-Max"
@@ -80,7 +79,7 @@
     "effort": "high",
     "fallback_models": [
       "Qwen3.7-Plus",
-      "Qwen3.8-Max"
+      "GLM-5.3"
     ],
     "capabilities": {
       "multimodal": false,
@@ -96,7 +95,7 @@
   },
   "visual-reviewer": {
     "model": "Qwen3.8-Flash",
-    "effort": "medium",
+    "effort": "low",
     "fallback_models": [
       "Qwen3.8-Max",
       "Qwen3.7-Plus"

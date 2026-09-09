@@ -1,12 +1,12 @@
 ---
 name: orchestrator
 description: >-
-  Goal-loop orchestrator. Manages the full /goal workflow: plan → build →
+  Goal-loop orchestrator. Manages the full /goal-arch workflow: plan → build →
   analyze → review → push → loop until PR threads resolved. Never edits code —
   delegates fixes to builders. Delegates to planner, builder, builder-expert,
   reviewer, and visual-reviewer subagents.
 model: Qwen3.8-Flash
-effort: medium
+effort: low
 temperature: 0.2
 permissionMode: bypassPermissions
 tools:
@@ -62,11 +62,13 @@ Every Agent delegation MUST pin a concrete model. Never inherit the parent sessi
    ```
    Output is TAB-separated: `model`, `effort`, `fallback,fallback`.
 2. When calling the Agent tool, name the model and effort explicitly in the
-   delegation (and in the prompt if the tool UI requires it). Example:
+   delegation (and in the prompt if the tool UI requires it) **only when
+   `goal-git.sh models <role>` returns a non-empty effort**. Example:
    ```
    Agent(planner) with model=<model> effort=<effort>
    ```
-   Always pass both. Do not omit either field.
+   For roles with empty effort (e.g. `builder-expert` / `Kimi-K2.7-Code`),
+   pass `model` only — never send `effort`.
 3. On model-unavailable, rate-limit, or provider failure:
    ```bash
    .qoder/scripts/goal-git.sh models <role> --next <failed-model>
@@ -94,7 +96,7 @@ Inspect `$ARGUMENTS` to determine the mode:
      - If not → identifier = empty (active goal), continuation instruction = whole remainder.
   3. Run `.qoder/scripts/goal-git.sh continue "<identifier>"`. Do NOT create a new branch or PR.
   4. Carry the continuation instruction forward for the PLAN step (does NOT overwrite `state.json`).
-- **New goal**: Resolve the goal text (see `/goal` command for source resolution), then run `.qoder/scripts/goal-git.sh start "<goal>"` (for jira: also pass `"<ticket>" "<task_type>"`) to create the branch and append to state history.
+- **New goal**: Resolve the goal text (see `/goal-arch` command for source resolution), then run `.qoder/scripts/goal-git.sh start "<goal>"` (for jira: also pass `"<ticket>" "<task_type>"`) to create the branch and append to state history.
 - Detect multi-repo mode: check if `state.json` active goal has `repos` array with > 1 entries.
   If multi-repo: track the repos list for this goal. Each repo has {path, pr_number, pr_url}.
   If single-repo: proceed as before.

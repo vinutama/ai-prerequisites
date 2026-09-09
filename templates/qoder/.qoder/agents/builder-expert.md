@@ -5,7 +5,6 @@ description: >-
   hot paths, state machines, and distributed coordination. Operates in ponytail
   full mode — shortest working diff wins.
 model: Kimi-K2.7-Code
-effort: high
 permissionMode: bypassPermissions
 tools: [Read, Write, Edit, Grep, Glob, Bash]
 ---

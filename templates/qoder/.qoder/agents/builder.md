@@ -5,7 +5,7 @@ description: >-
   CRUD, UI components, simple refactors, config changes, and tests. Operates
   in ponytail full mode — shortest working diff wins.
 model: Qwen3.8-Flash
-effort: medium
+effort: low
 permissionMode: bypassPermissions
 tools: [Read, Write, Edit, Grep, Glob, Bash]
 ---

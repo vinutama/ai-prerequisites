@@ -1,6 +1,6 @@
 # AGENTS.md
 
-## /goal workflow
+## /goal-arch workflow (not Qoder built-in `/goal`)
 
 This project uses **Goal Architecture Loop Engineering** — a persistent
 workflow where AI agents drive a task from plan to merged PR, looping until
@@ -33,12 +33,15 @@ If a skill is absent, the agent proceeds normally. Re-run `/init-skills` with
 | `visual-reviewer` | `wcag-audit-patterns`, `frontend-design`, `webapp-testing`, `ui-ux-pro-max` |
 
 ### How to use
+Qoder ships a **built-in** `/goal` for session goal tracking. This project's
+Goal Architecture Loop uses **`/goal-arch`** instead (avoids the `/goal1` rename).
+
 ```
 /init-goal                              # one-time project setup
 /init-skills                            # optional: inject domain skills
-/goal <your objective>                  # start a new goal
-/goal --list                            # list all goals
-/goal --continue [id] [new instruction]  # resume a goal; optional new instruction
+/goal-arch <your objective>                  # start a new goal
+/goal-arch --list                            # list all goals
+/goal-arch --continue [id] [new instruction]  # resume a goal; optional new instruction
 ```
 
 Continue parsing (no quotes): first token is checked against existing goals via
@@ -47,25 +50,27 @@ the new instruction; if not, the whole remainder is the instruction for the
 active goal.
 
 Goal source (configured via `/init-goal`):
-- `prompt` — free-text objective (e.g. `/goal Add health check endpoint`); branch `goal/<slug>`
-- `markdown` — reads a `.md` file as the goal (`/goal` uses `markdown_path` from config; `/goal docs/other.md` overrides); branch `goal/<slug>`
-- `jira` — fetches a Jira ticket as the goal (`/goal` uses `jira_ticket` from config; `/goal OTHER-123` or `/goal bugfix DEL-4123` overrides) — requires Atlassian MCP; branch `{task_type}/{TICKET}-{slug}` (e.g. `feat/DEL-4123-add-health-check`)
-- `issues` — fetches open issues from a GitHub/GitLab issue list URL (`/goal --issues [url] [count]` or bare `/goal` when configured); **one branch + one PR per issue**; branch `{task_type}/{number}-{slug}`; planner orders by dependency and batches concurrent work (single-repo only; multi-repo processes one issue at a time)
+- `prompt` — free-text objective (e.g. `/goal-arch Add health check endpoint`); branch `goal/<slug>`
+- `markdown` — reads a `.md` file as the goal (`/goal-arch` uses `markdown_path` from config; `/goal-arch docs/other.md` overrides); branch `goal/<slug>`
+- `jira` — fetches a Jira ticket as the goal (`/goal-arch` uses `jira_ticket` from config; `/goal-arch OTHER-123` or `/goal-arch bugfix DEL-4123` overrides) — requires Atlassian MCP; branch `{task_type}/{TICKET}-{slug}` (e.g. `feat/DEL-4123-add-health-check`)
+- `issues` — fetches open issues from a GitHub/GitLab issue list URL (`/goal-arch --issues [url] [count]` or bare `/goal-arch` when configured); **one branch + one PR per issue**; branch `{task_type}/{number}-{slug}`; planner orders by dependency and batches concurrent work (single-repo only; multi-repo processes one issue at a time)
 
 ### Agent roles
 | Agent | Role | Model | Effort |
 |---|---|---|---|
-| `orchestrator` | Manages the full loop | Qwen3.8-Flash | medium |
-| `planner` | Architecture & plans — tags tasks @builder or @builder-expert | Qwen3.8-Max | high |
-| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | Qwen3.8-Flash | medium |
-| `builder-expert` | Complex execution (algorithms, concurrency, security, perf) | Kimi-K2.7-Code | high |
+| `orchestrator` | Manages the full loop | Qwen3.8-Flash | low |
+| `planner` | Architecture & plans — tags tasks @builder or @builder-expert | Qwen3.8-Max | xhigh |
+| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | Qwen3.8-Flash | low |
+| `builder-expert` | Complex execution (algorithms, concurrency, security, perf) | Kimi-K2.7-Code | *(none — model rejects effort)* |
 | `reviewer` | Code review + inline PR comments | GLM-5.3 | high |
-| `visual-reviewer` | UI/multimodal review + inline PR comments | Qwen3.8-Flash | medium |
+| `visual-reviewer` | UI/multimodal review + inline PR comments | Qwen3.8-Flash | low |
 
 `goal-models.json` is the single source of truth for models and capabilities.
 `init.sh` syncs `model` / `effort` into each agent `.md` and writes
 `.qoder/settings.json` `agents.overrides` (without clobbering Figma MCP).
 Use concrete `/model` names (e.g. `Qwen3.8-Flash`) — not only tier aliases.
+**Effort is model-specific** (e.g. Qwen3.8-Max: `xhigh`/`low`; GLM-5.3: `high`/`low`/`max`;
+Kimi-K2.7-Code: omit `effort`).
 
 | Agent | Multimodal | Input modalities |
 |---|---|---|
@@ -209,9 +214,9 @@ Launch Qoder with Figma secrets loaded:
 
 ### Jira goal source
 When `goal_source` is `jira`, the Atlassian MCP must be connected in `.qoder/settings.json`.
-`/init-goal` verifies connectivity before saving. `/goal` re-checks before fetching tickets.
+`/init-goal` verifies connectivity before saving. `/goal-arch` re-checks before fetching tickets.
 Jira branches use `{task_type}/{TICKET}-{slug}` (task_type from issue type or
-`/goal bugfix DEL-4123` override — `bugfix` aliases to `bug`). Prompt/markdown branches use `goal/<slug>`.
+`/goal-arch bugfix DEL-4123` override — `bugfix` aliases to `bug`). Prompt/markdown branches use `goal/<slug>`.
 
 ### Figma design lookup (optional)
 When enabled via `/init-goal`, agents use Figma MCP (`figma-developer-mcp`) with a PAT in

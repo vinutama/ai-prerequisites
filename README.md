@@ -57,8 +57,12 @@ Codex removed custom prompts in 0.117.0. Entry points are skills invoked with
 cd /path/to/your/project
 qoder
 /init-goal
-/goal Add a health-check endpoint
+/goal-arch Add a health-check endpoint
 ```
+
+Qoder has a **built-in** `/goal` for session goal tracking. This scaffolding
+uses **`/goal-arch`** for Goal Architecture Loop Engineering (avoids `/goal1`
+rename conflicts).
 
 ### Multiple agents in one repo
 ```bash
@@ -89,7 +93,7 @@ Shared across every target: `state.json` (gitignored, project root),
 | Cursor | `AGENTS.md`, `.cursor/` (agents, skills, scripts) | `/goal` (skills with `disable-model-invocation`) |
 | Claude Code | `CLAUDE.md`, `.claude/` (agents, commands, skills, scripts) | `/goal` |
 | Codex | `AGENTS.md`, `.codex/` (TOML agents, scripts, `config.toml`), `.agents/skills/` | `$goal` |
-| Qoder | `AGENTS.md`, `.qoder/` (agents, commands, skills, scripts), `.qoder/settings.json` (Figma MCP) | `/goal` |
+| Qoder | `AGENTS.md`, `.qoder/` (agents, commands, skills, scripts), `.qoder/settings.json` (Figma MCP) | `/goal-arch` (not built-in `/goal`) |
 
 Each tree includes the same 6 agents (`planner`, `builder`, `builder-expert`,
 `reviewer`, `visual-reviewer`, `orchestrator`), `goal-git.sh`, `goal-models.json`,

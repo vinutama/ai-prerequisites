@@ -1,10 +1,9 @@
 ---
+name: init-goal
 description: >-
-  Initialize goal configuration for this project. Asks about goal source,
+  Initialize goal-arch configuration for this project. Asks about goal source,
   target branch, git platform, concurrency, optional Figma design lookup,
   and auto-merge. Usage: /init-goal
-agent: orchestrator
-context: fork
 ---
 
 Read the project README and AGENTS.md to understand conventions first.
@@ -12,10 +11,10 @@ Read the project README and AGENTS.md to understand conventions first.
 This command configures the goal workflow for this project. Ask the user the following questions one at a time and wait for each answer:
 
 1. **Goal source** — Where will goals come from?
-   - `jira` — Jira ticket key passed as argument (e.g. `/goal PROJ-123`)
-   - `markdown` — Path to a `.md` file passed as argument (e.g. `/goal docs/feature.md`)
-   - `prompt` — Free-text objective passed as argument (e.g. `/goal Add health check endpoint`)
-   - `issues` — Open issues from a GitHub/GitLab issue list URL (e.g. `/goal --issues` or bare `/goal` when configured)
+   - `jira` — Jira ticket key passed as argument (e.g. `/goal-arch PROJ-123`)
+   - `markdown` — Path to a `.md` file passed as argument (e.g. `/goal-arch docs/feature.md`)
+   - `prompt` — Free-text objective passed as argument (e.g. `/goal-arch Add health check endpoint`)
+   - `issues` — Open issues from a GitHub/GitLab issue list URL (e.g. `/goal-arch --issues` or bare `/goal-arch` when configured)
 
    **If the user selects `jira`:** before continuing, verify Atlassian MCP is connected:
    - Attempt a lightweight Jira MCP call (e.g. `jira_get_user_profile` or list available MCP tools for Atlassian).
@@ -88,7 +87,7 @@ This command configures the goal workflow for this project. Ask the user the fol
 7. **Auto-merge** — After review is clean (zero unresolved threads or local findings), merge the PR/MR into the target branch automatically?
    - `no` — leave PR open; user merges manually (**default**)
    - `yes` — after LGTM + clean review gate, orchestrator runs `goal-git.sh merge`
-     - On merge conflict: **stop**, report conflict files; do **not** invent conflict resolutions. User or a follow-up `/goal --continue` with builders can fix.
+     - On merge conflict: **stop**, report conflict files; do **not** invent conflict resolutions. User or a follow-up `/goal-arch --continue` with builders can fix.
 
 8. **Review mode** — How should reviewers report findings?
    - `inline` (**default**) — create PR first; reviewers post inline comments on GitHub/GitLab and resolve threads (`goal-git.sh pending` gates the loop).
@@ -123,7 +122,7 @@ Confirm the saved config:
 
 Then run `.qoder/scripts/goal-git.sh selfcheck` to verify the platform CLI is available and authenticated.
 
-Tell the user they can now run `/goal <objective>` or `/goal --issues [count]` to start a goal (when `goal_source` is `issues`, bare `/goal` uses configured URL and limit).
+Tell the user they can now run `/goal-arch <objective>` or `/goal-arch --issues [count]` to start a goal (when `goal_source` is `issues`, bare `/goal-arch` uses configured URL and limit).
 If Figma was configured, remind them to launch Qoder with secrets loaded:
 ```bash
 .qoder/scripts/run-qoder.sh

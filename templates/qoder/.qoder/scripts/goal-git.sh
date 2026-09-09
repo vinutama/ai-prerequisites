@@ -1705,7 +1705,7 @@ cmd_models() {
     .[$role] as $r
     | [
         ($r.model // "inherit"),
-        ($r.model_reasoning_effort // $r.effort // "medium"),
+        ($r.model_reasoning_effort // $r.effort // ""),
         (($r.fallback_models // []) | join(","))
       ]
     | @tsv
