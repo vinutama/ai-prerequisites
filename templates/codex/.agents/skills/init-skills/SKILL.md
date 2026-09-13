@@ -1,74 +1,76 @@
 ---
 name: init-skills
 description: >-
-  Install curated agentic-awesome-skills into this project, then optionally
-  install ui-ux-pro-max for UI/UX/frontend design intelligence. Usage: /init-skills
+  Install only the agentic-awesome-skills attached to Codex goal-loop agents,
+  then optionally install ui-ux-pro-max. Usage: $init-skills
 ---
 
 Read the project README and AGENTS.md to understand conventions first.
 
-This command installs a filtered subset of skills from
+This command installs an **exact skill list** from
 [agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills)
-into `.agents/skills/` at the **project level** (not global `~/.agents/skills`),
+into `.codex/skills/` at the **project level** (not global `~/.codex/skills`),
 then optionally installs
 [ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill).
+
+**Do not install by broad category.** Only install skills named in each agent's
+`## Related skills` section (union for recommended; per selected agents for custom).
+`ui-ux-pro-max` is never part of the `--skills` list — it is installed separately
+in step 3 when the user opts in.
+
+## Agent → skill map (source of truth)
+
+Read each `.codex/agents/<role>.toml` `## Related skills` section if present.
+Canonical map (exclude `ui-ux-pro-max` from the npx `--skills` install):
+
+| Agent | Skills (awesome-skills `--skills`) |
+|---|---|
+| `orchestrator` | `parallel-agents`, `multi-agent-patterns`, `verification-before-completion` |
+| `planner` | `brainstorming`, `concise-planning`, `writing-plans`, `architecture` |
+| `researcher` | `deep-research`, `research-prompt`, `documentation`, `documentation-templates`, `architecture`, `api-security-best-practices` |
+| `builder` | `test-driven-development`, `lint-and-validate`, `error-handling-patterns`, `api-endpoint-builder` |
+| `builder-expert` | `systematic-debugging`, `test-driven-development`, `lint-and-validate`, `architecture`, `error-handling-patterns`, `api-endpoint-builder` |
+| `reviewer` | `code-review-excellence`, `verification-before-completion`, `api-security-best-practices`, `systematic-debugging` |
+| `qa` | `e2e-testing-patterns`, `webapp-testing`, `browser-automation`, `test-driven-development`, `verification-before-completion`, `systematic-debugging`, `api-security-testing` |
+| `visual-reviewer` | `wcag-audit-patterns`, `frontend-design`, `webapp-testing` |
 
 Ask the user the following questions one at a time and wait for each answer:
 
 1. **Install mode** — Which install preset?
-   - `recommended` — installs skills for all goal-loop agents (orchestrator,
-     planner, builder, builder-expert, reviewer, visual-reviewer). **Default.**
-   - `custom` — pick categories, risk, and optional tags yourself.
+   - `recommended` — install the **union** of all agent-attached skills above (deduplicated). **Default.**
+   - `custom` — pick one or more agents; install only those agents' attached skills.
 
-   If `recommended`, install from the project root:
+   If `recommended`, compute the deduplicated union and install from the project root:
    ```bash
-   npx agentic-awesome-skills --path .codex/skills \
-     --category general,workflow,development,testing,architecture,security \
-     --risk safe,none
+   npx agentic-awesome-skills --path .codex/skills --skills \
+   parallel-agents,multi-agent-patterns,verification-before-completion,brainstorming,concise-planning,writing-plans,architecture,deep-research,research-prompt,documentation,documentation-templates,api-security-best-practices,test-driven-development,lint-and-validate,error-handling-patterns,api-endpoint-builder,systematic-debugging,code-review-excellence,e2e-testing-patterns,webapp-testing,browser-automation,api-security-testing,wcag-audit-patterns,frontend-design
    ```
-   Then skip to **After agentic-awesome-skills install** below. This installs the
-   categories that contain every skill the agents look for (slightly broader
-   than the exact list).
+   Do **not** pass `--category` or `--risk` for recommended — the skill list is exact.
+   Then skip to **After agentic-awesome-skills install** below.
 
-   If `custom`, continue with questions 2–4.
+   If `custom`, continue with question 2.
 
-2. **Categories** — Which skill categories to install? (multi-select, comma-separated)
-   - `architecture` — system design, patterns, ADRs
-   - `business` — product, PM, growth
-   - `data-ai` — ML, data pipelines, AI integrations
-   - `development` — coding, frameworks, languages
-   - `general` — utilities, debugging, planning
-   - `infrastructure` — DevOps, cloud, CI/CD
-   - `security` — audits, hardening, auth
-   - `testing` — QA, test automation, browser testing
-   - `workflow` — agent orchestration, handoffs, loops
+2. **Agents** (custom only) — Which agents' skills to install? (multi-select)
+   - `orchestrator`, `planner`, `researcher`, `builder`, `builder-expert`, `reviewer`, `qa`, `visual-reviewer`
+   - Or `all` (same as recommended)
 
-   Default if unsure: `development,general`
-
-3. **Risk filter** — Which risk levels to include?
-   - `safe,none` — recommended (default)
-   - Other values may exist; run `npx agentic-awesome-skills --help` to see options.
-
-   Default: `safe,none`
-
-4. **Tags** (optional) — Any tag refinement? (e.g. `typescript`, `react`)
-   - Skip if unsure.
-
-After collecting answers (custom mode only), install from the project root:
-```bash
-npx agentic-awesome-skills --path .codex/skills --category <categories> --risk <risk>
-```
-Add `--tags <tags>` only if the user provided tags.
+   Build a deduplicated comma-separated `--skills` list from the map for the selected agents only.
+   Install from the project root:
+   ```bash
+   npx agentic-awesome-skills --path .codex/skills --skills <comma-separated-skill-names>
+   ```
+   Do **not** pass `--category`.
 
 **After agentic-awesome-skills install:**
-1. List installed skills: `ls .agents/skills/*/SKILL.md`
+1. List installed skills: `ls .codex/skills/*/SKILL.md`
 2. Update `AGENTS.md` — find or create the `## Available skills` section and append
    any new skills not already listed, using the format:
    `- \`<skill-name>\` — <description from SKILL.md frontmatter>`
-   Skip `goal-loop` (already present). Do not duplicate existing entries.
+   Skip `goal-loop` / `goal` / `init-goal` / `init-skills` (already present). Do not duplicate existing entries.
+3. Report which skills were requested vs which actually landed (some names may be missing upstream).
 
-5. **UI/UX Pro Max** — Install design intelligence skill for UI/UX/frontend tasks
-   (84 styles, 192 color palettes, industry-specific design system generation)?
+3. **UI/UX Pro Max** — Install design intelligence skill for UI/UX/frontend tasks
+   (used by planner, builder, builder-expert, visual-reviewer)?
    From [ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill).
    - `no` — skip (default if the project has no frontend)
    - `yes` — continue:
@@ -80,17 +82,17 @@ Add `--tags <tags>` only if the user provided tags.
         ```bash
         npx -y ui-ux-pro-max-cli init --ai codex
         ```
-     3. Verify: `ls .agents/skills/ui-ux-pro-max/`
+     3. Verify: `ls .codex/skills/ui-ux-pro-max/` (or `.agents/skills/ui-ux-pro-max/` if the CLI wrote there — prefer `.codex/skills/`)
      4. Append `ui-ux-pro-max` to `AGENTS.md` `## Available skills` if not already listed:
         `- \`ui-ux-pro-max\` — design intelligence for UI/UX (styles, palettes, design system generation)`
 
-**Final summary:** Display categories installed, skill count, whether ui-ux-pro-max was
-installed, and how to invoke (e.g. ``$ui-ux-pro-max``).
+**Final summary:** Display agents covered, exact skill names requested, skill count installed,
+whether ui-ux-pro-max was installed, and how to invoke (e.g. ``$deep-research``).
 
 **Important:**
 - Skills are loaded by invoking `$skill-name`; do NOT load all SKILL.md files into context
   at once, and do not rely on `@mentions`.
-- Re-running `$init-skills` with different categories adds more skills (installer
-  merges into `.agents/skills/`).
+- Re-running `$init-skills` merges into `.codex/skills/` (exact `--skills` set is managed).
 - Requires network access and `npx` (Node.js >= 22).
 - `ui-ux-pro-max` design-system generation additionally requires `python3` (stdlib only).
+- If agent TOMLs gain or drop related skills later, update this map to match before re-running.

@@ -14,23 +14,27 @@ Figma PAT is stored in `.codex/figma.env` (gitignored as part of `.codex/`).
 
 Optionally run `/init-skills` to inject curated skills from
 [agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills)
-into `.codex/skills/` (project-level, filtered by category and risk), and
-optionally install [ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
+into `.codex/skills/` (project-level, **exact list per agent** — not whole
+categories), and optionally install
+[ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
 for UI/UX/frontend design intelligence.
-Use the **recommended** preset to install skills that goal-loop agents look for.
-Each agent loads related skills via OpenCode's native `skill` tool
-(`skill({ name: "<skill-name>" })`) when they appear in `available_skills`.
+Use the **recommended** preset to install only the skills each goal-loop agent
+lists under Related skills (deduplicated union). Custom mode installs skills for
+selected agents only.
+Each agent loads related skills via `$skill-name` when installed.
 Do not use `@mentions` or manually read `.codex/skills/*/SKILL.md`.
 If a skill is absent, the agent proceeds normally. Re-run `/init-skills` with
-**recommended** (includes `development`) to install skills like `api-endpoint-builder`.
+**recommended** after updating agent Related skills lists.
 
 | Agent | Related skills (when installed) |
 |---|---|
 | `orchestrator` | `parallel-agents`, `multi-agent-patterns`, `verification-before-completion` |
 | `planner` | `brainstorming`, `concise-planning`, `writing-plans`, `architecture`, `ui-ux-pro-max` |
+| `researcher` | `deep-research`, `research-prompt`, `documentation`, `documentation-templates`, `architecture`, `api-security-best-practices` |
 | `builder` | `test-driven-development`, `lint-and-validate`, `error-handling-patterns`, `api-endpoint-builder`, `ui-ux-pro-max` |
 | `builder-expert` | `systematic-debugging`, `test-driven-development`, `lint-and-validate`, `architecture`, `error-handling-patterns`, `api-endpoint-builder`, `ui-ux-pro-max` |
 | `reviewer` | `code-review-excellence`, `verification-before-completion`, `api-security-best-practices`, `systematic-debugging` |
+| `qa` | `e2e-testing-patterns`, `webapp-testing`, `browser-automation`, `test-driven-development`, `verification-before-completion`, `systematic-debugging`, `api-security-testing` |
 | `visual-reviewer` | `wcag-audit-patterns`, `frontend-design`, `webapp-testing`, `ui-ux-pro-max` |
 
 ### How to use
@@ -56,12 +60,14 @@ Goal source (configured via `/init-goal`):
 ### Agent roles
 | Agent | Role | Model | Effort |
 |---|---|---|---|
-| `orchestrator` | Manages the full loop | gpt-5.6 | medium |
-| `planner` | Architecture & plans — tags tasks @builder or @builder-expert | gpt-5.6 | high |
-| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | gpt-5.3-codex-spark | medium |
-| `builder-expert` | Complex execution (algorithms, concurrency, security, perf) | gpt-5.6 | high |
-| `reviewer` | Code review + inline PR comments | gpt-5.6-terra | high |
-| `visual-reviewer` | UI/multimodal review + inline PR comments | gpt-5.6 | medium |
+| `orchestrator` | Manages the full loop + harness | gpt-5.6-terra | low |
+| `planner` | Architecture & plans — emits route/research/risk signals | gpt-6-astra | high |
+| `researcher` | On-demand research (docs, APIs, unfamiliar tech) | gpt-5.6-terra | medium |
+| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | gpt-5.6-sol | medium |
+| `builder-expert` | Escalation-only complex execution | gpt-5.6-sol | high |
+| `reviewer` | Code review + inline PR comments | gpt-5.6-sol | medium |
+| `qa` | Behavior/business acceptance QA (conditional) | gpt-5.6-sol | medium |
+| `visual-reviewer` | UI/multimodal review + inline PR comments | gpt-5.6-terra | medium |
 
 `goal-models.json` is the single source of truth for models and capabilities.
 `init.sh` syncs `model` / `model_reasoning_effort` into each agent `.toml`
@@ -71,13 +77,31 @@ and registers roles in `.codex/config.toml`.
 |---|---|---|
 | `orchestrator` | no | text |
 | `planner` | no | text |
+| `researcher` | no | text |
 | `builder` | no | text |
 | `builder-expert` | no | text |
 | `reviewer` | no | text |
+| `qa` | no | text |
 | `visual-reviewer` | **yes** | text, image |
 
 Only `visual-reviewer` handles screenshots and image attachments. The
 orchestrator routes UI/visual review exclusively to that agent.
+
+### Harness, routes, and Definition of DONE
+Active goals carry a `harness` object on `state.json` (phase, tasks, gates,
+retries, QA findings). Orchestrator drives it via `goal-git.sh harness …`.
+
+Phases: `PLANNED` → `RESEARCHING?` → `BUILDING` → `ESCALATED?` → `VERIFYING` →
+`REVIEWING` → `QA?` → `VISUAL_REVIEW?` → `REWORK?` → `DONE` | `FAILED`.
+
+Routes (from `route detect` + planner override):
+- `backend` — PLAN, IMPLEMENTATION, VERIFICATION, REVIEW
+- `feature` — above + QA
+- `frontend` — above + VISUAL
+
+Gate status: `NOT_RUN | PASS | FAIL | SKIPPED | UNKNOWN`.
+`harness done` exits 0 only when every required gate is PASS or SKIPPED-with-reason.
+Retries (`rework`, `escalations`, `verify_retries`) hard-stop when limits are exceeded.
 
 ### Model routing
 Codex does not use the OpenCode fallback plugin. Per-agent models are pinned in
@@ -94,12 +118,14 @@ two layers:
    and re-spawns. Never downgrade `visual-reviewer` to a text-only model.
 
 ### Delegation
-The planner tags every task:
-- `@builder` — routine frontend/backend tasks.
-- `@builder-expert` — novel algorithms, concurrency, auth/security,
-  performance hot paths, complex state machines, distributed coordination.
+The planner tags every implementation task `@builder` and emits routing signals
+(`route`, `research_required`, `qa_required`, `visual_required`, `high_risk_areas`).
+`@builder-expert` is escalation-only — orchestrator spawns it when Builder is
+blocked, fails repeatedly, or a high-risk area needs deep reasoning — never as
+a default parallel worker.
 
-The orchestrator delegates tasks to the tagged agent automatically.
+`@researcher` and `@qa` are on-demand / conditional. Verification is deterministic
+via `goal-git.sh verify run` (not an LLM claim).
 
 When `concurrency` > 1 (set via `/init-goal`), the planner groups independent
 tasks into concurrency batches. The orchestrator spawns parallel builders in
@@ -154,7 +180,17 @@ MUST go through `.codex/scripts/goal-git.sh`:
 .codex/scripts/goal-git.sh review iterate [repo_path]
 .codex/scripts/goal-git.sh merge              # merge PR/MR (when auto_merge enabled)
 .codex/scripts/goal-git.sh state complete     # mark goal completed
-.codex/scripts/goal-git.sh analyze            # npx gitnexus analyze && rtk gain
+.codex/scripts/goal-git.sh analyze            # npx gitnexus analyze && rtk gain (also a verify check)
+.codex/scripts/goal-git.sh verify detect      # detect project verification commands
+.codex/scripts/goal-git.sh verify run [--only a,b]  # deterministic verification (authority for VERIFICATION gate)
+.codex/scripts/goal-git.sh route detect       # classify backend|feature|frontend
+.codex/scripts/goal-git.sh harness init --route <r>
+.codex/scripts/goal-git.sh harness phase <STATE>
+.codex/scripts/goal-git.sh harness task add|set …
+.codex/scripts/goal-git.sh harness gate <NAME> <STATUS> [reason]
+.codex/scripts/goal-git.sh harness retry <rework|escalations|verify_retries>
+.codex/scripts/goal-git.sh harness qa add|pending
+.codex/scripts/goal-git.sh harness status|done
 .codex/scripts/goal-git.sh status             # working tree status
 .codex/scripts/goal-git.sh restore <file>...  # restore files to HEAD
 .codex/scripts/goal-git.sh diff               # diff against base branch
@@ -183,28 +219,22 @@ Launch Codex with Figma secrets loaded:
 
 ### Review loop
 - The **orchestrator never edits application source** — it only delegates `@builder` /
-  `@builder-expert` to fix review findings.
-- Builders must finish with a structured **Handoff** (`status`, `files_staged`, `analyze`, `notes`)
-  after staging changes and passing `goal-git.sh analyze`. They do not commit or push.
+  `@builder-expert` (escalation) to fix review findings.
+- Builders must finish with a structured **Handoff** after staging changes.
+  They do not commit or push. Orchestrator runs `verify run` as the authority
+  for the VERIFICATION gate (not an LLM claim).
 - After a builder returns `FIXES_COMPLETE`, the orchestrator **immediately** resumes —
-  no user input — with ANALYZE → commit → push → **mandatory re-delegate reviewers**.
+  no user input — with VERIFY → commit → push → **mandatory re-delegate reviewers**.
   Never idle in REVIEW LOOP. Never skip re-review because `pending` or `review pending` is already 0.
+- Rework / escalation / verify retries go through `harness retry`; exceeding limits
+  fails the harness cleanly (`FAILED`).
 - **Only reviewers resolve threads** — the orchestrator must never run
-  `goal-git.sh resolve` or `goal-git.sh comment`. Reviewers resolve after confirming fixes.
-- After code changes, run `.codex/scripts/goal-git.sh analyze` (gitnexus + rtk gain).
-  If it fails, STOP.
-- Reviewers post inline comments on the PR/MR and **must** resolve fixed threads via
-  `goal-git.sh resolve <thread-id>` (GraphQL id from `threads`, e.g. `PRRT_...`) with
-  **exit 0** before claiming LGTM. **`outdated: true` is not resolved** — only `resolved: true`
-  after a successful `resolve` call counts as clean. `goal-git.sh resolve` fails loudly on GraphQL/API errors.
-  Each pass ends with a structured **Review report** (`threads_resolved`, `comments_posted`, `remaining_unresolved`, `verdict`).
-- For UI/visual goals, the planner requires `@visual-reviewer`; the orchestrator always
-  delegates visual review when the plan says so, Figma is enabled, or UI files changed.
-- Run `.codex/scripts/goal-git.sh pending` (inline) or `review pending` (local) to check review status.
-- Loop until exit 0 (zero unresolved threads).
+  `goal-git.sh resolve` or `goal-git.sh comment`.
+- Conditional `@qa` and `@visual-reviewer` run only when the route / planner signals require them.
+- DONE requires `harness done` exit 0 before `state complete`.
 - When `auto_merge` is `false` (default), report "Ready for manual merge" — never claim merged.
 - When `auto_merge` is `true`, orchestrator runs `.codex/scripts/goal-git.sh merge` after
-  `pending` exit 0; on conflict, stop and report (do not auto-resolve conflicts).
+  clean review; on conflict, stop and report (do not auto-resolve conflicts).
 
 ### Jira goal source
 When `goal_source` is `jira`, the Atlassian MCP must be connected in `.codex/mcp.json`.

@@ -51,6 +51,10 @@ $goal Add a health-check endpoint
 Codex removed custom prompts in 0.117.0. Entry points are skills invoked with
 `$goal`, `$init-goal`, `$init-skills` — not slash commands.
 
+Codex includes an expanded harness (`goal-git.sh harness|verify|route`),
+deterministic verification, and two extra agents (`researcher`, `qa`) beyond
+the shared six-agent core.
+
 ### Qoder
 ```bash
 ./init.sh --qoder /path/to/your/project
@@ -95,9 +99,10 @@ Shared across every target: `state.json` (gitignored, project root),
 | Codex | `AGENTS.md`, `.codex/` (TOML agents, scripts, `config.toml`), `.agents/skills/` | `$goal` |
 | Qoder | `AGENTS.md`, `.qoder/` (agents, commands, skills, scripts), `.qoder/settings.json` (Figma MCP) | `/goal-arch` (not built-in `/goal`) |
 
-Each tree includes the same 6 agents (`planner`, `builder`, `builder-expert`,
+Each tree includes the same core 6 agents (`planner`, `builder`, `builder-expert`,
 `reviewer`, `visual-reviewer`, `orchestrator`), `goal-git.sh`, `goal-models.json`,
-and the `goal-loop` skill.
+and the `goal-loop` skill. **Codex** also ships `researcher` and `qa`, plus
+harness / verify / route commands on its private `goal-git.sh`.
 
 ## Commands
 
@@ -313,20 +318,22 @@ filter: `safe,none`.
 
 | Agent | Role | OpenCode | Claude | Cursor | Codex | Qoder |
 |---|---|---|---|---|---|---|
-| `planner` | Architecture & plans — tags tasks @builder or @builder-expert | `opencode-go/qwen3.7-max` | `opus` | inherit | inherit, high effort, read-only sandbox | performance |
-| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | inherit, medium effort | efficient |
-| `builder-expert` | Complex execution (algorithms, concurrency, security, perf) | `opencode-go/kimi-k2.7-code` | `opus` | inherit | inherit, high effort | performance |
-| `reviewer` | Code review + inline PR comments | `opencode-go/deepseek-v4-pro` | `opus` | inherit | inherit, high effort | performance |
-| `orchestrator` | Workflow manager | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | inherit, medium effort | efficient |
-| `visual-reviewer` | UI/multimodal review + inline PR comments | `opencode-go/mimo-v2.5-pro` | `sonnet` | inherit | inherit, medium effort | inherit |
+| `planner` | Architecture & plans | `opencode-go/qwen3.7-max` | `opus` | inherit | `gpt-6-astra`, high, read-only | performance |
+| `researcher` | On-demand research (Codex only) | — | — | — | `gpt-5.6-terra`, medium, read-only | — |
+| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | `gpt-5.6-sol`, medium | efficient |
+| `builder-expert` | Complex execution (Codex: escalation-only) | `opencode-go/kimi-k2.7-code` | `opus` | inherit | `gpt-5.6-sol`, high | performance |
+| `reviewer` | Code review + inline PR comments | `opencode-go/deepseek-v4-pro` | `opus` | inherit | `gpt-5.6-sol`, medium | performance |
+| `qa` | Behavior/business QA (Codex only, conditional) | — | — | — | `gpt-5.6-sol`, medium | — |
+| `orchestrator` | Workflow manager | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | `gpt-5.6-terra`, low | efficient |
+| `visual-reviewer` | UI/multimodal review + inline PR comments | `opencode-go/mimo-v2.5-pro` | `sonnet` | inherit | `gpt-5.6-terra`, medium | inherit |
 
 Every agent operates in `/ponytail full` mode.
 
 ### Delegation
-The planner tags every task:
-- `@builder` — routine frontend/backend tasks.
-- `@builder-expert` — novel algorithms, concurrency, auth/security,
-  performance hot paths, complex state machines, distributed coordination.
+On most platforms the planner tags every task `@builder` or `@builder-expert`.
+**Codex** tags implementation tasks `@builder` only; `@builder-expert` is an
+escalation path, and `@researcher` / `@qa` are conditional. Codex verification
+is deterministic (`goal-git.sh verify run`).
 
 The orchestrator delegates automatically (OpenCode `@mentions`, Cursor/Claude/Qoder
 subagent launch, Codex `spawn_agent` with `agent_type`).
@@ -338,10 +345,11 @@ The loop is the same. These are the harness limits:
 - **Codex has no slash commands.** Custom prompts were removed in CLI 0.117.0. Use `$goal`.
 - **Codex CLI 0.138.0+** is required. 0.137.0 hid `agent_type` from `spawn_agent`, which blocks custom-agent delegation.
 - **Codex `.codex/config.toml` loads only for trusted projects.** Without trust, `max_depth`, network access, and the Figma MCP block are ignored. Confirm with `/status` after first launch.
+- **Codex harness** (`harness` / `verify` / `route` on `goal-git.sh`) and the `researcher` / `qa` agents are Codex-only; other platforms keep the prior six-agent loop.
 - **Codex and Cursor cannot machine-enforce `edit: deny`** on `orchestrator`, `reviewer`, or `visual-reviewer`. That rule is prompt-enforced. (Claude Code uses a `tools` allowlist; OpenCode uses `permission.edit: deny`.)
 - **Goal-loop installs auto-approve tool prompts** (paths, bash, MCP) on all five targets so agents are not interrupted for permission dialogs. Orchestrator/planner/reviewer still cannot edit application source via role tool limits.
 - **Cursor allows two levels of subagent nesting.** `/goal` (main) → `orchestrator` → `builder` fits; builders must never spawn subagents.
-- **Model fallback is OpenCode-only.**
+- **Model fallback is OpenCode-only** for automatic plugin fallbacks; Codex uses `goal-git.sh models <role> --next` at spawn time.
 - **Cursor and Codex have no `$ARGUMENTS` expansion.** Command skills read the text typed after `/goal` or `$goal` from the user message.
 - **Installing `--cursor` and `--codex` together** surfaces the four goal skills twice in Cursor, because Cursor also scans `.agents/skills/`.
 

@@ -838,12 +838,12 @@ print_tree() {
       echo "    └── goal-models.json"
       ;;
     codex)
-      echo "├── state.json          (gitignored, created at runtime)"
+      echo "├── state.json          (gitignored, created at runtime; includes harness)"
       echo "├── AGENTS.md           (gitignored)"
       echo "├── .agents/skills/     (\$goal, \$init-goal, \$init-skills, goal-loop)"
       echo "└── .codex/             (gitignored)"
-      echo "    ├── agents/         (6 specialized agents, TOML)"
-      echo "    ├── scripts/        (goal-git.sh, run-codex.sh)"
+      echo "    ├── agents/         (8 specialized agents, TOML)"
+      echo "    ├── scripts/        (goal-git.sh harness/verify/route, run-codex.sh)"
       echo "    ├── config.toml     (agents + multi_agent_v2 model routing, Figma MCP)"
       echo "    └── goal-models.json"
       ;;

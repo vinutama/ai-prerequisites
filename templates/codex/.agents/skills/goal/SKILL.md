@@ -61,16 +61,17 @@ $goal --continue fix the healthcheck API            # active goal + new instruct
 5. Otherwise skip branch creation — you are on the goal's branch.
 6. If an instruction was parsed, pass it to `@planner` as the primary objective for
    this pass (does NOT overwrite the stored goal in `state.json`).
-7. **Plan → Build → Analyze → Review → Loop until done**:
+7. **Plan → Build → Verify → Review → QA? → Visual? → Loop until done**:
    - Check if state.json has `repos` with more than one entry.
+   - Follow harness protocol in the orchestrator agent (phase/gate/retry/done).
    - **Multi-repo mode (repos > 1)**:
      - For each repo in `state.json` repos: cd into the repo and checkout the branch listed in state.
      - Read full `state.json` (`.codex/scripts/goal-git.sh state`).
      - Delegate `@planner` ONCE with the full state (all repos, active goal) — planner produces repo-tagged tasks in dependency batches.
-     - For each batch: for each task with a `[repo-name]` tag, `cd <repo-path> && delegate @builder` (or `@builder-expert`) scoped to that repo. Builders in same batch can run in parallel.
-     - After batch: for each repo that had changes, cd into repo, commit, push, create/update PR, delegate `@reviewer` scoped to that repo, run review loop.
-   - **Single-repo mode (repos ≤ 1 or no repos field)**: follow existing Plan → Build → Analyze → Review → Loop flow unchanged.
-8. Report ALL PR URLs across all repos (multi-repo) or the single PR URL.
+     - For each batch: for each task with a `[repo-name]` tag, `cd <repo-path> && delegate @builder` scoped to that repo. Escalate to `@builder-expert` only when blocked/high-risk.
+     - After batch: for each repo that had changes, verify → commit → push → create/update PR → review loop (and conditional QA/visual).
+   - **Single-repo mode (repos ≤ 1 or no repos field)**: follow Plan → Build → Verify → Review → (QA/Visual) → Loop flow.
+8. Require `harness done` exit 0 before reporting success. Report ALL PR URLs.
 
 ### `$goal <objective>` (new goal)
 1. Determine `goal_source`: check if the user message remainder begins with `--source <type>`. If so, pop both tokens and validate `<type>` is one of `jira|markdown|prompt|issues`. Use it as the effective `goal_source` for this invocation (overrides config). Otherwise read from `.codex/scripts/goal-git.sh config get` (field `goal_source`). If no config exists, treat as `prompt`.
@@ -108,6 +109,12 @@ $goal --continue fix the healthcheck API            # active goal + new instruct
         Branch becomes `{task_type}/{TICKET}-{slug}` (e.g. `feat/DEL-4123-add-health-check`).
 3. For `prompt` and `markdown` only: run `GOAL_SOURCE_OVERRIDE=<effective_source> .codex/scripts/goal-git.sh start "<resolved goal>"` (branch `goal/<slug>`).
    For `jira`, start was already called in step 2.
+3b. After start (or continue), initialize harness routing:
+   ```bash
+   .codex/scripts/goal-git.sh route detect
+   .codex/scripts/goal-git.sh harness init --route <backend|feature|frontend>
+   ```
+   Planner may override the route in its Routing section; re-init or set gates accordingly.
 4. **Multi-repo orchestration (when repos > 1 in config)**:
    - Read repos from `state.json` (`.codex/scripts/goal-git.sh state | jq '.repos'`).
    - Delegate `@planner` ONCE (planner sees ALL repos, produces repo-tagged tasks in dependency batches).

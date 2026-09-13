@@ -16,7 +16,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-log()  { echo -e "${GREEN}[goal]${NC} $*"; }
+log()  { echo -e "${GREEN}[goal]${NC} $*" >&2; }
 warn() { echo -e "${YELLOW}[goal]${NC} $*" >&2; }
 err()  { echo -e "${RED}[goal]${NC} $*" >&2; }
 
@@ -37,11 +37,24 @@ Commands:
   comment <path> <line> <body>  Post inline review comment
   resolve <thread-id>       Resolve a review thread/discussion
   analyze                   Run gitnexus analyze && rtk gain
+  verify detect             Detect project verification commands (JSON)
+  verify run [--only a,b]   Run deterministic verification checks
+  route detect              Classify route: backend|feature|frontend
+  harness init [--route r]  Seed harness object on active goal
+  harness phase <STATE>     Transition harness phase (validated)
+  harness task add <role> <title> [--parent tN]
+  harness task set <id> <state>
+  harness gate <NAME> <STATUS> [reason]
+  harness retry <counter>   Increment retry counter (exit 1 if limit exceeded)
+  harness qa add <scenario> <PASS|FAIL> <note>
+  harness qa pending        Exit 1 if any QA scenario failed
+  harness status            Print harness object
+  harness done              Exit 0 only when route gates pass
   selfcheck                 Run platform detection self-check
   models                    Print full goal-models.json
   models <role>             Print model, effort, and fallbacks for a role (TAB-separated)
   models <role> --next <m>  Print next fallback after model <m> (exit 1 if exhausted)
-  config set <source> <target> <platform> [concurrency] [auto_merge] [review_mode] [review_max_iterations]  Write goal-config.json
+  config set <source> <target> <platform> [concurrency] [auto_merge] [review_mode] [review_max_iterations] [max_rework] [max_escalations] [max_verify_retries] [qa_mode] [visual_mode]
   config get                Print goal-config.json
   state                     Print active goal JSON from state.json
   state complete            Mark active goal status as completed
@@ -790,7 +803,7 @@ cmd_analyze() {
   refresh_goal_idx
   local wd
   wd="$(goal_workdir)"
-  (cd "$wd" || true)
+  cd "$wd" || { err "Cannot cd into goal workdir: $wd"; exit 1; }
   log "Running gitnexus analyze…"
   npx --yes gitnexus@latest analyze || { err "gitnexus analyze failed"; exit 1; }
   log "Running rtk gain…"
@@ -974,9 +987,10 @@ cmd_figma_status() {
 cmd_config_set() {
   require_cmd jq
   local source="${1:-}" target="${2:-}" plat="${3:-}" concurrency="${4:-1}" auto_merge="${5:-false}" review_mode="${6:-inline}" review_max_iterations="${7:-5}"
+  local max_rework="${8:-3}" max_escalations="${9:-2}" max_verify_retries="${10:-3}" qa_mode="${11:-auto}" visual_mode="${12:-auto}"
 
   [ -z "$source" ] || [ -z "$target" ] || [ -z "$plat" ] && {
-    err "config set requires: <goal_source> <target_branch> <platform> [concurrency] [auto_merge] [review_mode] [review_max_iterations]"
+    err "config set requires: <goal_source> <target_branch> <platform> [concurrency] [auto_merge] [review_mode] [review_max_iterations] [max_rework] [max_escalations] [max_verify_retries] [qa_mode] [visual_mode]"
     exit 1
   }
 
@@ -1010,6 +1024,24 @@ cmd_config_set() {
     exit 1
   fi
 
+  for pair in "max_rework:$max_rework" "max_escalations:$max_escalations" "max_verify_retries:$max_verify_retries"; do
+    local k="${pair%%:*}" v="${pair#*:}"
+    if ! [[ "$v" =~ ^[0-9]+$ ]] || [ "$v" -lt 1 ]; then
+      err "$k must be a positive integer"
+      exit 1
+    fi
+  done
+
+  case "$qa_mode" in
+    auto|always|never) ;;
+    *) err "qa_mode must be: auto, always, or never"; exit 1 ;;
+  esac
+
+  case "$visual_mode" in
+    auto|always|never) ;;
+    *) err "visual_mode must be: auto, always, or never"; exit 1 ;;
+  esac
+
   local auto_merge_json
   auto_merge_json=$( [ "$auto_merge" = "true" ] && echo true || echo false )
 
@@ -1020,16 +1052,26 @@ cmd_config_set() {
       --arg target "$target" \
       --arg platform "$plat" \
       --arg review_mode "$review_mode" \
+      --arg qa_mode "$qa_mode" \
+      --arg visual_mode "$visual_mode" \
       --argjson concurrency "$concurrency" \
       --argjson auto_merge "$auto_merge_json" \
       --argjson review_max_iterations "$review_max_iterations" \
+      --argjson max_rework "$max_rework" \
+      --argjson max_escalations "$max_escalations" \
+      --argjson max_verify_retries "$max_verify_retries" \
       '.goal_source = $source
        | .target_branch = $target
        | .platform = $platform
        | .concurrency = $concurrency
        | .auto_merge = $auto_merge
        | .review_mode = $review_mode
-       | .review_max_iterations = $review_max_iterations' \
+       | .review_max_iterations = $review_max_iterations
+       | .max_rework = $max_rework
+       | .max_escalations = $max_escalations
+       | .max_verify_retries = $max_verify_retries
+       | .qa_mode = $qa_mode
+       | .visual_mode = $visual_mode' \
       "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
   else
     jq -n \
@@ -1037,9 +1079,14 @@ cmd_config_set() {
       --arg target "$target" \
       --arg platform "$plat" \
       --arg review_mode "$review_mode" \
+      --arg qa_mode "$qa_mode" \
+      --arg visual_mode "$visual_mode" \
       --argjson concurrency "$concurrency" \
       --argjson auto_merge "$auto_merge_json" \
       --argjson review_max_iterations "$review_max_iterations" \
+      --argjson max_rework "$max_rework" \
+      --argjson max_escalations "$max_escalations" \
+      --argjson max_verify_retries "$max_verify_retries" \
       '{
         goal_source: $source,
         target_branch: $target,
@@ -1048,6 +1095,11 @@ cmd_config_set() {
         auto_merge: $auto_merge,
         review_mode: $review_mode,
         review_max_iterations: $review_max_iterations,
+        max_rework: $max_rework,
+        max_escalations: $max_escalations,
+        max_verify_retries: $max_verify_retries,
+        qa_mode: $qa_mode,
+        visual_mode: $visual_mode,
         figma_enabled: false
       }' \
       > "$CONFIG_FILE"
@@ -1784,6 +1836,726 @@ cmd_selfcheck() {
   log "selfcheck: complete"
 }
 
+# --- Harness / Verify / Route ---
+
+harness_require() {
+  require_active_goal
+  require_cmd jq
+  refresh_goal_idx
+  if ! jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness' "$STATE_FILE" >/dev/null 2>&1; then
+    err "No harness on active goal — run 'harness init' first"
+    exit 1
+  fi
+}
+
+harness_get() {
+  jq --argjson idx "$GOAL_IDX" '.[$idx].harness' "$STATE_FILE"
+}
+
+harness_put() {
+  local harness_json="$1"
+  jq --argjson idx "$GOAL_IDX" --argjson h "$harness_json" \
+    '.[$idx].harness = $h' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+}
+
+harness_append_event() {
+  local event="$1"
+  local ts
+  ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  jq --argjson idx "$GOAL_IDX" --arg ts "$ts" --arg event "$event" \
+    '.[$idx].harness.events += [{ts: $ts, event: $event}]' \
+    "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+}
+
+harness_phase_allowed() {
+  local from="$1" to="$2"
+  case "${from}->${to}" in
+    "PLANNED->RESEARCHING"|"PLANNED->BUILDING") return 0 ;;
+    "RESEARCHING->BUILDING") return 0 ;;
+    "BUILDING->ESCALATED"|"BUILDING->VERIFYING") return 0 ;;
+    "ESCALATED->BUILDING") return 0 ;;
+    "VERIFYING->REWORK"|"VERIFYING->REVIEWING") return 0 ;;
+    "REVIEWING->REWORK"|"REVIEWING->QA"|"REVIEWING->DONE"|"REVIEWING->VISUAL_REVIEW") return 0 ;;
+    "QA->REWORK"|"QA->VISUAL_REVIEW"|"QA->DONE") return 0 ;;
+    "VISUAL_REVIEW->REWORK"|"VISUAL_REVIEW->DONE") return 0 ;;
+    "REWORK->BUILDING"|"REWORK->FAILED") return 0 ;;
+    *)
+      [ "$to" = "FAILED" ] && return 0
+      return 1
+      ;;
+  esac
+}
+
+cmd_harness_init() {
+  require_active_goal
+  require_cmd jq
+  refresh_goal_idx
+
+  local route="feature"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --route)
+        route="${2:-}"
+        shift 2
+        ;;
+      *)
+        err "Unknown harness init arg: $1"
+        exit 1
+        ;;
+    esac
+  done
+
+  case "$route" in
+    backend|feature|frontend) ;;
+    *) err "route must be: backend, feature, or frontend"; exit 1 ;;
+  esac
+
+  local max_rework max_escalations max_verify_retries
+  max_rework="$(config_read max_rework)"; max_rework="${max_rework:-3}"
+  max_escalations="$(config_read max_escalations)"; max_escalations="${max_escalations:-2}"
+  max_verify_retries="$(config_read max_verify_retries)"; max_verify_retries="${max_verify_retries:-3}"
+
+  local harness
+  harness="$(jq -n \
+    --arg route "$route" \
+    --argjson max_rework "$max_rework" \
+    --argjson max_escalations "$max_escalations" \
+    --argjson max_verify_retries "$max_verify_retries" \
+    '{
+      phase: "PLANNED",
+      route: $route,
+      tasks: [],
+      gates: {
+        PLAN: {status: "NOT_RUN"},
+        IMPLEMENTATION: {status: "NOT_RUN"},
+        VERIFICATION: {status: "NOT_RUN"},
+        REVIEW: {status: "NOT_RUN"},
+        QA: {status: "NOT_RUN"},
+        VISUAL: {status: "NOT_RUN"}
+      },
+      qa_findings: [],
+      counters: {rework: 0, escalations: 0, verify_retries: 0},
+      limits: {
+        max_rework: $max_rework,
+        max_escalations: $max_escalations,
+        max_verify_retries: $max_verify_retries
+      },
+      events: []
+    }')"
+
+  case "$route" in
+    backend)
+      harness="$(echo "$harness" | jq '.gates.QA = {status:"SKIPPED",reason:"backend route — no business QA"} | .gates.VISUAL = {status:"SKIPPED",reason:"backend route — no UI"}')"
+      ;;
+    feature)
+      harness="$(echo "$harness" | jq '.gates.VISUAL = {status:"SKIPPED",reason:"feature route — no UI visual review"}')"
+      ;;
+  esac
+
+  harness_put "$harness"
+  harness_append_event "init route=$route"
+  log "Harness initialized (route=$route, phase=PLANNED)"
+  harness_get
+}
+
+cmd_harness_phase() {
+  harness_require
+  local to="${1:-}"
+  [ -z "$to" ] && { err "harness phase requires <STATE>"; exit 1; }
+
+  case "$to" in
+    PLANNED|RESEARCHING|BUILDING|ESCALATED|VERIFYING|REVIEWING|QA|VISUAL_REVIEW|REWORK|DONE|FAILED) ;;
+    *) err "Invalid phase: $to"; exit 1 ;;
+  esac
+
+  local from
+  from="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.phase' "$STATE_FILE")"
+
+  if [ "$from" = "$to" ]; then
+    log "Harness already in phase $to"
+    return 0
+  fi
+
+  if ! harness_phase_allowed "$from" "$to"; then
+    err "Illegal phase transition: $from -> $to"
+    exit 1
+  fi
+
+  jq --argjson idx "$GOAL_IDX" --arg to "$to" \
+    '.[$idx].harness.phase = $to' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  harness_append_event "phase $from -> $to"
+  log "Harness phase: $from -> $to"
+}
+
+cmd_harness_task_add() {
+  harness_require
+  local role="${1:-}" title="${2:-}" parent=""
+  shift 2 || true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --parent) parent="${2:-}"; shift 2 ;;
+      *) err "Unknown harness task add arg: $1"; exit 1 ;;
+    esac
+  done
+
+  [ -z "$role" ] || [ -z "$title" ] && { err "harness task add requires <role> <title>"; exit 1; }
+
+  local id
+  id="$(jq -r --argjson idx "$GOAL_IDX" '
+    .[$idx].harness.tasks | length as $n
+    | "t" + (($n + 1) | tostring)
+  ' "$STATE_FILE")"
+
+  local parent_json="null"
+  [ -n "$parent" ] && parent_json="$(jq -n --arg p "$parent" '$p')"
+
+  jq --argjson idx "$GOAL_IDX" \
+    --arg id "$id" \
+    --arg role "$role" \
+    --arg title "$title" \
+    --argjson parent "$parent_json" \
+    '.[$idx].harness.tasks += [{
+      id: $id,
+      parent: $parent,
+      role: $role,
+      title: $title,
+      state: "PENDING",
+      attempts: 0
+    }]' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+
+  harness_append_event "task add $id role=$role"
+  printf '%s\n' "$id"
+}
+
+cmd_harness_task_set() {
+  harness_require
+  local id="${1:-}" state="${2:-}"
+  [ -z "$id" ] || [ -z "$state" ] && { err "harness task set requires <id> <state>"; exit 1; }
+
+  if ! jq -e --argjson idx "$GOAL_IDX" --arg id "$id" \
+    '.[$idx].harness.tasks | any(.id == $id)' "$STATE_FILE" >/dev/null; then
+    err "Unknown task id: $id"
+    exit 1
+  fi
+
+  jq --argjson idx "$GOAL_IDX" --arg id "$id" --arg state "$state" '
+    .[$idx].harness.tasks |= map(
+      if .id == $id then
+        .state = $state
+        | if $state == "RUNNING" then .attempts += 1 else . end
+      else . end
+    )
+  ' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+
+  harness_append_event "task set $id=$state"
+  log "Task $id -> $state"
+}
+
+cmd_harness_gate() {
+  harness_require
+  local name="${1:-}" status="${2:-}" reason="${3:-}"
+  [ -z "$name" ] || [ -z "$status" ] && { err "harness gate requires <NAME> <STATUS> [reason]"; exit 1; }
+
+  case "$name" in
+    PLAN|IMPLEMENTATION|VERIFICATION|REVIEW|QA|VISUAL) ;;
+    *) err "Unknown gate: $name"; exit 1 ;;
+  esac
+
+  case "$status" in
+    NOT_RUN|PASS|FAIL|SKIPPED|UNKNOWN) ;;
+    *) err "Gate status must be: NOT_RUN, PASS, FAIL, SKIPPED, UNKNOWN"; exit 1 ;;
+  esac
+
+  if [ "$status" = "FAIL" ] || [ "$status" = "SKIPPED" ]; then
+    [ -z "$reason" ] && { err "FAIL and SKIPPED require a reason"; exit 1; }
+  fi
+
+  if [ -n "$reason" ]; then
+    jq --argjson idx "$GOAL_IDX" --arg name "$name" --arg status "$status" --arg reason "$reason" \
+      '.[$idx].harness.gates[$name] = {status: $status, reason: $reason}' \
+      "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  else
+    jq --argjson idx "$GOAL_IDX" --arg name "$name" --arg status "$status" \
+      '.[$idx].harness.gates[$name] = {status: $status}' \
+      "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  fi
+
+  harness_append_event "gate $name=$status${reason:+ ($reason)}"
+  log "Gate $name -> $status"
+}
+
+cmd_harness_retry() {
+  harness_require
+  local counter="${1:-}"
+  [ -z "$counter" ] && { err "harness retry requires <rework|escalations|verify_retries>"; exit 1; }
+
+  local field limit_field
+  case "$counter" in
+    rework) field="rework"; limit_field="max_rework" ;;
+    escalations) field="escalations"; limit_field="max_escalations" ;;
+    verify_retries) field="verify_retries"; limit_field="max_verify_retries" ;;
+    *) err "counter must be: rework, escalations, or verify_retries"; exit 1 ;;
+  esac
+
+  local next limit
+  next="$(jq -r --argjson idx "$GOAL_IDX" --arg f "$field" \
+    '.[$idx].harness.counters[$f] + 1' "$STATE_FILE")"
+  limit="$(jq -r --argjson idx "$GOAL_IDX" --arg lf "$limit_field" \
+    '.[$idx].harness.limits[$lf]' "$STATE_FILE")"
+
+  jq --argjson idx "$GOAL_IDX" --arg f "$field" --argjson n "$next" \
+    '.[$idx].harness.counters[$f] = $n' \
+    "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+
+  harness_append_event "retry $field=$next (limit=$limit)"
+
+  if [ "$next" -gt "$limit" ]; then
+    err "Retry limit exceeded for $field: $next > $limit"
+    exit 1
+  fi
+
+  log "Retry $field: $next / $limit"
+}
+
+cmd_harness_qa_add() {
+  harness_require
+  local scenario="${1:-}" result="${2:-}" note="${3:-}"
+  [ -z "$scenario" ] || [ -z "$result" ] && { err "harness qa add requires <scenario> <PASS|FAIL> <note>"; exit 1; }
+  case "$result" in
+    PASS|FAIL) ;;
+    *) err "QA result must be PASS or FAIL"; exit 1 ;;
+  esac
+  [ -z "$note" ] && note=""
+
+  local id
+  id="$(jq -r --argjson idx "$GOAL_IDX" '
+    .[$idx].harness.qa_findings | length as $n
+    | "q" + (($n + 1) | tostring)
+  ' "$STATE_FILE")"
+
+  jq --argjson idx "$GOAL_IDX" \
+    --arg id "$id" \
+    --arg scenario "$scenario" \
+    --arg result "$result" \
+    --arg note "$note" \
+    '.[$idx].harness.qa_findings += [{id: $id, scenario: $scenario, result: $result, note: $note}]' \
+    "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+
+  harness_append_event "qa $id $result $scenario"
+  printf '%s\n' "$id"
+}
+
+cmd_harness_qa_pending() {
+  harness_require
+  local failed
+  failed="$(jq -r --argjson idx "$GOAL_IDX" \
+    '[.[$idx].harness.qa_findings[] | select(.result == "FAIL")] | length' "$STATE_FILE")"
+  jq --argjson idx "$GOAL_IDX" \
+    '{total: (.[$idx].harness.qa_findings | length), failed: ([.[$idx].harness.qa_findings[] | select(.result == "FAIL")] | length)}' \
+    "$STATE_FILE"
+  [ "$failed" -eq 0 ] || exit 1
+}
+
+cmd_harness_status() {
+  harness_require
+  harness_get
+}
+
+cmd_harness_done() {
+  harness_require
+  local route required
+  route="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.route' "$STATE_FILE")"
+
+  case "$route" in
+    backend) required='["PLAN","IMPLEMENTATION","VERIFICATION","REVIEW"]' ;;
+    feature) required='["PLAN","IMPLEMENTATION","VERIFICATION","REVIEW","QA"]' ;;
+    frontend) required='["PLAN","IMPLEMENTATION","VERIFICATION","REVIEW","QA","VISUAL"]' ;;
+    *) err "Unknown harness route: $route"; exit 1 ;;
+  esac
+
+  local blockers
+  blockers="$(jq -r --argjson idx "$GOAL_IDX" --argjson req "$required" '
+    .[$idx].harness.gates as $g
+    | $req
+    | map(
+        . as $name
+        | $g[$name] as $gate
+        | if ($gate.status == "PASS") then empty
+          elif ($gate.status == "SKIPPED" and (($gate.reason // "") | length) > 0) then empty
+          else {gate: $name, status: ($gate.status // "NOT_RUN"), reason: ($gate.reason // "")}
+          end
+      )
+  ' "$STATE_FILE")"
+
+  local count
+  count="$(echo "$blockers" | jq "length")"
+  if [ "$count" -gt 0 ]; then
+    err "Definition of DONE not met — blocking gates:"
+    echo "$blockers" | jq .
+    exit 1
+  fi
+
+  local phase
+  phase="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.phase' "$STATE_FILE")"
+  if [ "$phase" != "DONE" ]; then
+    if harness_phase_allowed "$phase" "DONE"; then
+      jq --argjson idx "$GOAL_IDX" '.[$idx].harness.phase = "DONE"' \
+        "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+      harness_append_event "phase $phase -> DONE (harness done)"
+    else
+      err "Cannot mark DONE from phase $phase — transition to DONE first or fix gates"
+      exit 1
+    fi
+  fi
+
+  log "Harness DONE — all required gates passed"
+  harness_get
+}
+
+cmd_harness() {
+  local sub="${1:-}"
+  shift || true
+  case "$sub" in
+    init) cmd_harness_init "$@" ;;
+    phase) cmd_harness_phase "$@" ;;
+    task)
+      case "${1:-}" in
+        add) shift; cmd_harness_task_add "$@" ;;
+        set) shift; cmd_harness_task_set "$@" ;;
+        *) err "harness task subcommand must be add or set"; exit 1 ;;
+      esac
+      ;;
+    gate) cmd_harness_gate "$@" ;;
+    retry) cmd_harness_retry "$@" ;;
+    qa)
+      case "${1:-}" in
+        add) shift; cmd_harness_qa_add "$@" ;;
+        pending) cmd_harness_qa_pending ;;
+        *) err "harness qa subcommand must be add or pending"; exit 1 ;;
+      esac
+      ;;
+    status) cmd_harness_status ;;
+    done) cmd_harness_done ;;
+    *) err "harness subcommand must be: init, phase, task, gate, retry, qa, status, done"; exit 1 ;;
+  esac
+}
+
+# --- Verify ---
+
+verify_detect_checks() {
+  local wd="$1"
+  local checks='[]'
+
+  if [ -f "$CONFIG_FILE" ]; then
+    local override
+    override="$(jq -c '.verify_commands // empty' "$CONFIG_FILE" 2>/dev/null || true)"
+    if [ -n "$override" ] && [ "$override" != "null" ] && [ "$override" != "[]" ]; then
+      echo "$override"
+      return 0
+    fi
+  fi
+
+  add_check() {
+    local name="$1" cmd="$2"
+    checks="$(echo "$checks" | jq -c --arg n "$name" --arg c "$cmd" '. + [{name: $n, cmd: $c}]')"
+  }
+
+  if [ -f "$wd/package.json" ]; then
+    local pkg_mgr="npm run"
+    [ -f "$wd/pnpm-lock.yaml" ] && pkg_mgr="pnpm run"
+    [ -f "$wd/yarn.lock" ] && pkg_mgr="yarn"
+    if [ -f "$wd/bun.lockb" ] || [ -f "$wd/bun.lock" ]; then
+      pkg_mgr="bun run"
+    fi
+    for script in build test lint typecheck "format:check"; do
+      if jq -e --arg s "$script" '.scripts[$s]' "$wd/package.json" >/dev/null 2>&1; then
+        if [ "$pkg_mgr" = "yarn" ]; then
+          add_check "$script" "yarn $script"
+        else
+          add_check "$script" "$pkg_mgr $script"
+        fi
+      fi
+    done
+  fi
+
+  if [ -f "$wd/go.mod" ]; then
+    if command -v go >/dev/null 2>&1; then
+      add_check "go-build" "go build ./..."
+      add_check "go-test" "go test ./..."
+      add_check "go-vet" "go vet ./..."
+    fi
+  fi
+
+  if [ -f "$wd/Cargo.toml" ]; then
+    if command -v cargo >/dev/null 2>&1; then
+      add_check "cargo-build" "cargo build"
+      add_check "cargo-test" "cargo test"
+      add_check "cargo-clippy" "cargo clippy -- -D warnings"
+      add_check "cargo-fmt" "cargo fmt --check"
+    fi
+  fi
+
+  if [ -f "$wd/pyproject.toml" ] || [ -f "$wd/pytest.ini" ] || [ -d "$wd/tests" ]; then
+    command -v pytest >/dev/null 2>&1 && add_check "pytest" "pytest"
+    command -v ruff >/dev/null 2>&1 && add_check "ruff" "ruff check"
+    command -v mypy >/dev/null 2>&1 && add_check "mypy" "mypy ."
+  fi
+
+  if [ -f "$wd/pom.xml" ]; then
+    command -v mvn >/dev/null 2>&1 && add_check "maven-verify" "mvn -q -B verify"
+  fi
+
+  if [ -f "$wd/gradlew" ]; then
+    add_check "gradle-build" "./gradlew build test"
+  elif [ -f "$wd/build.gradle" ] || [ -f "$wd/build.gradle.kts" ]; then
+    command -v gradle >/dev/null 2>&1 && add_check "gradle-build" "gradle build test"
+  fi
+
+  if [ -f "$wd/Makefile" ]; then
+    for t in build test lint; do
+      if grep -qE "^${t}:" "$wd/Makefile" 2>/dev/null; then
+        add_check "make-$t" "make $t"
+      fi
+    done
+  fi
+
+  if [ -f "$wd/composer.json" ]; then
+    for script in test lint; do
+      if jq -e --arg s "$script" '.scripts[$s]' "$wd/composer.json" >/dev/null 2>&1; then
+        add_check "composer-$script" "composer $script"
+      fi
+    done
+  fi
+
+  if command -v npx >/dev/null 2>&1; then
+    add_check "gitnexus" "npx --yes gitnexus@latest analyze"
+  fi
+  if command -v rtk >/dev/null 2>&1; then
+    add_check "rtk-gain" "rtk gain"
+  fi
+
+  echo "$checks"
+}
+
+cmd_verify_detect() {
+  require_cmd jq
+  refresh_goal_idx
+  local wd
+  wd="$(goal_workdir)"
+  verify_detect_checks "$wd" | jq .
+}
+
+cmd_verify_run() {
+  require_cmd jq
+  refresh_goal_idx
+  local wd only=""
+  wd="$(goal_workdir)"
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --only)
+        only="${2:-}"
+        shift 2
+        ;;
+      *)
+        err "Unknown verify run arg: $1"
+        exit 1
+        ;;
+    esac
+  done
+
+  local checks
+  checks="$(verify_detect_checks "$wd")"
+
+  if [ -n "$only" ]; then
+    checks="$(echo "$checks" | jq -c --arg only "$only" '
+      ($only | split(",")) as $want
+      | map(select(.name as $n | $want | index($n)))
+    ')"
+  fi
+
+  local count
+  count="$(echo "$checks" | jq "length")"
+  if [ "$count" -eq 0 ]; then
+    warn "No verification checks detected"
+    if [ -f "$STATE_FILE" ] && jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness' "$STATE_FILE" >/dev/null 2>&1; then
+      cmd_harness_gate VERIFICATION UNKNOWN "no checks detected"
+    fi
+    echo '{"overall":"UNKNOWN","results":[]}'
+    return 0
+  fi
+
+  local results='[]'
+  local overall="PASS"
+  local i=0
+  while [ "$i" -lt "$count" ]; do
+    local name cmd
+    name="$(echo "$checks" | jq -r --argjson i "$i" '.[$i].name')"
+    cmd="$(echo "$checks" | jq -r --argjson i "$i" '.[$i].cmd')"
+
+    log "verify: $name → $cmd"
+    local outfile exit_code status suggested
+    outfile="$(mktemp)"
+    set +e
+    (cd "$wd" && bash -c "$cmd") >"$outfile" 2>&1
+    exit_code=$?
+    set -e
+
+    if [ "$exit_code" -eq 0 ]; then
+      status="PASS"
+      suggested="none"
+    elif [ "$exit_code" -eq 127 ]; then
+      status="UNKNOWN"
+      suggested="install missing tooling or set verify_commands in goal-config.json"
+      [ "$overall" = "PASS" ] && overall="UNKNOWN"
+    else
+      status="FAIL"
+      overall="FAIL"
+      suggested="fix failing check then re-run verify"
+    fi
+
+    local tail_out
+    tail_out="$(tail -n 40 "$outfile" | tr "\n" " " | cut -c1-500)"
+    rm -f "$outfile"
+
+    printf "%s | %s | exit=%s | %s | %s | %s\n" \
+      "$name" "$cmd" "$exit_code" "$status" "$name" "$suggested"
+
+    results="$(echo "$results" | jq -c \
+      --arg name "$name" \
+      --arg cmd "$cmd" \
+      --argjson code "$exit_code" \
+      --arg status "$status" \
+      --arg affected "$name" \
+      --arg suggested "$suggested" \
+      --arg output "$tail_out" \
+      '. + [{name:$name,command:$cmd,exit:$code,status:$status,affected:$affected,suggested:$suggested,output:$output}]')"
+
+    i=$((i + 1))
+  done
+
+  local report
+  report="$(jq -n --arg overall "$overall" --argjson results "$results" \
+    '{overall: $overall, results: $results}')"
+  echo "$report" | jq .
+
+  if [ -f "$STATE_FILE" ] && jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness' "$STATE_FILE" >/dev/null 2>&1; then
+    case "$overall" in
+      PASS) cmd_harness_gate VERIFICATION PASS ;;
+      FAIL) cmd_harness_gate VERIFICATION FAIL "one or more checks failed" ;;
+      UNKNOWN) cmd_harness_gate VERIFICATION UNKNOWN "one or more checks unknown" ;;
+    esac
+  fi
+
+  [ "$overall" = "PASS" ] || exit 1
+}
+
+cmd_verify() {
+  case "${1:-}" in
+    detect) cmd_verify_detect ;;
+    run) shift; cmd_verify_run "$@" ;;
+    *) err "verify subcommand must be detect or run"; exit 1 ;;
+  esac
+}
+
+# --- Route ---
+
+cmd_route_detect() {
+  require_cmd git jq
+  [ ! -f "$STATE_FILE" ] && { err "No state found — run 'start' first"; exit 1; }
+  state_ensure_array
+  refresh_goal_idx
+
+  local base files figma_enabled qa_mode visual_mode
+  base="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].base_branch // "main"' "$STATE_FILE")"
+  figma_enabled="$(config_read figma_enabled)"; figma_enabled="${figma_enabled:-false}"
+  qa_mode="$(config_read qa_mode)"; qa_mode="${qa_mode:-auto}"
+  visual_mode="$(config_read visual_mode)"; visual_mode="${visual_mode:-auto}"
+
+  local wd
+  wd="$(goal_workdir)"
+  files="$(cd "$wd" && (git diff --name-only "origin/$base...HEAD" 2>/dev/null || git diff --name-only "$base...HEAD" 2>/dev/null || true))"
+
+  local ui=0
+  local evidence=""
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    if echo "$f" | grep -qiE '\.(tsx|jsx|vue|svelte|css|scss|sass|less|html)$|/(components|pages|views|ui|app)/'; then
+      ui=1
+      if [ -z "$evidence" ]; then
+        evidence="$f"
+      else
+        evidence="$evidence, $f"
+      fi
+    fi
+  done <<< "$files"
+
+  local route="backend"
+  local reasons=""
+
+  add_reason() {
+    if [ -z "$reasons" ]; then
+      reasons="$1"
+    else
+      reasons="$reasons,$1"
+    fi
+  }
+
+  if [ "$visual_mode" = "always" ] || [ "$figma_enabled" = "true" ] || [ "$ui" -eq 1 ]; then
+    if [ "$visual_mode" != "never" ]; then
+      route="frontend"
+      [ "$ui" -eq 1 ] && add_reason "ui_files"
+      [ "$figma_enabled" = "true" ] && add_reason "figma_enabled"
+      [ "$visual_mode" = "always" ] && add_reason "visual_mode=always"
+    fi
+  fi
+
+  if [ "$route" != "frontend" ]; then
+    if [ "$qa_mode" = "always" ]; then
+      route="feature"
+      add_reason "qa_mode=always"
+    elif [ "$qa_mode" = "never" ]; then
+      route="backend"
+      add_reason "qa_mode=never"
+    else
+      if [ -n "$files" ]; then
+        route="feature"
+        add_reason "changed_files_non_ui"
+      else
+        route="backend"
+        add_reason "no_diff_default_backend"
+      fi
+    fi
+  fi
+
+  local figma_json
+  figma_json="$([ "$figma_enabled" = "true" ] && echo true || echo false)"
+
+  jq -n \
+    --arg route "$route" \
+    --arg evidence "${evidence:-none}" \
+    --arg reasons "$reasons" \
+    --arg qa_mode "$qa_mode" \
+    --arg visual_mode "$visual_mode" \
+    --argjson figma_enabled "$figma_json" \
+    '{
+      route: $route,
+      evidence: $evidence,
+      reasons: $reasons,
+      qa_mode: $qa_mode,
+      visual_mode: $visual_mode,
+      figma_enabled: $figma_enabled
+    }'
+}
+
+cmd_route() {
+  case "${1:-}" in
+    detect) cmd_route_detect ;;
+    *) err "route subcommand must be detect"; exit 1 ;;
+  esac
+}
+
+
 case "${1:-}" in
   start)    cmd_start "${2:-}" "${3:-}" "${4:-}" ;;
   continue) cmd_continue "${2:-}" ;;
@@ -1797,9 +2569,12 @@ case "${1:-}" in
   comment)  cmd_comment "${2:-}" "${3:-}" "${4:-}" "${5:-}" ;;
   resolve)  cmd_resolve "${2:-}" "${3:-}" ;;
   analyze)  cmd_analyze ;;
+  verify)   shift; cmd_verify "$@" ;;
+  route)    shift; cmd_route "$@" ;;
+  harness)  shift; cmd_harness "$@" ;;
   config)
     case "${2:-}" in
-      set) cmd_config_set "${3:-}" "${4:-}" "${5:-}" "${6:-1}" "${7:-false}" "${8:-inline}" "${9:-5}" ;;
+      set) cmd_config_set "${3:-}" "${4:-}" "${5:-}" "${6:-1}" "${7:-false}" "${8:-inline}" "${9:-5}" "${10:-3}" "${11:-2}" "${12:-3}" "${13:-auto}" "${14:-auto}" ;;
       get) cmd_config_get ;;
       *)   err "config subcommand must be 'set' or 'get'"; exit 1 ;;
     esac

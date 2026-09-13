@@ -12,24 +12,32 @@ default_subagent_reasoning_effort = "medium"
 hide_spawn_agent_metadata = false
 
 [agents.orchestrator]
-description = "Goal-loop orchestrator. Manages plan → build → analyze → review until PR threads are clean."
+description = "Goal-loop orchestrator. Manages plan → build → verify → review → QA until harness DONE."
 config_file = "./agents/orchestrator.toml"
 
 [agents.planner]
-description = "Architecture and implementation plans. Tags tasks @builder or @builder-expert."
+description = "Architecture and implementation plans. Emits route, research, and risk signals."
 config_file = "./agents/planner.toml"
+
+[agents.researcher]
+description = "On-demand research for unfamiliar tech, docs, APIs, performance, and security."
+config_file = "./agents/researcher.toml"
 
 [agents.builder]
 description = "Routine frontend/backend execution (CRUD, UI, refactors, config, tests)."
 config_file = "./agents/builder.toml"
 
 [agents.builder-expert]
-description = "Complex execution (algorithms, concurrency, security, performance, state machines)."
+description = "Escalation-only complex execution (algorithms, concurrency, security, performance)."
 config_file = "./agents/builder-expert.toml"
 
 [agents.reviewer]
 description = "Code review for correctness, security, performance, and tests."
 config_file = "./agents/reviewer.toml"
+
+[agents.qa]
+description = "Behavior/business QA against acceptance criteria (conditional)."
+config_file = "./agents/qa.toml"
 
 [agents.visual-reviewer]
 description = "Multimodal UI/visual review for layout, contrast, accessibility, and screenshots."
