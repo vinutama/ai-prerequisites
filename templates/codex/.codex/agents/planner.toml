@@ -791,6 +791,10 @@ Return exactly:
   - <area> — <why Builder Expert may be needed>
   - or `none`
 
+`route detect` is only a baseline. Your `route` / `qa_required` /
+`visual_required` values override that baseline when justified (they become
+the authoritative harness requirements via `harness init --qa/--visual`).
+
 1. [ ] <task description> → @builder
 2. [ ] <task description> → @builder
 

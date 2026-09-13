@@ -316,4 +316,45 @@ The Orchestrator then resolves the next model through:
 
 Do not self-escalate merely because the question is interesting.
 
-If the available fallback is insuff
+If the available fallback is insufficient:
+
+* return PARTIAL with explicit remaining unknowns
+* do not invent certainty
+* let the Orchestrator decide whether to rework the brief or fail the goal
+
+==================================================
+11. OUTPUT CONTRACT
+===================
+
+Always return a compact structured handoff. Do not rely on the full transcript.
+
+```markdown
+## Agent output
+- status: DONE | PARTIAL | BLOCKED
+- summary: <one line answer>
+- confidence: high | medium | low
+- blockers: <or "none">
+- next_action: BUILD | PLAN | ESCALATE_RESEARCH_SOL | NONE
+- artifacts: research_report
+
+## Research report
+- question: <exact question answered>
+- answer: <concise actionable answer>
+- recommendation: <what Builder/Planner should do next, or "none">
+- alternatives_considered:
+  - <option> — <trade-off>
+  - or `none`
+- evidence:
+  - <source or path> — <what it supports>
+- risks_and_constraints:
+  - <item>
+  - or `none`
+- unknowns:
+  - <remaining uncertainty>
+  - or `none`
+- confidence: high | medium | low
+```
+
+Never invent sources. Prefer repository evidence first, then official docs.
+'''
+

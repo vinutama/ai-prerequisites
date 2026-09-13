@@ -88,20 +88,66 @@ Only `visual-reviewer` handles screenshots and image attachments. The
 orchestrator routes UI/visual review exclusively to that agent.
 
 ### Harness, routes, and Definition of DONE
-Active goals carry a `harness` object on `state.json` (phase, tasks, gates,
-retries, QA findings). Orchestrator drives it via `goal-git.sh harness …`.
+Active goals carry a `harness` object on `state.json` (phase, route,
+`requirements` `{qa, visual, source}`, tasks, gates, retries, `qa_findings`,
+`visual_findings`). Orchestrator drives it via `goal-git.sh harness …`.
 
 Phases: `PLANNED` → `RESEARCHING?` → `BUILDING` → `ESCALATED?` → `VERIFYING` →
 `REVIEWING` → `QA?` → `VISUAL_REVIEW?` → `REWORK?` → `DONE` | `FAILED`.
 
-Routes (from `route detect` + planner override):
-- `backend` — PLAN, IMPLEMENTATION, VERIFICATION, REVIEW
-- `feature` — above + QA
-- `frontend` — above + VISUAL
+Task states: `PENDING | RUNNING | DONE | BLOCKED | FAILED`.
+`FAILED` = execution attempted and failed; never auto-coerced to `BLOCKED`.
+
+**Routing**
+- `route detect` is a **baseline** classifier only (`baseline: true` in output):
+  UI files → `frontend`; business/API/domain paths → `feature`; everything else
+  → `backend`.
+- Planner `### Routing` (`route`, `qa_required`, `visual_required`, …) is
+  authoritative after planning. Orchestrator initializes:
+
+```bash
+.codex/scripts/goal-git.sh harness init \
+  --route <route> --qa <true|false> --visual <true|false>
+```
+
+- Omitting `--qa`/`--visual` keeps route-based defaults (backend: neither;
+  feature: qa; frontend: qa+visual). Explicit flags always win.
+- Do **not** hardcode `feature => QA` or `frontend => QA+VISUAL` after Planner
+  signals are recorded. `requirements.*` are authoritative.
+
+**Gates & evidence**
+Always required: `PLAN`, `IMPLEMENTATION`, `VERIFICATION`, `REVIEW`.
+Conditional: `QA` only when `requirements.qa`; `VISUAL` only when
+`requirements.visual`. Non-required gates may stay `NOT_RUN` or `SKIPPED`.
+
+| Gate | PASS evidence |
+|---|---|
+| PLAN | Planner accepted |
+| IMPLEMENTATION | All `builder`/`builder-expert` tasks `DONE` (at least one) |
+| VERIFICATION | Only via `verify run` (manual PASS rejected) |
+| REVIEW | `pending` (inline) or `review pending` (local) exit 0 |
+| QA | `requirements.qa` + scenarios recorded + `harness qa pending` exit 0 |
+| VISUAL | `requirements.visual` + observations + `harness visual pending` exit 0 |
 
 Gate status: `NOT_RUN | PASS | FAIL | SKIPPED | UNKNOWN`.
-`harness done` exits 0 only when every required gate is PASS or SKIPPED-with-reason.
-Retries (`rework`, `escalations`, `verify_retries`) hard-stop when limits are exceeded.
+`harness done` exits 0 only when every **required** gate is `PASS`
+(SKIPPED does not clear a required gate). Retries hard-stop at limits.
+
+**analyze ≠ verify**
+- `analyze` — gitnexus + rtk gain (tooling/analysis)
+- `verify run` — application correctness only (build/test/lint/typecheck/…)
+
+**Context handoffs** (compact structured artifacts, not full transcripts):
+`discovery_context`, `implementation_plan`, `research_report`, `staged_diff` /
+builder `handoff`, `escalation_solution`, `review_report`, `qa_findings`,
+`visual_review_report`.
+
+**Visual reviewer**
+Requires a vision-capable model. Resolve with
+`models visual-reviewer --require-multimodal` (allowlist:
+`$capabilities.vision_models` in `goal-models.json`, seeded with
+`gpt-5.6-terra`). Never silently downgrade to text-only. Prefer Playwright
+screenshots at 375 / 768 / 1024 / 1440 when the app can start.
 
 ### Model routing
 Codex does not use the OpenCode fallback plugin. Per-agent models are pinned in
@@ -115,7 +161,9 @@ two layers:
    `.codex/scripts/goal-git.sh models <role>` and always passes
    `agent_type` + `model` + `reasoning_effort` to `spawn_agent`.
    On model-unavailable / rate-limit, it calls `models <role> --next <model>`
-   and re-spawns. Never downgrade `visual-reviewer` to a text-only model.
+   and re-spawns. For multimodal roles, `--next` only returns models in
+   `$capabilities.vision_models`. Before spawning `visual-reviewer`, run
+   `models visual-reviewer --require-multimodal` — never downgrade to text-only.
 
 ### Delegation
 The planner tags every implementation task `@builder` and emits routing signals
@@ -180,17 +228,22 @@ MUST go through `.codex/scripts/goal-git.sh`:
 .codex/scripts/goal-git.sh review iterate [repo_path]
 .codex/scripts/goal-git.sh merge              # merge PR/MR (when auto_merge enabled)
 .codex/scripts/goal-git.sh state complete     # mark goal completed
-.codex/scripts/goal-git.sh analyze            # npx gitnexus analyze && rtk gain (also a verify check)
-.codex/scripts/goal-git.sh verify detect      # detect project verification commands
-.codex/scripts/goal-git.sh verify run [--only a,b]  # deterministic verification (authority for VERIFICATION gate)
-.codex/scripts/goal-git.sh route detect       # classify backend|feature|frontend
-.codex/scripts/goal-git.sh harness init --route <r>
+.codex/scripts/goal-git.sh analyze            # npx gitnexus analyze && rtk gain (NOT a verify check)
+.codex/scripts/goal-git.sh verify detect      # detect application verification commands
+.codex/scripts/goal-git.sh verify run [--only a,b]  # deterministic verification (only writer of VERIFICATION PASS)
+.codex/scripts/goal-git.sh route detect       # baseline classify backend|feature|frontend
+.codex/scripts/goal-git.sh harness init --route <r> [--qa true|false] [--visual true|false]
 .codex/scripts/goal-git.sh harness phase <STATE>
-.codex/scripts/goal-git.sh harness task add|set …
+.codex/scripts/goal-git.sh harness task add|set …   # states: PENDING|RUNNING|DONE|BLOCKED|FAILED
 .codex/scripts/goal-git.sh harness gate <NAME> <STATUS> [reason]
 .codex/scripts/goal-git.sh harness retry <rework|escalations|verify_retries>
 .codex/scripts/goal-git.sh harness qa add|pending
+.codex/scripts/goal-git.sh harness visual add|pending
 .codex/scripts/goal-git.sh harness status|done
+.codex/scripts/goal-git.sh models                # print goal-models.json
+.codex/scripts/goal-git.sh models <role>         # model + effort + fallbacks
+.codex/scripts/goal-git.sh models <role> --next <m>  # next fallback after <m>
+.codex/scripts/goal-git.sh models <role> --require-multimodal [m]  # vision-capable resolve
 .codex/scripts/goal-git.sh status             # working tree status
 .codex/scripts/goal-git.sh restore <file>...  # restore files to HEAD
 .codex/scripts/goal-git.sh diff               # diff against base branch
@@ -207,9 +260,6 @@ MUST go through `.codex/scripts/goal-git.sh`:
 .codex/scripts/goal-git.sh figma design set <url>  # set default design link
 .codex/scripts/goal-git.sh figma status          # show Figma integration status
 .codex/scripts/goal-git.sh figma disable         # disable Figma integration
-.codex/scripts/goal-git.sh models                # print goal-models.json
-.codex/scripts/goal-git.sh models <role>         # model + effort + fallbacks
-.codex/scripts/goal-git.sh models <role> --next <m>  # next fallback after <m>
 ```
 
 Launch Codex with Figma secrets loaded:
@@ -230,7 +280,9 @@ Launch Codex with Figma secrets loaded:
   fails the harness cleanly (`FAILED`).
 - **Only reviewers resolve threads** — the orchestrator must never run
   `goal-git.sh resolve` or `goal-git.sh comment`.
-- Conditional `@qa` and `@visual-reviewer` run only when the route / planner signals require them.
+- Conditional `@qa` and `@visual-reviewer` run only when harness
+  `requirements.qa` / `requirements.visual` are true (Planner signals), not
+  merely because the baseline route is `feature`/`frontend`.
 - DONE requires `harness done` exit 0 before `state complete`.
 - When `auto_merge` is `false` (default), report "Ready for manual merge" — never claim merged.
 - When `auto_merge` is `true`, orchestrator runs `.codex/scripts/goal-git.sh merge` after

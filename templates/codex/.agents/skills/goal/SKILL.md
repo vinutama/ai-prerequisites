@@ -109,12 +109,14 @@ $goal --continue fix the healthcheck API            # active goal + new instruct
         Branch becomes `{task_type}/{TICKET}-{slug}` (e.g. `feat/DEL-4123-add-health-check`).
 3. For `prompt` and `markdown` only: run `GOAL_SOURCE_OVERRIDE=<effective_source> .codex/scripts/goal-git.sh start "<resolved goal>"` (branch `goal/<slug>`).
    For `jira`, start was already called in step 2.
-3b. After start (or continue), initialize harness routing:
+3b. After start (or continue), run baseline route detect. After Planner returns,
+   initialize harness with Planner routing signals (authoritative):
    ```bash
    .codex/scripts/goal-git.sh route detect
-   .codex/scripts/goal-git.sh harness init --route <backend|feature|frontend>
+   .codex/scripts/goal-git.sh harness init \
+     --route <route> --qa <qa_required> --visual <visual_required>
    ```
-   Planner may override the route in its Routing section; re-init or set gates accordingly.
+   Omitting `--qa`/`--visual` keeps route-based defaults. Explicit flags win.
 4. **Multi-repo orchestration (when repos > 1 in config)**:
    - Read repos from `state.json` (`.codex/scripts/goal-git.sh state | jq '.repos'`).
    - Delegate `@planner` ONCE (planner sees ALL repos, produces repo-tagged tasks in dependency batches).

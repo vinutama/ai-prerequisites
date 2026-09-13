@@ -281,6 +281,7 @@ validate_multimodal_models() {
   local models_file="$1"
   jq -r '
     to_entries[]
+    | select(.key | startswith("$") | not)
     | select(.value.capabilities.multimodal == true)
     | "\(.key)\t\(.value.preferred_models[0] // .value.model // "inherit")"
   ' "$models_file" | while IFS=$'\t' read -r name model; do
@@ -378,7 +379,7 @@ sync_agent_models() {
   validate_multimodal_models "$models_file"
 
   if [ "$name" = "opencode" ]; then
-    jq -r 'to_entries[] | "\(.key)\t\(.value.preferred_models[0])"' "$models_file" | while IFS=$'\t' read -r agent_name model; do
+    jq -r 'to_entries[] | select(.key | startswith("$") | not) | "\(.key)\t\(.value.preferred_models[0])"' "$models_file" | while IFS=$'\t' read -r agent_name model; do
       [ -n "$agent_name" ] || continue
       [ -n "$model" ] || continue
       local agent_file="$agents_dir/$agent_name.md"
@@ -390,7 +391,7 @@ sync_agent_models() {
       log "Synced model for $name agent: $agent_name → $model"
     done
   elif [ "$name" = "codex" ]; then
-    jq -r 'to_entries[] | "\(.key)\t\(.value.model_reasoning_effort // "")\t\(.value.sandbox_mode // "")\t\(.value.model // "")"' "$models_file" | while IFS=$'\t' read -r agent_name effort sandbox model; do
+    jq -r 'to_entries[] | select(.key | startswith("$") | not) | "\(.key)\t\(.value.model_reasoning_effort // "")\t\(.value.sandbox_mode // "")\t\(.value.model // "")"' "$models_file" | while IFS=$'\t' read -r agent_name effort sandbox model; do
       [ -n "$agent_name" ] || continue
       local agent_file="$agents_dir/$agent_name.toml"
       if [ ! -f "$agent_file" ]; then
@@ -403,7 +404,7 @@ sync_agent_models() {
       log "Synced model for $name agent: $agent_name → ${model:-<effort/sandbox only>}"
     done
   elif [ "$name" = "qoder" ]; then
-    jq -r 'to_entries[] | "\(.key)\t\(.value.model // "inherit")\t\(.value.effort // "")\t\(.value.readonly // "")"' "$models_file" | while IFS=$'\t' read -r agent_name model effort readonly; do
+    jq -r 'to_entries[] | select(.key | startswith("$") | not) | "\(.key)\t\(.value.model // "inherit")\t\(.value.effort // "")\t\(.value.readonly // "")"' "$models_file" | while IFS=$'\t' read -r agent_name model effort readonly; do
       [ -n "$agent_name" ] || continue
       local agent_file="$agents_dir/$agent_name.md"
       if [ ! -f "$agent_file" ]; then
@@ -425,7 +426,7 @@ sync_agent_models() {
       log "Synced model for $name agent: $agent_name → $model (effort=${effort:-none})"
     done
   else
-    jq -r 'to_entries[] | "\(.key)\t\(.value.model // "inherit")\t\(.value.readonly // "")"' "$models_file" | while IFS=$'\t' read -r agent_name model readonly; do
+    jq -r 'to_entries[] | select(.key | startswith("$") | not) | "\(.key)\t\(.value.model // "inherit")\t\(.value.readonly // "")"' "$models_file" | while IFS=$'\t' read -r agent_name model readonly; do
       [ -n "$agent_name" ] || continue
       local agent_file="$agents_dir/$agent_name.md"
       if [ ! -f "$agent_file" ]; then

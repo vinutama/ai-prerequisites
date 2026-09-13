@@ -40,20 +40,27 @@ Commands:
   verify detect             Detect project verification commands (JSON)
   verify run [--only a,b]   Run deterministic verification checks
   route detect              Classify route: backend|feature|frontend
-  harness init [--route r]  Seed harness object on active goal
+  harness init [--route r] [--qa true|false] [--visual true|false]
+                            Seed harness object on active goal (qa/visual default from route)
   harness phase <STATE>     Transition harness phase (validated)
   harness task add <role> <title> [--parent tN]
   harness task set <id> <state>
+                            state: PENDING|RUNNING|DONE|BLOCKED|FAILED
   harness gate <NAME> <STATUS> [reason]
+                            Evidence-backed PASS for IMPLEMENTATION/VERIFICATION/REVIEW/QA/VISUAL
   harness retry <counter>   Increment retry counter (exit 1 if limit exceeded)
   harness qa add <scenario> <PASS|FAIL> <note>
   harness qa pending        Exit 1 if any QA scenario failed
+  harness visual add <viewport> <PASS|FAIL> <note>
+  harness visual pending    Exit 1 if any visual observation failed
   harness status            Print harness object
-  harness done              Exit 0 only when route gates pass
+  harness done              Exit 0 only when required gates PASS (from requirements)
   selfcheck                 Run platform detection self-check
   models                    Print full goal-models.json
   models <role>             Print model, effort, and fallbacks for a role (TAB-separated)
   models <role> --next <m>  Print next fallback after model <m> (exit 1 if exhausted)
+  models <role> --require-multimodal [m]
+                            Resolve a vision-capable model for multimodal roles
   config set <source> <target> <platform> [concurrency] [auto_merge] [review_mode] [review_max_iterations] [max_rework] [max_escalations] [max_verify_retries] [qa_mode] [visual_mode]
   config get                Print goal-config.json
   state                     Print active goal JSON from state.json
@@ -1739,6 +1746,22 @@ cmd_review_iterate() {
   fi
 }
 
+models_vision_list() {
+  local models_file="$1"
+  jq -r '."$capabilities".vision_models // [] | .[]' "$models_file" 2>/dev/null || true
+}
+
+models_is_vision() {
+  local models_file="$1" model="$2"
+  [ -z "$model" ] && return 1
+  models_vision_list "$models_file" | grep -Fxq "$model"
+}
+
+models_role_multimodal() {
+  local models_file="$1" role="$2"
+  jq -e --arg role "$role" '.[$role].capabilities.multimodal == true' "$models_file" >/dev/null 2>&1
+}
+
 cmd_models() {
   require_cmd jq
   local models_file="$PROJECT_ROOT/$AGENT_CONFIG_DIR/goal-models.json"
@@ -1758,22 +1781,63 @@ cmd_models() {
     exit 1
   fi
 
+  if [ "${2:-}" = "--require-multimodal" ]; then
+    local candidate="${3:-}"
+    if [ -z "$candidate" ]; then
+      candidate="$(jq -r --arg role "$role" '.[$role].model // empty' "$models_file")"
+    fi
+    if ! models_role_multimodal "$models_file" "$role"; then
+      err "Role '$role' is not multimodal — --require-multimodal does not apply"
+      exit 1
+    fi
+    if models_is_vision "$models_file" "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    local chain next
+    chain="$(jq -r --arg role "$role" \
+      '(.[$role].fallback_models // []) | .[]' "$models_file")"
+    while IFS= read -r next; do
+      [ -z "$next" ] && continue
+      if models_is_vision "$models_file" "$next"; then
+        warn "Preferred model '$candidate' is not vision-capable; using multimodal fallback '$next'"
+        printf '%s\n' "$next"
+        return 0
+      fi
+    done <<< "$chain"
+    err "No vision-capable model available for role '$role' (candidate='$candidate'). Extend \$capabilities.vision_models in goal-models.json."
+    exit 1
+  fi
+
   if [ "${2:-}" = "--next" ]; then
     local current="${3:-}"
     if [ -z "$current" ]; then
       err "models <role> --next requires a model"
       exit 1
     fi
-    local next
-    next="$(jq -r --arg role "$role" --arg current "$current" '
+    local multimodal=false
+    models_role_multimodal "$models_file" "$role" && multimodal=true
+
+    local found=false next="" cand
+    while IFS= read -r cand; do
+      [ -z "$cand" ] && continue
+      if [ "$found" = true ]; then
+        if [ "$multimodal" = true ]; then
+          if models_is_vision "$models_file" "$cand"; then
+            next="$cand"
+            break
+          fi
+        else
+          next="$cand"
+          break
+        fi
+      fi
+      [ "$cand" = "$current" ] && found=true
+    done < <(jq -r --arg role "$role" '
       .[$role] as $r
-      | ([$r.model] + ($r.fallback_models // [])) as $chain
-      | ($chain | index($current)) as $i
-      | if $i == null then empty
-        elif ($i + 1) < ($chain | length) then $chain[$i + 1]
-        else empty
-        end
-    ' "$models_file")"
+      | ([$r.model] + ($r.fallback_models // [])) | .[]
+    ' "$models_file")
+
     if [ -z "$next" ]; then
       err "No fallback remaining for role '$role' after model '$current'"
       exit 1
@@ -1892,10 +1956,19 @@ cmd_harness_init() {
   refresh_goal_idx
 
   local route="feature"
+  local qa_flag="" visual_flag=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --route)
         route="${2:-}"
+        shift 2
+        ;;
+      --qa)
+        qa_flag="${2:-}"
+        shift 2
+        ;;
+      --visual)
+        visual_flag="${2:-}"
         shift 2
         ;;
       *)
@@ -1910,6 +1983,31 @@ cmd_harness_init() {
     *) err "route must be: backend, feature, or frontend"; exit 1 ;;
   esac
 
+  # Route-based defaults (backward compatible when --qa/--visual omitted)
+  local qa_req=false visual_req=false req_source="route-default"
+  case "$route" in
+    backend)  qa_req=false; visual_req=false ;;
+    feature)  qa_req=true;  visual_req=false ;;
+    frontend) qa_req=true;  visual_req=true  ;;
+  esac
+
+  if [ -n "$qa_flag" ]; then
+    case "$qa_flag" in
+      true|false) qa_req="$qa_flag"; req_source="explicit" ;;
+      *) err "--qa must be true or false"; exit 1 ;;
+    esac
+  fi
+  if [ -n "$visual_flag" ]; then
+    case "$visual_flag" in
+      true|false) visual_req="$visual_flag"; req_source="explicit" ;;
+      *) err "--visual must be true or false"; exit 1 ;;
+    esac
+  fi
+  # If either flag was set, mark source explicit (partial override still counts)
+  if [ -n "$qa_flag" ] || [ -n "$visual_flag" ]; then
+    req_source="explicit"
+  fi
+
   local max_rework max_escalations max_verify_retries
   max_rework="$(config_read max_rework)"; max_rework="${max_rework:-3}"
   max_escalations="$(config_read max_escalations)"; max_escalations="${max_escalations:-2}"
@@ -1918,12 +2016,16 @@ cmd_harness_init() {
   local harness
   harness="$(jq -n \
     --arg route "$route" \
+    --argjson qa "$qa_req" \
+    --argjson visual "$visual_req" \
+    --arg req_source "$req_source" \
     --argjson max_rework "$max_rework" \
     --argjson max_escalations "$max_escalations" \
     --argjson max_verify_retries "$max_verify_retries" \
     '{
       phase: "PLANNED",
       route: $route,
+      requirements: {qa: $qa, visual: $visual, source: $req_source},
       tasks: [],
       gates: {
         PLAN: {status: "NOT_RUN"},
@@ -1934,6 +2036,7 @@ cmd_harness_init() {
         VISUAL: {status: "NOT_RUN"}
       },
       qa_findings: [],
+      visual_findings: [],
       counters: {rework: 0, escalations: 0, verify_retries: 0},
       limits: {
         max_rework: $max_rework,
@@ -1943,18 +2046,16 @@ cmd_harness_init() {
       events: []
     }')"
 
-  case "$route" in
-    backend)
-      harness="$(echo "$harness" | jq '.gates.QA = {status:"SKIPPED",reason:"backend route — no business QA"} | .gates.VISUAL = {status:"SKIPPED",reason:"backend route — no UI"}')"
-      ;;
-    feature)
-      harness="$(echo "$harness" | jq '.gates.VISUAL = {status:"SKIPPED",reason:"feature route — no UI visual review"}')"
-      ;;
-  esac
+  if [ "$qa_req" = false ]; then
+    harness="$(echo "$harness" | jq '.gates.QA = {status:"SKIPPED",reason:"requirements.qa=false"}')"
+  fi
+  if [ "$visual_req" = false ]; then
+    harness="$(echo "$harness" | jq '.gates.VISUAL = {status:"SKIPPED",reason:"requirements.visual=false"}')"
+  fi
 
   harness_put "$harness"
-  harness_append_event "init route=$route"
-  log "Harness initialized (route=$route, phase=PLANNED)"
+  harness_append_event "init route=$route qa=$qa_req visual=$visual_req source=$req_source"
+  log "Harness initialized (route=$route, qa=$qa_req, visual=$visual_req, phase=PLANNED)"
   harness_get
 }
 
@@ -2032,6 +2133,11 @@ cmd_harness_task_set() {
   local id="${1:-}" state="${2:-}"
   [ -z "$id" ] || [ -z "$state" ] && { err "harness task set requires <id> <state>"; exit 1; }
 
+  case "$state" in
+    PENDING|RUNNING|DONE|BLOCKED|FAILED) ;;
+    *) err "Task state must be: PENDING, RUNNING, DONE, BLOCKED, or FAILED"; exit 1 ;;
+  esac
+
   if ! jq -e --argjson idx "$GOAL_IDX" --arg id "$id" \
     '.[$idx].harness.tasks | any(.id == $id)' "$STATE_FILE" >/dev/null; then
     err "Unknown task id: $id"
@@ -2051,6 +2157,94 @@ cmd_harness_task_set() {
   log "Task $id -> $state"
 }
 
+harness_impl_tasks_ready() {
+  # Returns 0 if at least one builder/builder-expert task exists and all are DONE.
+  local info
+  info="$(jq -r --argjson idx "$GOAL_IDX" '
+    .[$idx].harness.tasks as $t
+    | ($t | map(select(.role == "builder" or .role == "builder-expert"))) as $impl
+    | {
+        count: ($impl | length),
+        not_done: ($impl | map(select(.state != "DONE")) | map("\(.id)=\(.state)") | join(", "))
+      }
+    | "\(.count)\t\(.not_done)"
+  ' "$STATE_FILE")"
+  local count not_done
+  count="$(echo "$info" | cut -f1)"
+  not_done="$(echo "$info" | cut -f2-)"
+  if [ "${count:-0}" -eq 0 ]; then
+    err "IMPLEMENTATION PASS requires at least one builder/builder-expert task"
+    return 1
+  fi
+  if [ -n "$not_done" ]; then
+    err "IMPLEMENTATION PASS rejected — incomplete tasks: $not_done"
+    return 1
+  fi
+  return 0
+}
+
+harness_review_evidence_ok() {
+  local mode
+  mode="$(config_read review_mode)"; mode="${mode:-inline}"
+  case "$mode" in
+    local)
+      if ! (cmd_review_pending >/dev/null 2>&1); then
+        err "REVIEW PASS rejected — review pending reports unresolved findings (or no review file). Record UNKNOWN if evidence unavailable."
+        return 1
+      fi
+      ;;
+    *)
+      if ! (cmd_pending >/dev/null 2>&1); then
+        err "REVIEW PASS rejected — pending reports unresolved threads (or PR/gh unavailable). Record UNKNOWN if evidence unavailable."
+        return 1
+      fi
+      ;;
+  esac
+  return 0
+}
+
+harness_qa_evidence_ok() {
+  local req total failed
+  req="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.requirements.qa // false' "$STATE_FILE")"
+  if [ "$req" != "true" ]; then
+    err "QA PASS rejected — requirements.qa is false"
+    return 1
+  fi
+  total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.qa_findings | length' "$STATE_FILE")"
+  failed="$(jq -r --argjson idx "$GOAL_IDX" \
+    '[.[$idx].harness.qa_findings[] | select(.result == "FAIL")] | length' "$STATE_FILE")"
+  if [ "${total:-0}" -eq 0 ]; then
+    err "QA PASS rejected — no QA scenarios recorded (run harness qa add)"
+    return 1
+  fi
+  if [ "${failed:-0}" -ne 0 ]; then
+    err "QA PASS rejected — $failed failing scenario(s) (harness qa pending)"
+    return 1
+  fi
+  return 0
+}
+
+harness_visual_evidence_ok() {
+  local req total failed
+  req="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.requirements.visual // false' "$STATE_FILE")"
+  if [ "$req" != "true" ]; then
+    err "VISUAL PASS rejected — requirements.visual is false"
+    return 1
+  fi
+  total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.visual_findings // [] | length' "$STATE_FILE")"
+  failed="$(jq -r --argjson idx "$GOAL_IDX" \
+    '[(.[$idx].harness.visual_findings // [])[] | select(.result == "FAIL")] | length' "$STATE_FILE")"
+  if [ "${total:-0}" -eq 0 ]; then
+    err "VISUAL PASS rejected — no visual observations recorded (run harness visual add)"
+    return 1
+  fi
+  if [ "${failed:-0}" -ne 0 ]; then
+    err "VISUAL PASS rejected — $failed failing observation(s) (harness visual pending)"
+    return 1
+  fi
+  return 0
+}
+
 cmd_harness_gate() {
   harness_require
   local name="${1:-}" status="${2:-}" reason="${3:-}"
@@ -2068,6 +2262,30 @@ cmd_harness_gate() {
 
   if [ "$status" = "FAIL" ] || [ "$status" = "SKIPPED" ]; then
     [ -z "$reason" ] && { err "FAIL and SKIPPED require a reason"; exit 1; }
+  fi
+
+  # Evidence-backed PASS checks
+  if [ "$status" = "PASS" ]; then
+    case "$name" in
+      IMPLEMENTATION)
+        harness_impl_tasks_ready || exit 1
+        ;;
+      VERIFICATION)
+        if [ "${HARNESS_GATE_SOURCE:-}" != "verify" ]; then
+          err "VERIFICATION PASS may only be set by 'verify run' (not manually)"
+          exit 1
+        fi
+        ;;
+      REVIEW)
+        harness_review_evidence_ok || exit 1
+        ;;
+      QA)
+        harness_qa_evidence_ok || exit 1
+        ;;
+      VISUAL)
+        harness_visual_evidence_ok || exit 1
+        ;;
+    esac
   fi
 
   if [ -n "$reason" ]; then
@@ -2156,6 +2374,45 @@ cmd_harness_qa_pending() {
   [ "$failed" -eq 0 ] || exit 1
 }
 
+cmd_harness_visual_add() {
+  harness_require
+  local viewport="${1:-}" result="${2:-}" note="${3:-}"
+  [ -z "$viewport" ] || [ -z "$result" ] && { err "harness visual add requires <viewport> <PASS|FAIL> <note>"; exit 1; }
+  case "$result" in
+    PASS|FAIL) ;;
+    *) err "Visual result must be PASS or FAIL"; exit 1 ;;
+  esac
+  [ -z "$note" ] && note=""
+
+  local id
+  id="$(jq -r --argjson idx "$GOAL_IDX" '
+    (.[$idx].harness.visual_findings // []) | length as $n
+    | "v" + (($n + 1) | tostring)
+  ' "$STATE_FILE")"
+
+  jq --argjson idx "$GOAL_IDX" \
+    --arg id "$id" \
+    --arg viewport "$viewport" \
+    --arg result "$result" \
+    --arg note "$note" \
+    '.[$idx].harness.visual_findings = ((.[$idx].harness.visual_findings // []) + [{id: $id, viewport: $viewport, result: $result, note: $note}])' \
+    "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+
+  harness_append_event "visual $id $result $viewport"
+  printf '%s\n' "$id"
+}
+
+cmd_harness_visual_pending() {
+  harness_require
+  local failed
+  failed="$(jq -r --argjson idx "$GOAL_IDX" \
+    '[(.[$idx].harness.visual_findings // [])[] | select(.result == "FAIL")] | length' "$STATE_FILE")"
+  jq --argjson idx "$GOAL_IDX" \
+    '{total: ((.[$idx].harness.visual_findings // []) | length), failed: ([(.[$idx].harness.visual_findings // [])[] | select(.result == "FAIL")] | length)}' \
+    "$STATE_FILE"
+  [ "$failed" -eq 0 ] || exit 1
+}
+
 cmd_harness_status() {
   harness_require
   harness_get
@@ -2163,32 +2420,30 @@ cmd_harness_status() {
 
 cmd_harness_done() {
   harness_require
-  local route required
-  route="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.route' "$STATE_FILE")"
 
-  case "$route" in
-    backend) required='["PLAN","IMPLEMENTATION","VERIFICATION","REVIEW"]' ;;
-    feature) required='["PLAN","IMPLEMENTATION","VERIFICATION","REVIEW","QA"]' ;;
-    frontend) required='["PLAN","IMPLEMENTATION","VERIFICATION","REVIEW","QA","VISUAL"]' ;;
-    *) err "Unknown harness route: $route"; exit 1 ;;
-  esac
+  local required
+  required="$(jq -c --argjson idx "$GOAL_IDX" '
+    .[$idx].harness.requirements as $r
+    | ["PLAN","IMPLEMENTATION","VERIFICATION","REVIEW"]
+      + (if ($r.qa == true) then ["QA"] else [] end)
+      + (if ($r.visual == true) then ["VISUAL"] else [] end)
+  ' "$STATE_FILE")"
 
   local blockers
-  blockers="$(jq -r --argjson idx "$GOAL_IDX" --argjson req "$required" '
+  blockers="$(jq -c --argjson idx "$GOAL_IDX" --argjson req "$required" '
     .[$idx].harness.gates as $g
     | $req
     | map(
         . as $name
         | $g[$name] as $gate
         | if ($gate.status == "PASS") then empty
-          elif ($gate.status == "SKIPPED" and (($gate.reason // "") | length) > 0) then empty
           else {gate: $name, status: ($gate.status // "NOT_RUN"), reason: ($gate.reason // "")}
           end
       )
   ' "$STATE_FILE")"
 
   local count
-  count="$(echo "$blockers" | jq "length")"
+  count="$(echo "$blockers" | jq 'length')"
   if [ "$count" -gt 0 ]; then
     err "Definition of DONE not met — blocking gates:"
     echo "$blockers" | jq .
@@ -2234,9 +2489,16 @@ cmd_harness() {
         *) err "harness qa subcommand must be add or pending"; exit 1 ;;
       esac
       ;;
+    visual)
+      case "${1:-}" in
+        add) shift; cmd_harness_visual_add "$@" ;;
+        pending) cmd_harness_visual_pending ;;
+        *) err "harness visual subcommand must be add or pending"; exit 1 ;;
+      esac
+      ;;
     status) cmd_harness_status ;;
     done) cmd_harness_done ;;
-    *) err "harness subcommand must be: init, phase, task, gate, retry, qa, status, done"; exit 1 ;;
+    *) err "harness subcommand must be: init, phase, task, gate, retry, qa, visual, status, done"; exit 1 ;;
   esac
 }
 
@@ -2327,13 +2589,6 @@ verify_detect_checks() {
     done
   fi
 
-  if command -v npx >/dev/null 2>&1; then
-    add_check "gitnexus" "npx --yes gitnexus@latest analyze"
-  fi
-  if command -v rtk >/dev/null 2>&1; then
-    add_check "rtk-gain" "rtk gain"
-  fi
-
   echo "$checks"
 }
 
@@ -2382,7 +2637,7 @@ cmd_verify_run() {
       cmd_harness_gate VERIFICATION UNKNOWN "no checks detected"
     fi
     echo '{"overall":"UNKNOWN","results":[]}'
-    return 0
+    exit 1
   fi
 
   local results='[]'
@@ -2441,9 +2696,9 @@ cmd_verify_run() {
 
   if [ -f "$STATE_FILE" ] && jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness' "$STATE_FILE" >/dev/null 2>&1; then
     case "$overall" in
-      PASS) cmd_harness_gate VERIFICATION PASS ;;
-      FAIL) cmd_harness_gate VERIFICATION FAIL "one or more checks failed" ;;
-      UNKNOWN) cmd_harness_gate VERIFICATION UNKNOWN "one or more checks unknown" ;;
+      PASS) HARNESS_GATE_SOURCE=verify cmd_harness_gate VERIFICATION PASS ;;
+      FAIL) HARNESS_GATE_SOURCE=verify cmd_harness_gate VERIFICATION FAIL "one or more checks failed" ;;
+      UNKNOWN) HARNESS_GATE_SOURCE=verify cmd_harness_gate VERIFICATION UNKNOWN "one or more checks unknown" ;;
     esac
   fi
 
@@ -2476,12 +2731,20 @@ cmd_route_detect() {
   wd="$(goal_workdir)"
   files="$(cd "$wd" && (git diff --name-only "origin/$base...HEAD" 2>/dev/null || git diff --name-only "$base...HEAD" 2>/dev/null || true))"
 
-  local ui=0
+  local ui=0 business=0
   local evidence=""
+  local biz_re='/(api|routes|controllers|handlers|resolvers|graphql|services|usecases|domain|features|workflows|migrations)/|(openapi|swagger)|schema\.prisma|\.proto$'
   while IFS= read -r f; do
     [ -z "$f" ] && continue
     if echo "$f" | grep -qiE '\.(tsx|jsx|vue|svelte|css|scss|sass|less|html)$|/(components|pages|views|ui|app)/'; then
       ui=1
+      if [ -z "$evidence" ]; then
+        evidence="$f"
+      else
+        evidence="$evidence, $f"
+      fi
+    elif echo "$f" | grep -qiE "$biz_re"; then
+      business=1
       if [ -z "$evidence" ]; then
         evidence="$f"
       else
@@ -2517,14 +2780,15 @@ cmd_route_detect() {
     elif [ "$qa_mode" = "never" ]; then
       route="backend"
       add_reason "qa_mode=never"
+    elif [ "$business" -eq 1 ]; then
+      route="feature"
+      add_reason "business_paths"
+    elif [ -n "$files" ]; then
+      route="backend"
+      add_reason "internal_non_ui"
     else
-      if [ -n "$files" ]; then
-        route="feature"
-        add_reason "changed_files_non_ui"
-      else
-        route="backend"
-        add_reason "no_diff_default_backend"
-      fi
+      route="backend"
+      add_reason "no_diff_default_backend"
     fi
   fi
 
@@ -2540,6 +2804,7 @@ cmd_route_detect() {
     --argjson figma_enabled "$figma_json" \
     '{
       route: $route,
+      baseline: true,
       evidence: $evidence,
       reasons: $reasons,
       qa_mode: $qa_mode,

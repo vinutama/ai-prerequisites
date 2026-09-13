@@ -170,6 +170,19 @@ The output is TAB-separated:
 
 `model    reasoning_effort    fallback`
 
+For `@visual-reviewer`, ALWAYS resolve a vision-capable model first:
+
+```bash
+.codex/scripts/goal-git.sh models visual-reviewer --require-multimodal
+```
+
+If that command exits non-zero:
+
+* do NOT spawn visual-reviewer
+* do NOT fall back to a text-only model
+* mark harness FAILED or leave VISUAL as UNKNOWN/FAIL with a clear reason
+* report that no vision-capable model is configured in `$capabilities.vision_models`
+
 Spawn with all fields explicit:
 
 ```text
@@ -185,6 +198,9 @@ If a model is unavailable, rate-limited, or the provider fails:
 ```bash
 .codex/scripts/goal-git.sh models <role> --next <failed-model>
 ```
+
+For multimodal roles, `--next` only returns models listed in
+`$capabilities.vision_models`. If none remain, stop — never silently downgrade.
 
 Use the returned fallback and re-spawn.
 
@@ -225,9 +241,23 @@ After planning is accepted:
 
 ```bash
 .codex/scripts/goal-git.sh route detect
-.codex/scripts/goal-git.sh harness init --route <backend|feature|frontend>
+```
+
+`route detect` is a **baseline classifier only**. Prefer the Planner's
+`### Routing` block (`route`, `qa_required`, `visual_required`) when present.
+
+Initialize the harness with explicit requirements:
+
+```bash
+.codex/scripts/goal-git.sh harness init \
+  --route <route> \
+  --qa <qa_required true|false> \
+  --visual <visual_required true|false>
 .codex/scripts/goal-git.sh harness gate PLAN PASS
 ```
+
+Do NOT re-derive QA/Visual from route after Planner supplied explicit signals.
+`requirements.qa` / `requirements.visual` in the harness are authoritative.
 
 Planner routing may override the baseline route when justified.
 
@@ -293,7 +323,12 @@ Set task status with:
 .codex/scripts/goal-git.sh harness task set <id> RUNNING
 .codex/scripts/goal-git.sh harness task set <id> DONE
 .codex/scripts/goal-git.sh harness task set <id> BLOCKED
+.codex/scripts/goal-git.sh harness task set <id> FAILED
 ```
+
+`FAILED` means execution was attempted and failed. Do not coerce FAILED into
+BLOCKED. BLOCKED means the task cannot continue without another agent or
+information.
 
 Do not leave tasks in RUNNING when the agent has already finished or failed.
 
@@ -303,16 +338,17 @@ Do not leave tasks in RUNNING when the agent has already finished or failed.
 
 Do NOT run every agent on every goal.
 
-Default routing:
+Default routing is driven by harness `requirements` (from Planner signals),
+not by hardcoding route → gates:
 
-Simple implementation:
+Simple / backend (`qa=false`, `visual=false`):
 Planner → Builder → Verify → Reviewer → DONE
 
-Feature/business change:
+Feature/business (`qa=true`, `visual=false`):
 Planner → Builder → Verify → Reviewer → QA → DONE
 
-Frontend change:
-Planner → Builder → Verify → Reviewer → QA → Visual → DONE
+Frontend (`qa=true`, `visual=true` when Planner says so):
+Planner → Builder → Verify → Reviewer → QA? → Visual? → DONE
 
 Research-required:
 Planner → Researcher → Builder → Verify → Reviewer → ...
@@ -445,7 +481,10 @@ If required routing fields are missing or malformed:
 Once accepted:
 
 ```bash
-.codex/scripts/goal-git.sh harness init --route <route>
+.codex/scripts/goal-git.sh harness init \
+  --route <route> \
+  --qa <qa_required> \
+  --visual <visual_required>
 .codex/scripts/goal-git.sh harness gate PLAN PASS
 ```
 
@@ -535,7 +574,34 @@ For multi-repo mode:
 * never parallelize across repositories unless the existing harness explicitly
   supports safe cross-repo concurrency
 
-Record every delegated task in the harness.
+Record every delegated task in the harness BEFORE spawning:
+
+```bash
+.codex/scripts/goal-git.sh harness task add builder "<title>"
+.codex/scripts/goal-git.sh harness task set <id> RUNNING
+```
+
+On Builder completion:
+
+```bash
+.codex/scripts/goal-git.sh harness task set <id> DONE
+```
+
+On Builder BLOCKED:
+
+```bash
+.codex/scripts/goal-git.sh harness task set <id> BLOCKED
+```
+
+On hard failure after attempts:
+
+```bash
+.codex/scripts/goal-git.sh harness task set <id> FAILED
+```
+
+`IMPLEMENTATION PASS` is rejected unless every builder/builder-expert task is
+DONE and at least one such task exists. Do not claim IMPLEMENTATION PASS from
+judgment alone.
 
 ==================================================
 
@@ -750,18 +816,22 @@ Then:
 
 ==================================================
 
-Run QA when:
-
-* planner `qa_required=true`
-* route = `feature`
-* route = `frontend`
-* `qa_mode=always`
-
-Otherwise:
+Read harness requirements before deciding:
 
 ```bash
-.codex/scripts/goal-git.sh harness gate QA SKIPPED "<reason>"
+.codex/scripts/goal-git.sh harness status
 ```
+
+Run QA only when `requirements.qa == true`.
+
+Otherwise leave QA as SKIPPED (already seeded by `harness init`) or set:
+
+```bash
+.codex/scripts/goal-git.sh harness gate QA SKIPPED "requirements.qa=false"
+```
+
+Do NOT re-derive QA from route (`feature`/`frontend`) after Planner signals
+are recorded in the harness.
 
 When QA is required:
 
@@ -787,7 +857,7 @@ QA completion requires:
 .codex/scripts/goal-git.sh harness qa pending
 ```
 
-to exit 0.
+to exit 0, with at least one recorded scenario.
 
 Then:
 
@@ -807,31 +877,39 @@ Do not skip deterministic verification after QA-triggered implementation changes
 
 ==================================================
 
-Run Visual Review only when:
-
-* route = frontend
-* planner `visual_required=true`
-* relevant UI files changed
-* Figma/design validation is required
-* `visual_mode=always`
-
-Otherwise:
+Read harness requirements before deciding:
 
 ```bash
-.codex/scripts/goal-git.sh harness gate VISUAL SKIPPED "<reason>"
+.codex/scripts/goal-git.sh harness status
 ```
+
+Run Visual Review only when `requirements.visual == true`.
+
+Otherwise leave VISUAL as SKIPPED (already seeded by `harness init`) or set:
+
+```bash
+.codex/scripts/goal-git.sh harness gate VISUAL SKIPPED "requirements.visual=false"
+```
+
+Do NOT infer Visual from route=`frontend` alone after Planner signals are
+recorded.
 
 When required:
 
 ```bash
+.codex/scripts/goal-git.sh models visual-reviewer --require-multimodal
 .codex/scripts/goal-git.sh harness phase VISUAL_REVIEW
 ```
 
-Spawn `@visual-reviewer`.
+Spawn `@visual-reviewer` only with the model returned by `--require-multimodal`.
 
-Visual Reviewer must return a structured visual verdict.
+Visual Reviewer must return a structured visual verdict and record observations:
 
-On LGTM:
+```bash
+.codex/scripts/goal-git.sh harness visual add <viewport> PASS|FAIL "<note>"
+```
+
+On LGTM (and `harness visual pending` exits 0 with at least one observation):
 
 ```bash
 .codex/scripts/goal-git.sh harness gate VISUAL PASS

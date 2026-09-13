@@ -52,8 +52,34 @@ Codex removed custom prompts in 0.117.0. Entry points are skills invoked with
 `$goal`, `$init-goal`, `$init-skills` — not slash commands.
 
 Codex includes an expanded harness (`goal-git.sh harness|verify|route`),
-deterministic verification, and two extra agents (`researcher`, `qa`) beyond
-the shared six-agent core.
+Planner-driven QA/Visual requirements, evidence-backed gates, deterministic
+`verify run` (separate from `analyze`), vision-capability enforcement for
+`visual-reviewer`, and two extra agents (`researcher`, `qa`) beyond the shared
+six-agent core.
+
+#### Codex harness gates
+
+Initialize after Planner routing signals:
+
+```bash
+.codex/scripts/goal-git.sh harness init \
+  --route <backend|feature|frontend> \
+  --qa <true|false> \
+  --visual <true|false>
+```
+
+| Gate | PASS evidence |
+|---|---|
+| PLAN | Planner accepted |
+| IMPLEMENTATION | All builder/builder-expert tasks DONE |
+| VERIFICATION | `verify run` only (manual PASS rejected) |
+| REVIEW | `pending` (inline) or `review pending` (local) exit 0 |
+| QA | required + scenarios recorded + `harness qa pending` exit 0 |
+| VISUAL | required + observations + `harness visual pending` exit 0 |
+
+Definition of DONE: always PLAN + IMPLEMENTATION + VERIFICATION + REVIEW must
+be `PASS`. QA / VISUAL only when harness `requirements` say so.
+`route detect` is a baseline classifier; Planner `### Routing` is authoritative.
 
 ### Qoder
 ```bash
@@ -102,7 +128,8 @@ Shared across every target: `state.json` (gitignored, project root),
 Each tree includes the same core 6 agents (`planner`, `builder`, `builder-expert`,
 `reviewer`, `visual-reviewer`, `orchestrator`), `goal-git.sh`, `goal-models.json`,
 and the `goal-loop` skill. **Codex** also ships `researcher` and `qa`, plus
-harness / verify / route commands on its private `goal-git.sh`.
+`harness` / `verify` / `route` on its private `goal-git.sh`. The Codex harness
+(not the orchestrator's judgment) is the completion authority.
 
 ## Commands
 
@@ -333,7 +360,10 @@ Every agent operates in `/ponytail full` mode.
 On most platforms the planner tags every task `@builder` or `@builder-expert`.
 **Codex** tags implementation tasks `@builder` only; `@builder-expert` is an
 escalation path, and `@researcher` / `@qa` are conditional. Codex verification
-is deterministic (`goal-git.sh verify run`).
+is deterministic (`goal-git.sh verify run`). `route detect` is only a baseline
+classifier; after planning, the Planner's `### Routing` block (`route`,
+`qa_required`, `visual_required`) is authoritative — QA is not implied by
+"feature" and Visual is not implied by "frontend".
 
 The orchestrator delegates automatically (OpenCode `@mentions`, Cursor/Claude/Qoder
 subagent launch, Codex `spawn_agent` with `agent_type`).
@@ -345,11 +375,12 @@ The loop is the same. These are the harness limits:
 - **Codex has no slash commands.** Custom prompts were removed in CLI 0.117.0. Use `$goal`.
 - **Codex CLI 0.138.0+** is required. 0.137.0 hid `agent_type` from `spawn_agent`, which blocks custom-agent delegation.
 - **Codex `.codex/config.toml` loads only for trusted projects.** Without trust, `max_depth`, network access, and the Figma MCP block are ignored. Confirm with `/status` after first launch.
-- **Codex harness** (`harness` / `verify` / `route` on `goal-git.sh`) and the `researcher` / `qa` agents are Codex-only; other platforms keep the prior six-agent loop.
+- **Codex harness** (`harness` / `verify` / `route` on `goal-git.sh`) and the `researcher` / `qa` agents are Codex-only; other platforms keep the prior six-agent loop. Gates are evidence-backed; `analyze` (gitnexus/rtk) is not part of `verify`.
+- **Codex visual-reviewer** hard-fails rather than downgrading to a text-only model. Vision allowlist is `$capabilities.vision_models` in `goal-models.json` (ships seeded with `gpt-5.6-terra` only — extend by hand).
 - **Codex and Cursor cannot machine-enforce `edit: deny`** on `orchestrator`, `reviewer`, or `visual-reviewer`. That rule is prompt-enforced. (Claude Code uses a `tools` allowlist; OpenCode uses `permission.edit: deny`.)
 - **Goal-loop installs auto-approve tool prompts** (paths, bash, MCP) on all five targets so agents are not interrupted for permission dialogs. Orchestrator/planner/reviewer still cannot edit application source via role tool limits.
 - **Cursor allows two levels of subagent nesting.** `/goal` (main) → `orchestrator` → `builder` fits; builders must never spawn subagents.
-- **Model fallback is OpenCode-only** for automatic plugin fallbacks; Codex uses `goal-git.sh models <role> --next` at spawn time.
+- **Model fallback is OpenCode-only** for automatic plugin fallbacks; Codex uses `goal-git.sh models <role> --next` at spawn time (vision-filtered for multimodal roles via `$capabilities.vision_models`).
 - **Cursor and Codex have no `$ARGUMENTS` expansion.** Command skills read the text typed after `/goal` or `$goal` from the user message.
 - **Installing `--cursor` and `--codex` together** surfaces the four goal skills twice in Cursor, because Cursor also scans `.agents/skills/`.
 

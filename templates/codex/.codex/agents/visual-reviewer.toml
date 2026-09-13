@@ -279,6 +279,17 @@ conventions.
 
 The visual model should inspect the actual captured screenshots.
 
+After inspecting each relevant viewport, record the observation in the harness:
+
+```bash
+.codex/scripts/goal-git.sh harness visual add <viewport> PASS|FAIL "<note>"
+```
+
+Example viewports: `375`, `768`, `1024`, `1440`.
+
+`VISUAL PASS` is rejected unless at least one observation is recorded and
+`harness visual pending` exits 0. Never claim Visual PASS from route alone.
+
 ==================================================
 11. FIGMA / DESIGN REFERENCE
 ============================

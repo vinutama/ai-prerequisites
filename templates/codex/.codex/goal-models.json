@@ -1,4 +1,9 @@
 {
+  "$capabilities": {
+    "vision_models": [
+      "gpt-5.6-terra"
+    ]
+  },
   "orchestrator": {
     "model": "gpt-5.6-terra",
     "model_reasoning_effort": "low",
