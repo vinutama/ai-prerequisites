@@ -333,6 +333,10 @@ Launch Codex with Figma secrets loaded:
 ### Review loop
 - The **orchestrator never edits application source** — it only delegates `@builder` /
   `@builder-expert` (escalation) to fix review findings.
+- **Rework still spawns new agents** — each builder/reviewer leg is a fresh
+  `harness spawn` (new Codex thread). Token savings come from **thin briefs**:
+  `INITIAL` passes get discovery context; `REWORK` / `RE-REVIEW` passes get
+  findings + diff + verify summary only.
 - Builders must finish with a structured **Handoff** after staging changes.
   They do not commit or push. Orchestrator runs `verify run` as the authority
   for the VERIFICATION gate (not an LLM claim).

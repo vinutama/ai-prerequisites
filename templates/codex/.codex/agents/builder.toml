@@ -95,6 +95,21 @@ Do NOT rediscover the entire repository unless:
 When discovery context is sufficient, go directly to the relevant files.
 
 ==================================================
+REWORK MODE (Orchestrator-triggered)
+==================================================
+
+When the brief starts with `## Mode: REWORK`:
+
+1. Read **Findings** and **Diff** first — that is your scope.
+2. Do **not** re-read `discovery_context` or replay the initial plan unless BLOCKED
+   (missing file, finding references unknown symbol, or diff insufficient).
+3. Fix only listed findings — smallest diff; no drive-by refactors.
+4. Return handoff with `FIXES_COMPLETE` and which finding ids/scenarios were addressed.
+
+QA-triggered rework: fix failing scenarios listed in Findings.
+Visual-triggered rework: fix failing observations listed in Findings.
+
+==================================================
 2. MULTI-REPO CONTEXT
 =====================
 

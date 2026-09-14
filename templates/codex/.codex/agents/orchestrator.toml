@@ -695,6 +695,45 @@ Record every delegated task in the harness BEFORE spawning:
 
 Pass Builder: task, discovery_context (or goal+acceptance for TRIVIAL), not full transcripts.
 
+**Initial build** — first `@builder` spawn for a task:
+
+* mode: `INITIAL`
+* pass: task + `discovery_context` (or goal + acceptance for TRIVIAL) + plan slice if needed
+* do NOT attach prior agent transcripts
+
+**Rework build** — every `@builder` spawn after REVIEW / QA / VISUAL failure:
+
+Still spawn a **new** `@builder` (`harness spawn builder` counts toward budget). Do NOT
+try to resume the old builder thread — fresh thread + thin brief is cheaper.
+
+```bash
+.codex/scripts/goal-git.sh harness retry rework
+.codex/scripts/goal-git.sh harness phase REWORK
+.codex/scripts/goal-git.sh harness phase BUILDING
+.codex/scripts/goal-git.sh harness task add builder "REWORK: <trigger>"
+.codex/scripts/goal-git.sh harness task set <id> RUNNING
+.codex/scripts/goal-git.sh harness spawn builder
+.codex/scripts/goal-git.sh models builder --complexity "$LEVEL"
+.codex/scripts/goal-git.sh harness event orchestrator builder_started "REWORK-<id>"
+```
+
+Pass **only** this rework brief (no full discovery_context unless builder returns BLOCKED):
+
+```text
+## Mode: REWORK
+## Trigger: REVIEW | QA | VISUAL | VERIFY
+## Findings: <structured list from reviewer / harness qa pending / harness visual pending>
+## Diff: <output of .codex/scripts/goal-git.sh diff>
+## Instruction: fix listed findings only; smallest diff; do not re-explore the repo
+```
+
+Gather findings before spawn:
+
+* inline review: unresolved threads / reviewer verdict summary
+* local review: `.codex/scripts/goal-git.sh review pending` output
+* QA: failing scenarios from `.codex/scripts/goal-git.sh harness qa pending`
+* Visual: failing observations from `.codex/scripts/goal-git.sh harness visual pending`
+
 On Builder completion:
 
 ```bash
@@ -870,6 +909,36 @@ Then:
 
 Spawn `@reviewer` only when `requirements.reviewer != false`.
 
+**Initial review** — first `@reviewer` spawn after first push/PR:
+
+* mode: `INITIAL`
+* pass: goal + acceptance + diff + verify evidence + high-risk slice from discovery_context
+
+**Re-review** — every `@reviewer` spawn after a rework push:
+
+Still spawn a **new** `@reviewer` (`harness spawn reviewer`; `max_reviewer_runs=2` allows
+initial + one rework cycle). Do NOT resume the prior reviewer thread.
+
+```bash
+.codex/scripts/goal-git.sh harness phase REVIEWING
+.codex/scripts/goal-git.sh harness spawn reviewer
+.codex/scripts/goal-git.sh models reviewer --complexity "$LEVEL"
+.codex/scripts/goal-git.sh harness event orchestrator reviewer_started "RE-REVIEW"
+```
+
+Pass **only** this re-review brief:
+
+```text
+## Mode: RE-REVIEW
+## Diff: <output of .codex/scripts/goal-git.sh diff>
+## Verify: <summary of last verify run — PASS/FAIL + key output>
+## Prior findings: <what the rework builder was asked to fix>
+## Instruction: confirm fixes only; diff-first; do not re-audit unrelated code
+```
+
+Do NOT re-send full `discovery_context` or prior review transcripts unless the diff
+touches architecture/high-risk areas.
+
 If reviewer skipped (TRIVIAL): leave REVIEW as SKIPPED; after verify go to DONE
 (or QA/Visual if required). Allow at most one repair → verify → re-review cycle
 (`max_reviewer_runs=2`, `review_max_iterations=2`). Further loops → BLOCKED.
@@ -892,10 +961,10 @@ Continue.
 
 * increment rework counter
 * enter REWORK
-* delegate Builder
+* delegate Builder with **REWORK** brief (findings + diff — see PHASE D)
 * VERIFY again
 * commit again
-* return to REVIEWING
+* return to REVIEWING with **RE-REVIEW** brief (see PHASE H)
 
 ### ESCALATE
 
@@ -984,9 +1053,11 @@ Then:
 
 QA failure follows:
 
-QA → REWORK → Builder → VERIFY → REVIEW → QA
+QA → REWORK → Builder (**REWORK** brief: failing scenarios + diff) → VERIFY → REVIEW → QA
 
 Do not skip deterministic verification after QA-triggered implementation changes.
+Use the same **REWORK** builder spawn pattern as review failures (findings from
+`harness qa pending`, not full discovery_context).
 
 ==================================================
 
@@ -1055,6 +1126,21 @@ On NEEDS_FIX:
 # PHASE L — REVIEW / REWORK LOOP
 
 ==================================================
+
+## Spawn policy (token-efficient)
+
+Each loop leg uses a **new spawn** (`harness spawn <role>`) — never resume old threads.
+What changes is the **brief**, not the spawn model:
+
+| Leg | Agent | Mode | Brief |
+|---|---|---|---|
+| 1st implementation | `@builder` | `INITIAL` | task + `discovery_context` |
+| 1st review | `@reviewer` | `INITIAL` | goal + diff + verify + risk slice |
+| Fix after failure | `@builder` | `REWORK` | findings + diff only |
+| After rework push | `@reviewer` | `RE-REVIEW` | diff + verify + prior findings |
+| QA / Visual | `@qa` / `@visual-reviewer` | (once) | acceptance + behavior/UI criteria |
+
+Rework spawns are **not** concurrency — they are sequential repair cycles.
 
 There is only one canonical rework cycle:
 

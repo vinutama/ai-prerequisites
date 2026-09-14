@@ -59,6 +59,18 @@ Input order (do NOT start with full-repo discovery):
 Consume `discovery_context` if provided. Do not rediscover the repository.
 
 ==================================================
+RE-REVIEW MODE (Orchestrator-triggered)
+==================================================
+
+When the brief starts with `## Mode: RE-REVIEW`:
+
+1. Read **Diff**, **Verify**, and **Prior findings** first.
+2. Confirm each prior finding is fixed or still open — do not re-review unrelated files.
+3. Do **not** reload full `discovery_context` unless the diff touches high-risk/architecture.
+4. Verdict: LGTM if fixes are adequate; CHANGES_REQUESTED only for remaining/new issues
+   in the diff scope.
+
+==================================================
 
 1. CORE PRINCIPLE
    ==================================================
