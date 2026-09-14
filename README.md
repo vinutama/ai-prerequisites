@@ -51,11 +51,11 @@ $goal Add a health-check endpoint
 Codex removed custom prompts in 0.117.0. Entry points are skills invoked with
 `$goal`, `$init-goal`, `$init-skills` — not slash commands.
 
-Codex includes an expanded harness (`goal-git.sh harness|verify|route`),
-Planner-driven QA/Visual requirements, evidence-backed gates, deterministic
-`verify run` (separate from `analyze`), vision-capability enforcement for
-`visual-reviewer`, and two extra agents (`researcher`, `qa`) beyond the shared
-six-agent core.
+Codex includes an expanded harness (`goal-git.sh harness|verify|route|complexity`),
+Terra-first model defaults with complexity-aware escalation (Astra only for
+architectural planning), Planner skip on TRIVIAL, single-issue queue bypass,
+spawn budgets, evidence-backed gates, deterministic `verify run`, vision
+enforcement for `visual-reviewer`, and `researcher` / `qa` agents.
 
 #### Codex harness gates
 
@@ -363,12 +363,12 @@ filter: `safe,none`.
 
 | Agent | Role | OpenCode | Claude | Cursor | Codex | Qoder |
 |---|---|---|---|---|---|---|
-| `planner` | Architecture & plans | `opencode-go/qwen3.7-max` | `opus` | inherit | `gpt-6-astra`, high, read-only | performance |
+| `planner` | Architecture & plans | `opencode-go/qwen3.7-max` | `opus` | inherit | `gpt-5.6-terra` medium (COMPLEX→sol, ARCH→astra); read-only | performance |
 | `researcher` | On-demand research (Codex only) | — | — | — | `gpt-5.6-terra`, medium, read-only | — |
-| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | `gpt-5.6-sol`, medium | efficient |
+| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | `gpt-5.6-terra` medium (COMPLEX+→sol) | efficient |
 | `builder-expert` | Complex execution (Codex: escalation-only) | `opencode-go/kimi-k2.7-code` | `opus` | inherit | `gpt-5.6-sol`, high | performance |
-| `reviewer` | Code review + inline PR comments | `opencode-go/deepseek-v4-pro` | `opus` | inherit | `gpt-5.6-sol`, medium | performance |
-| `qa` | Behavior/business QA (Codex only, conditional) | — | — | — | `gpt-5.6-sol`, medium | — |
+| `reviewer` | Code review + inline PR comments | `opencode-go/deepseek-v4-pro` | `opus` | inherit | `gpt-5.6-terra` medium (COMPLEX+→sol) | performance |
+| `qa` | Behavior/business QA (Codex only, conditional) | — | — | — | `gpt-5.6-terra`, medium | — |
 | `orchestrator` | Workflow manager | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | `gpt-5.6-terra`, low | efficient |
 | `visual-reviewer` | UI/multimodal review + inline PR comments | `opencode-go/mimo-v2.5-pro` | `sonnet` | inherit | `gpt-5.6-terra`, medium | inherit |
 
@@ -393,7 +393,7 @@ The loop is the same. These are the harness limits:
 - **Codex has no slash commands.** Custom prompts were removed in CLI 0.117.0. Use `$goal`.
 - **Codex CLI 0.138.0+** is required. 0.137.0 hid `agent_type` from `spawn_agent`, which blocks custom-agent delegation.
 - **Codex `.codex/config.toml` loads only for trusted projects.** Without trust, `max_depth`, network access, and the Figma MCP block are ignored. Confirm with `/status` after first launch.
-- **Codex harness** (`harness` / `verify` / `route` on `goal-git.sh`) and the `researcher` / `qa` agents are Codex-only; other platforms keep the prior six-agent loop. Gates are evidence-backed; `analyze` (gitnexus/rtk) is not part of `verify`.
+- **Codex harness** (`harness` / `verify` / `route` / `complexity` on `goal-git.sh`) and the `researcher` / `qa` agents are Codex-only; other platforms keep the prior six-agent loop. Gates are evidence-backed; `analyze` is not part of `verify`. Terra-first defaults; Astra is architectural-planning escalation only. TRIVIAL skips Planner; single-issue queues bypass queue orchestration; spawn budgets cap runaway loops.
 - **Codex visual-reviewer** hard-fails rather than downgrading to a text-only model. Vision allowlist is `$capabilities.vision_models` in `goal-models.json` (ships seeded with `gpt-5.6-terra` only — extend by hand).
 - **Codex and Cursor cannot machine-enforce `edit: deny`** on `orchestrator`, `reviewer`, or `visual-reviewer`. That rule is prompt-enforced. (Claude Code uses a `tools` allowlist; OpenCode uses `permission.edit: deny`.)
 - **Goal-loop installs auto-approve tool prompts** (paths, bash, MCP) on all five targets so agents are not interrupted for permission dialogs. Orchestrator/planner/reviewer still cannot edit application source via role tool limits.

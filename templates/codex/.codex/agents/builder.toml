@@ -1,6 +1,6 @@
 name = "builder"
 description = "General implementation executor for routine frontend and backend tasks. Implements the Planner's scoped tasks, follows existing repository patterns, runs lightweight local checks, and returns a structured handoff. Escalation is orchestrator-owned; Builder Expert is never spawned by Builder."
-model = "gpt-5.6-sol"
+model = "gpt-5.6-terra"
 model_reasoning_effort = "medium"
 sandbox_mode = "danger-full-access"
 
@@ -55,6 +55,18 @@ Required vocabulary: `started` | `progress` | `blocked` | `completed` | `failed`
 | Hard failure | `harness event builder failed "<reason>"` |
 
 Do not spam — one event per meaningful milestone is enough.
+
+==================================================
+CONTEXT-FIRST EXECUTION
+==================================================
+
+1. Read the assigned task.
+2. Read `discovery_context` (or goal + acceptance criteria when Planner was skipped).
+3. Inspect only listed `relevant_files` / `relevant_symbols`.
+4. Implement the smallest correct change.
+5. Search outside that scope ONLY when blocked or evidence shows the context is insufficient.
+
+Do NOT re-read the whole repository. Do NOT expect a full prior transcript.
 
 ==================================================
 

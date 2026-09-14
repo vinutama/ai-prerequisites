@@ -153,35 +153,38 @@ Only `@reviewer` and `@visual-reviewer` may perform review-thread
 resolution/comment actions.
 
 ==================================================
-4. MODEL ROUTING
-================
+4. MODEL ROUTING (cheap by default)
+===================================
 
 Every spawned agent MUST receive an explicit model and reasoning effort.
 
 Never inherit the Orchestrator's model.
 
-Before spawning a role:
+**Complexity-aware resolution (preferred):**
 
 ```bash
-.codex/scripts/goal-git.sh models <role>
+.codex/scripts/goal-git.sh complexity classify "<goal text>"
+# → {complexity, planner_required, reviewer_required, …}
+
+.codex/scripts/goal-git.sh models <role> --complexity <LEVEL>
 ```
 
-The output is TAB-separated:
+TAB output: `model    reasoning_effort    fallback`
 
-`model    reasoning_effort    fallback`
+Defaults are Terra-first. Astra is ONLY for ARCHITECTURAL planning.
+Sol is for COMPLEX+ builder/reviewer or planner escalation — not every issue.
+
+Before every spawn:
+
+```bash
+.codex/scripts/goal-git.sh harness spawn <role>   # budget gate; exit 1 if exceeded
+```
 
 For `@visual-reviewer`, ALWAYS resolve a vision-capable model first:
 
 ```bash
 .codex/scripts/goal-git.sh models visual-reviewer --require-multimodal
 ```
-
-If that command exits non-zero:
-
-* do NOT spawn visual-reviewer
-* do NOT fall back to a text-only model
-* mark harness FAILED or leave VISUAL as UNKNOWN/FAIL with a clear reason
-* report that no vision-capable model is configured in `$capabilities.vision_models`
 
 Spawn with all fields explicit:
 
@@ -193,31 +196,19 @@ spawn_agent({
 })
 ```
 
-If a model is unavailable, rate-limited, or the provider fails:
+**Escalation rules — do NOT escalate models for tool/environment failures:**
 
-```bash
-.codex/scripts/goal-git.sh models <role> --next <failed-model>
-```
+* missing binary / UNKNOWN verify / lock / network → report blocker, do NOT `--next`
+* provider unavailable / rate-limit / reasoning failure → `models <role> --next <failed>`
+* architecture uncertainty → escalate planner/expert via complexity or expert path
 
-For multimodal roles, `--next` only returns models listed in
-`$capabilities.vision_models`. If none remain, stop — never silently downgrade.
+Never silently change models. Never downgrade `visual-reviewer` to text-only.
 
-Use the returned fallback and re-spawn.
+Preferred assignments come from `.codex/goal-models.json` (`$routing` + role defaults).
 
-If fallback resolution fails:
-
-* stop the workflow
-* mark the harness FAILED
-* report the reason
-
-Never silently change models.
-
-Never downgrade `visual-reviewer` to a text-only model.
-
-Preferred model assignments come from:
-
-* `.codex/goal-models.json`
-* role `.toml` definitions
+**Wait policy:** After spawning, `wait` once for completion. Do NOT burn turns on
+"still waiting" / queue polling chatter. Use `harness progress` if a human needs status.
+Only intervene on timeout/stall, incomplete output, harness no-progress, or user interrupt.
 
 ==================================================
 4b. PROGRESS MILESTONES
@@ -499,53 +490,80 @@ Required configuration:
 
 ==================================================
 
-# PHASE B — PLAN
+# PHASE A2 — CLASSIFY (cheap, mandatory)
 
 ==================================================
 
-Before spawning:
+Before any expensive Planner spawn:
 
 ```bash
+.codex/scripts/goal-git.sh complexity classify "<goal or issue text>"
+```
+
+Record `complexity`, `planner_required`, `reviewer_required`.
+
+Optionally seed/read `.codex/repo-context.json` if present (stable project facts only).
+
+==================================================
+
+# PHASE B — PLAN (conditional)
+
+==================================================
+
+If `planner_required=false` (typically TRIVIAL):
+
+* Do NOT spawn Planner.
+* Initialize harness with complexity flags and skip PLAN:
+
+```bash
+.codex/scripts/goal-git.sh route detect   # baseline only
+.codex/scripts/goal-git.sh harness init \
+  --route <route> \
+  --qa false \
+  --visual false \
+  --complexity TRIVIAL \
+  --planner-required false \
+  --reviewer-required false
+.codex/scripts/goal-git.sh harness phase BUILDING
+```
+
+* Pass Builder: goal, acceptance criteria, any known target files from classify/route.
+* Continue at PHASE D.
+
+If `planner_required=true`:
+
+```bash
+LEVEL=$(jq -r .complexity <<< "$classify_json")
+.codex/scripts/goal-git.sh models planner --complexity "$LEVEL"
+.codex/scripts/goal-git.sh harness spawn planner
 .codex/scripts/goal-git.sh harness event orchestrator planner_started
 ```
 
-Spawn `@planner`.
+Spawn `@planner` once with the resolved model/effort.
 
 Pass:
 
 * active goal
 * continuation instruction when applicable
-* repository context
+* repo-context if available (NOT full transcript)
 * queue/issue mode when applicable
 
-Planner must return:
+Planner must return compact:
 
-* route
-* research_required
-* research_brief
-* qa_required
-* visual_required
-* high_risk_areas
-* discovery_context
-* implementation_plan
-* `## Milestones` block (replay into harness events on return)
+* route, research_required, research_brief, qa_required, visual_required
+* high_risk_areas, discovery_context, implementation_plan, acceptance_criteria
+* `## Milestones` block
 
 After planner returns:
 
 ```bash
 .codex/scripts/goal-git.sh harness event orchestrator planner_completed "<status>"
-# Replay each milestone from Planner's ## Milestones block:
-# .codex/scripts/goal-git.sh harness event planner <event> "<detail>"
+# Replay ## Milestones
+.codex/scripts/goal-git.sh harness context put discovery_context -
+# paste discovery_context JSON on stdin
 ```
 
-Validate the Planner output.
-
-If required routing fields are missing or malformed:
-
-* treat the plan as invalid
-* do not start building
-* re-invoke Planner only if the configured retry policy permits it
-* otherwise fail cleanly
+Validate Planner output. Re-invoke Planner only if budget allows (`max_planner_runs`).
 
 Once accepted:
 
@@ -553,7 +571,10 @@ Once accepted:
 .codex/scripts/goal-git.sh harness init \
   --route <route> \
   --qa <qa_required> \
-  --visual <visual_required>
+  --visual <visual_required> \
+  --complexity <LEVEL> \
+  --planner-required true \
+  --reviewer-required true
 .codex/scripts/goal-git.sh harness gate PLAN PASS
 ```
 
@@ -565,6 +586,8 @@ Then:
 
 unless research is required.
 
+Do NOT rediscover architecture in the Orchestrator. Consume structured outputs.
+
 ==================================================
 
 # PHASE C — RESEARCH
@@ -573,24 +596,28 @@ unless research is required.
 
 Run only when:
 
-* `research_required=true`
-* OR a non-empty research brief exists
+* `research_required=true` with a concrete unresolved question
+* NOT for ordinary codebase discovery or restating in-repo docs
 
 Set:
 
 ```bash
 .codex/scripts/goal-git.sh harness phase RESEARCHING
+.codex/scripts/goal-git.sh harness spawn researcher
+.codex/scripts/goal-git.sh models researcher --complexity "$LEVEL"
 .codex/scripts/goal-git.sh harness event orchestrator researcher_started
 ```
 
-Spawn `@researcher`.
+Spawn `@researcher` once.
 
 Pass:
 
-* research brief
-* only the relevant discovery context
+* one specific research question
+* only the relevant discovery_context slice
 * relevant plan section
 * repository path(s)
+
+Do NOT pass the entire research transcript downstream — only `research_report`.
 
 Require a concise structured research result including a `## Milestones` block.
 
@@ -657,8 +684,12 @@ Record every delegated task in the harness BEFORE spawning:
 ```bash
 .codex/scripts/goal-git.sh harness task add builder "<title>"
 .codex/scripts/goal-git.sh harness task set <id> RUNNING
+.codex/scripts/goal-git.sh harness spawn builder
+.codex/scripts/goal-git.sh models builder --complexity "$LEVEL"
 .codex/scripts/goal-git.sh harness event orchestrator builder_started "<id>"
 ```
+
+Pass Builder: task, discovery_context (or goal+acceptance for TRIVIAL), not full transcripts.
 
 On Builder completion:
 
@@ -718,6 +749,8 @@ If allowed:
 
 ```bash
 .codex/scripts/goal-git.sh harness phase ESCALATED
+.codex/scripts/goal-git.sh harness spawn builder-expert
+.codex/scripts/goal-git.sh models builder-expert --complexity "$LEVEL"
 .codex/scripts/goal-git.sh harness event orchestrator builder_expert_started
 ```
 
@@ -826,47 +859,16 @@ Then:
 
 ```bash
 .codex/scripts/goal-git.sh harness phase REVIEWING
+.codex/scripts/goal-git.sh harness spawn reviewer
+.codex/scripts/goal-git.sh models reviewer --complexity "$LEVEL"
 .codex/scripts/goal-git.sh harness event orchestrator reviewer_started
 ```
 
-Spawn `@reviewer`.
+Spawn `@reviewer` only when `requirements.reviewer != false`.
 
-After reviewer returns:
-
-```bash
-.codex/scripts/goal-git.sh harness event orchestrator reviewer_completed "<status>"
-```
-
-Spawn `@visual-reviewer` only when required (see Phase K).
-
-## Local mode
-
-Run:
-
-* commit
-
-Do NOT push or create the PR yet.
-
-Initialize the local review flow using the existing `goal-git.sh` review commands.
-
-Then:
-
-```bash
-.codex/scripts/goal-git.sh harness phase REVIEWING
-.codex/scripts/goal-git.sh harness event orchestrator reviewer_started
-```
-
-Spawn `@reviewer`.
-
-After reviewer returns:
-
-```bash
-.codex/scripts/goal-git.sh harness event orchestrator reviewer_completed "<status>"
-```
-
-Spawn `@visual-reviewer` only when required (see Phase K).
-
-Always require a structured review report.
+If reviewer skipped (TRIVIAL): leave REVIEW as SKIPPED; after verify go to DONE
+(or QA/Visual if required). Allow at most one repair → verify → re-review cycle
+(`max_reviewer_runs=2`, `review_max_iterations=2`). Further loops → BLOCKED.
 
 ==================================================
 
@@ -1155,14 +1157,19 @@ Finally:
 When invocation is `--issues` or goal source is `issues`:
 
 1. Fetch the issue list.
-2. Generate one queue-level Planner plan.
-3. Respect Planner dependency batches.
-4. Process each issue through the same inner workflow.
-5. Never spawn a sub-orchestrator.
-6. Serialize all state-changing operations.
-7. In multi-repo mode, serialize issues.
-8. Finish each issue only after its harness is DONE.
-9. Report each issue and resulting PR.
+2. **If issue_count == 1:** bypass queue orchestration.
+   - `issues start <n>`
+   - run the normal single-goal classify → plan? → build → verify → … loop
+   - no queue-level Planner
+3. **If issue_count >= 2:**
+   - Generate one queue-level Planner plan once
+   - Persist it: `harness context put queue_plan -`
+   - Respect dependency batches
+   - Update only changed issue state; do not rebuild completed-issue context
+4. Never spawn a sub-orchestrator.
+5. Serialize state-changing operations.
+6. Finish each issue only after its harness is DONE.
+7. Report each issue and resulting PR.
 
 Required queue command:
 
@@ -1176,7 +1183,7 @@ Set:
 export GOAL_RUN_ID="run-$(date +%s)-$$"
 ```
 
-For each issue:
+For each issue (multi-issue path):
 
 * set `GOAL_ISSUE=<N>` for the issue context
 * emit `harness event orchestrator issue_started` after `issues start`
@@ -1217,45 +1224,40 @@ When multiple repositories are involved:
 
 ==================================================
 
-Pass structured context, not full transcripts.
+Pass structured handoffs only — never full transcripts.
 
-Builder context should normally include:
+**Order for every child:** context-first, search-second.
 
-* goal
-* relevant discovery context
-* implementation plan
-* applicable research summary
-* task-specific instructions
-* relevant prior verification/review failures
+Builder:
 
-Researcher context should include:
+1. Read assigned task
+2. Read `discovery_context` (or goal + acceptance for TRIVIAL)
+3. Inspect only listed files/symbols
+4. Implement
+5. Search outside scope only when blocked
 
-* precise research question
-* only relevant repository context
+Reviewer (diff-first):
 
-Builder Expert context should include:
+1. Goal / acceptance criteria
+2. Changed files / git diff
+3. Verification evidence
+4. High-risk notes
+5. Surrounding code only where the diff requires it
 
-* specific problem
-* relevant files
-* current failure
-* relevant reviewer/verifier findings
+Researcher: one unresolved question → concise `research_report`.
 
-Reviewer context should include:
+QA: acceptance criteria + behavior summary → required scenarios only.
 
-* goal
-* plan
-* diff
-* verification evidence
-* relevant risks
+Visual: UI criteria + changed UI files + screenshots → relevant states only.
 
-QA context should include:
+Persist artifacts:
 
-* acceptance criteria
-* feature behavior
-* relevant implementation summary
-* verification result
+```bash
+.codex/scripts/goal-git.sh harness context put discovery_context -
+.codex/scripts/goal-git.sh harness context get discovery_context
+```
 
-Never blindly pass the entire prior conversation.
+Optional stable cache: `.codex/repo-context.json` (project_type, test/build commands, conventions).
 
 ==================================================
 

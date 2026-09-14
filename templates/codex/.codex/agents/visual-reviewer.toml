@@ -45,6 +45,9 @@ Required vocabulary: `started` | `progress` | `blocked` | `completed` | `failed`
 
 Also record observations via `harness visual add` as before.
 
+Consume UI acceptance criteria, changed UI files, and screenshots.
+Review relevant states only — do not re-audit the whole product.
+
 ==================================================
 
 1. CORE PRINCIPLE

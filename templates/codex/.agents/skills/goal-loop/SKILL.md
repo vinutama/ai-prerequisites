@@ -162,8 +162,10 @@ Per-agent models are pinned in agent `.toml` files and resolved at spawn time:
    `models visual-reviewer --require-multimodal`. Never downgrade to text-only.
    Allowlist: `$capabilities.vision_models` in `goal-models.json`.
 
-Default map: planner=`gpt-6-astra`, orchestrator/researcher/visual=`gpt-5.6-terra`,
-builder/builder-expert/reviewer/qa=`gpt-5.6-sol`.
+Default map: Terra-first. planner/builder/reviewer/qa=`gpt-5.6-terra` medium;
+orchestrator/researcher/visual=`gpt-5.6-terra`; builder-expert=`gpt-5.6-sol` high.
+`$routing` selects stronger models by complexity (COMPLEX→sol, ARCHITECTURAL planner→astra).
+Astra is never the default planner.
 
 ## Git Helper (`.codex/scripts/goal-git.sh`)
 ```bash
@@ -171,7 +173,8 @@ builder/builder-expert/reviewer/qa=`gpt-5.6-sol`.
 .codex/scripts/goal-git.sh continue [id]
 .codex/scripts/goal-git.sh list
 .codex/scripts/goal-git.sh state
-.codex/scripts/goal-git.sh harness init --route <r> [--qa true|false] [--visual true|false]
+.codex/scripts/goal-git.sh complexity classify "<text>" [--files a,b]
+.codex/scripts/goal-git.sh harness init --route <r> [--qa true|false] [--visual true|false] [--complexity LEVEL] [--planner-required bool] [--reviewer-required bool]
 .codex/scripts/goal-git.sh harness phase <STATE>
 .codex/scripts/goal-git.sh harness task add <role> <title> [--parent tN]
 .codex/scripts/goal-git.sh harness task set <id> <PENDING|RUNNING|DONE|BLOCKED|FAILED>
@@ -183,12 +186,15 @@ builder/builder-expert/reviewer/qa=`gpt-5.6-sol`.
 .codex/scripts/goal-git.sh harness visual pending
 .codex/scripts/goal-git.sh harness event <agent> <event> [detail]
 .codex/scripts/goal-git.sh harness progress [-n N] [--json]
+.codex/scripts/goal-git.sh harness spawn <role>
+.codex/scripts/goal-git.sh harness metrics
+.codex/scripts/goal-git.sh harness context put|get <name>
 .codex/scripts/goal-git.sh harness status
 .codex/scripts/goal-git.sh harness done
 .codex/scripts/goal-git.sh verify detect
 .codex/scripts/goal-git.sh verify run [--only a,b]
 .codex/scripts/goal-git.sh route detect
 .codex/scripts/goal-git.sh analyze
-.codex/scripts/goal-git.sh models [<role>] [--next <m>] [--require-multimodal [m]]
+.codex/scripts/goal-git.sh models [<role>] [--complexity LEVEL] [--next <m>] [--require-multimodal [m]]
 # … plus existing stage/commit/push/pr/pending/threads/review/worktree/issues/figma …
 ```

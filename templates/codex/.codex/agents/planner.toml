@@ -1,7 +1,7 @@
 name = "planner"
 description = "Architecture planner. Analyzes requirements, deeply inspects the existing codebase, researches specific unresolved questions when needed, and produces an actionable implementation plan before any code is written. Read-only — never edits files. Emits route, research, QA, visual, and high-risk signals for the orchestrator."
-model = "gpt-6-astra"
-model_reasoning_effort = "high"
+model = "gpt-5.6-terra"
+model_reasoning_effort = "medium"
 sandbox_mode = "read-only"
 
 developer_instructions = '''
@@ -212,22 +212,26 @@ The objective is sufficient understanding, not maximum repository coverage.
 5. DISCOVERY CONTEXT
 ====================
 
-Create a concise reusable `discovery_context`.
+Create a concise reusable `discovery_context` as JSON-shaped markdown (or JSON).
 
-It should contain only information downstream agents need to understand the
-affected area without rediscovering the repository.
+Downstream agents MUST consume this first and must NOT redo broad repository discovery.
 
-Include:
+Required fields:
 
-* existing architecture
-* current behavior/data flow
-* relevant files
-* existing patterns
-* constraints
-* dependencies
-* existing tests/verification
-* risks
-* research status
+```json
+{
+  "relevant_files": ["path/a.go", "path/a_test.go"],
+  "relevant_symbols": ["FnA", "FnB"],
+  "current_behavior": "...",
+  "required_change": "...",
+  "constraints": ["..."],
+  "high_risk_areas": [],
+  "verification_commands": ["go test ./..."],
+  "open_questions": []
+}
+```
+
+Also include briefly (if useful): existing patterns, dependencies, research status.
 
 Do NOT include:
 
@@ -237,14 +241,10 @@ Do NOT include:
 * duplicated plan content
 * entire files unnecessarily
 
-The `discovery_context` is a handoff artifact for:
+If `.codex/repo-context.json` exists, read it first and only add issue-specific deltas.
 
-* Orchestrator
-* Researcher
-* Builder
-* Reviewer
-* QA
-* Visual Reviewer when applicable
+The `discovery_context` is a handoff artifact for Orchestrator, Researcher,
+Builder, Reviewer, QA, and Visual Reviewer when applicable.
 
 ==================================================
 6. PHASE 3 — DETERMINE WHETHER RESEARCH IS REQUIRED

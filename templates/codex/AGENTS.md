@@ -58,20 +58,20 @@ Goal source (configured via `/init-goal`):
 - `issues` — fetches open issues from a GitHub/GitLab issue list URL (`/goal --issues [url] [count]` or bare `/goal` when configured); **one branch + one PR per issue**; branch `{task_type}/{number}-{slug}`; planner orders by dependency and batches concurrent work (single-repo only; multi-repo processes one issue at a time)
 
 ### Agent roles
-| Agent | Role | Model | Effort |
-|---|---|---|---|
-| `orchestrator` | Manages the full loop + harness | gpt-5.6-terra | low |
-| `planner` | Architecture & plans — emits route/research/risk signals | gpt-6-astra | high |
-| `researcher` | On-demand research (docs, APIs, unfamiliar tech) | gpt-5.6-terra | medium |
-| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | gpt-5.6-sol | medium |
-| `builder-expert` | Escalation-only complex execution | gpt-5.6-sol | high |
-| `reviewer` | Code review + inline PR comments | gpt-5.6-sol | medium |
-| `qa` | Behavior/business acceptance QA (conditional) | gpt-5.6-sol | medium |
-| `visual-reviewer` | UI/multimodal review + inline PR comments | gpt-5.6-terra | medium |
+| Agent | Role | Default model | Effort | Escalation |
+|---|---|---|---|---|
+| `orchestrator` | Thin state machine + harness | gpt-5.6-terra | low | luna → sol (transient) |
+| `planner` | Plans — skipped on TRIVIAL | gpt-5.6-terra | medium | COMPLEX: sol/high; ARCHITECTURAL: astra/high |
+| `researcher` | On-demand research (conditional) | gpt-5.6-terra | medium | sol on reasoning failure |
+| `builder` | Routine execution | gpt-5.6-terra | medium | COMPLEX+: sol/medium |
+| `builder-expert` | Escalation-only complex execution | gpt-5.6-sol | high | astra/high |
+| `reviewer` | Diff-first code review (skippable TRIVIAL) | gpt-5.6-terra | medium | COMPLEX+: sol/medium |
+| `qa` | Behavior QA (conditional) | gpt-5.6-terra | medium | — |
+| `visual-reviewer` | UI/multimodal review (conditional) | gpt-5.6-terra | medium | multimodal-hard |
 
-`goal-models.json` is the single source of truth for models and capabilities.
-`init.sh` syncs `model` / `model_reasoning_effort` into each agent `.toml`
-and registers roles in `.codex/config.toml`.
+`goal-models.json` is the single source of truth (`$routing` by complexity + role defaults).
+`init.sh` syncs `model` / `model_reasoning_effort` into each agent `.toml`.
+**Astra is escalation-only for architectural planning — never the default.**
 
 | Agent | Multimodal | Input modalities |
 |---|---|---|
@@ -89,36 +89,49 @@ orchestrator routes UI/visual review exclusively to that agent.
 
 ### Harness, routes, and Definition of DONE
 Active goals carry a `harness` object on `state.json` (phase, route,
-`requirements` `{qa, visual, source}`, tasks, gates, retries, `qa_findings`,
-`visual_findings`). Orchestrator drives it via `goal-git.sh harness …`.
+`complexity`, `requirements` `{qa, visual, planner, reviewer, source}`, tasks,
+gates, budget, metrics, retries, findings). Orchestrator drives it via
+`goal-git.sh harness …`.
+
+**Complexity (cheap, deterministic):**
+
+```bash
+.codex/scripts/goal-git.sh complexity classify "<goal text>"
+# TRIVIAL | NORMAL | COMPLEX | ARCHITECTURAL
+```
+
+| Level | Planner | Typical models | Flow |
+|---|---|---|---|
+| TRIVIAL | skipped | Builder Terra → Verify → optional Review | ~1–2 agents |
+| NORMAL | Terra/medium | Plan → Build → Verify → Review | ~2–4 agents |
+| COMPLEX | Sol/high | Plan → Research? → Build Sol → Verify → Review Sol | bounded |
+| ARCHITECTURAL | Astra/high | Plan Astra → Research? → Build Sol → Expert? → Verify → Review Sol | bounded |
+
+**Spawn budgets** (defaults): max_total_spawns=5, planner=1, researcher=1,
+expert=1, reviewer=2, qa=1, visual=1. Use `harness spawn <role>` before each
+spawn; exceeding budget exits 1. `review_max_iterations` defaults to **2**.
 
 Phases: `PLANNED` → `RESEARCHING?` → `BUILDING` → `ESCALATED?` → `VERIFYING` →
-`REVIEWING` → `QA?` → `VISUAL_REVIEW?` → `REWORK?` → `DONE` | `FAILED`.
+`REVIEWING?` → `QA?` → `VISUAL_REVIEW?` → `REWORK?` → `DONE` | `FAILED`.
 
 Task states: `PENDING | RUNNING | DONE | BLOCKED | FAILED`.
-`FAILED` = execution attempted and failed; never auto-coerced to `BLOCKED`.
 
 **Routing**
-- `route detect` is a **baseline** classifier only (`baseline: true` in output):
-  UI files → `frontend`; business/API/domain paths → `feature`; everything else
-  → `backend`.
-- Planner `### Routing` (`route`, `qa_required`, `visual_required`, …) is
-  authoritative after planning. Orchestrator initializes:
+- Classify first, then optionally `route detect` (baseline only).
+- Planner `### Routing` is authoritative when Planner runs.
+- Initialize:
 
 ```bash
 .codex/scripts/goal-git.sh harness init \
-  --route <route> --qa <true|false> --visual <true|false>
+  --route <route> --qa <bool> --visual <bool> \
+  --complexity <LEVEL> --planner-required <bool> --reviewer-required <bool>
 ```
 
-- Omitting `--qa`/`--visual` keeps route-based defaults (backend: neither;
-  feature: qa; frontend: qa+visual). Explicit flags always win.
-- Do **not** hardcode `feature => QA` or `frontend => QA+VISUAL` after Planner
-  signals are recorded. `requirements.*` are authoritative.
-
 **Gates & evidence**
-Always required: `PLAN`, `IMPLEMENTATION`, `VERIFICATION`, `REVIEW`.
-Conditional: `QA` only when `requirements.qa`; `VISUAL` only when
-`requirements.visual`. Non-required gates may stay `NOT_RUN` or `SKIPPED`.
+Always required: `IMPLEMENTATION`, `VERIFICATION`.
+`PLAN` required unless `requirements.planner=false` (SKIPPED clears it).
+`REVIEW` required unless `requirements.reviewer=false` (SKIPPED clears it).
+Conditional: `QA` / `VISUAL` from requirements.
 
 | Gate | PASS evidence |
 |---|---|
@@ -267,7 +280,9 @@ MUST go through `.codex/scripts/goal-git.sh`:
 .codex/scripts/goal-git.sh verify detect      # detect application verification commands
 .codex/scripts/goal-git.sh verify run [--only a,b]  # deterministic verification (only writer of VERIFICATION PASS)
 .codex/scripts/goal-git.sh route detect       # baseline classify backend|feature|frontend
-.codex/scripts/goal-git.sh harness init --route <r> [--qa true|false] [--visual true|false]
+.codex/scripts/goal-git.sh complexity classify "<text>" [--files a,b]
+.codex/scripts/goal-git.sh harness init --route <r> [--qa true|false] [--visual true|false] \
+  [--complexity LEVEL] [--planner-required bool] [--reviewer-required bool]
 .codex/scripts/goal-git.sh harness phase <STATE>
 .codex/scripts/goal-git.sh harness task add|set …   # states: PENDING|RUNNING|DONE|BLOCKED|FAILED
 .codex/scripts/goal-git.sh harness gate <NAME> <STATUS> [reason]
@@ -276,9 +291,13 @@ MUST go through `.codex/scripts/goal-git.sh`:
 .codex/scripts/goal-git.sh harness visual add|pending
 .codex/scripts/goal-git.sh harness event <agent> <event> [detail]
 .codex/scripts/goal-git.sh harness progress [-n N] [--json]
+.codex/scripts/goal-git.sh harness spawn <role>    # budget gate
+.codex/scripts/goal-git.sh harness metrics
+.codex/scripts/goal-git.sh harness context put|get <name>
 .codex/scripts/goal-git.sh harness status|done
 .codex/scripts/goal-git.sh models                # print goal-models.json
 .codex/scripts/goal-git.sh models <role>         # model + effort + fallbacks
+.codex/scripts/goal-git.sh models <role> --complexity <LEVEL>
 .codex/scripts/goal-git.sh models <role> --next <m>  # next fallback after <m>
 .codex/scripts/goal-git.sh models <role> --require-multimodal [m]  # vision-capable resolve
 .codex/scripts/goal-git.sh status             # working tree status

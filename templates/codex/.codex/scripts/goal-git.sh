@@ -60,14 +60,24 @@ Commands:
   harness progress [-n N] [--json]
                             Render recent harness timeline (default last 20)
   harness hook              Read Codex hook JSON on stdin; emit START/END event
+  harness spawn <role>      Record agent spawn against budget (exit 1 if exceeded)
+  harness metrics           Print spawn/run metrics
+  harness context put <name> [file|-]
+                            Store compact handoff artifact (discovery_context, …)
+  harness context get <name>
+                            Print stored handoff artifact
   harness status            Print harness object
   harness done              Exit 0 only when required gates PASS (from requirements)
   selfcheck                 Run platform detection self-check
   models                    Print full goal-models.json
   models <role>             Print model, effort, and fallbacks for a role (TAB-separated)
   models <role> --next <m>  Print next fallback after model <m> (exit 1 if exhausted)
+  models <role> --complexity <LEVEL>
+                            Resolve model/effort from \$routing for TRIVIAL|NORMAL|COMPLEX|ARCHITECTURAL
   models <role> --require-multimodal [m]
                             Resolve a vision-capable model for multimodal roles
+  complexity classify <text> [--files a,b]
+                            Cheap heuristic complexity classification (JSON)
   config set <source> <target> <platform> [concurrency] [auto_merge] [review_mode] [review_max_iterations] [max_rework] [max_escalations] [max_verify_retries] [qa_mode] [visual_mode]
   config get                Print goal-config.json
   state                     Print active goal JSON from state.json
@@ -1063,7 +1073,7 @@ cmd_figma_status() {
 
 cmd_config_set() {
   require_cmd jq
-  local source="${1:-}" target="${2:-}" plat="${3:-}" concurrency="${4:-1}" auto_merge="${5:-false}" review_mode="${6:-inline}" review_max_iterations="${7:-5}"
+  local source="${1:-}" target="${2:-}" plat="${3:-}" concurrency="${4:-1}" auto_merge="${5:-false}" review_mode="${6:-inline}" review_max_iterations="${7:-2}"
   local max_rework="${8:-3}" max_escalations="${9:-2}" max_verify_retries="${10:-3}" qa_mode="${11:-auto}" visual_mode="${12:-auto}"
 
   [ -z "$source" ] || [ -z "$target" ] || [ -z "$plat" ] && {
@@ -1707,8 +1717,8 @@ cmd_review_init() {
   local repo_path="${1:-}"
   local branch max_iter rf
   branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch' "$STATE_FILE")
-  max_iter="$(config_read review_max_iterations)"
-  [ -z "$max_iter" ] || [ "$max_iter" = "null" ] && max_iter="5"
+  local max_iter="$(config_read review_max_iterations)"
+  [ -z "$max_iter" ] || [ "$max_iter" = "null" ] && max_iter="2"
   mkdir -p "$REVIEW_DIR"
   rf="$(review_file_path "$repo_path")"
   jq -n \
@@ -1832,6 +1842,87 @@ models_role_multimodal() {
   jq -e --arg role "$role" '.[$role].capabilities.multimodal == true' "$models_file" >/dev/null 2>&1
 }
 
+cmd_complexity_classify() {
+  require_cmd jq
+  local text="" files=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --files)
+        files="${2:-}"
+        shift 2
+        ;;
+      *)
+        if [ -z "$text" ]; then
+          text="$1"
+        else
+          text="$text $1"
+        fi
+        shift
+        ;;
+    esac
+  done
+  [ -z "$text" ] && { err "complexity classify requires <text>"; exit 1; }
+
+  local lower file_count=0
+  lower="$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')"
+  if [ -n "$files" ]; then
+    file_count="$(printf '%s' "$files" | awk -F',' '{print NF}')"
+  fi
+
+  local complexity="NORMAL"
+  local planner_required=true reviewer_required=true
+  local reason_list=()
+
+  if echo "$lower" | grep -qiE '\b(migration|migrate|redesign|re-architect|cross[- ]service|multi[- ]service|irreversible|security model|data model rewrite|sharding|rewrite architecture)\b'; then
+    complexity="ARCHITECTURAL"
+    reason_list+=("architectural_keywords")
+  elif echo "$lower" | grep -qiE '\b(concurrency|race condition|deadlock|auth(entication|orization)?|oauth|rbac|permission|security|multi[- ]module|distributed|consistency|transaction|unfamiliar|integration|broad regression|performance critical)\b'; then
+    complexity="COMPLEX"
+    reason_list+=("complex_keywords")
+  elif echo "$lower" | grep -qiE '\b(typo|spelling|copy[- ]?edit|rename|wording|one[- ]?liner|trivial|simple fix|config(uration)? (tweak|adjust|change)|test[- ]only|docs?[- ]only|readme)\b'; then
+    if ! echo "$lower" | grep -qiE '\b(auth|migration|concurrency|security|redesign)\b'; then
+      complexity="TRIVIAL"
+      planner_required=false
+      reviewer_required=false
+      reason_list+=("trivial_keywords")
+    fi
+  elif [ "$file_count" -gt 0 ] && [ "$file_count" -le 2 ] && echo "$lower" | grep -qiE '\b(fix|update|adjust|tweak|change)\b'; then
+    if ! echo "$lower" | grep -qiE '\b(auth|migration|concurrency|security|redesign)\b'; then
+      complexity="TRIVIAL"
+      planner_required=false
+      reviewer_required=false
+      reason_list+=("tiny_file_scope")
+    fi
+  else
+    reason_list+=("default_normal")
+  fi
+
+  if [ "$file_count" -gt 5 ] && [ "$complexity" = "NORMAL" ]; then
+    complexity="COMPLEX"
+    reason_list+=("many_files")
+  fi
+
+  local reasons_json
+  if [ ${#reason_list[@]} -eq 0 ]; then
+    reasons_json='[]'
+  else
+    reasons_json="$(printf '%s\n' "${reason_list[@]}" | jq -R . | jq -s .)"
+  fi
+
+  jq -n \
+    --arg complexity "$complexity" \
+    --argjson planner "$planner_required" \
+    --argjson reviewer "$reviewer_required" \
+    --argjson reasons "$reasons_json" \
+    '{
+      complexity: $complexity,
+      planner_required: $planner,
+      reviewer_required: $reviewer,
+      reasons: $reasons,
+      baseline: true
+    }'
+}
+
 cmd_models() {
   require_cmd jq
   local models_file="$PROJECT_ROOT/$AGENT_CONFIG_DIR/goal-models.json"
@@ -1849,6 +1940,42 @@ cmd_models() {
   if ! jq -e --arg role "$role" 'has($role)' "$models_file" >/dev/null; then
     err "Unknown role: $role"
     exit 1
+  fi
+
+  if [ "${2:-}" = "--complexity" ]; then
+    local level="${3:-}"
+    case "$level" in
+      TRIVIAL|NORMAL|COMPLEX|ARCHITECTURAL) ;;
+      *) err "--complexity requires TRIVIAL|NORMAL|COMPLEX|ARCHITECTURAL"; exit 1 ;;
+    esac
+    # TRIVIAL + planner → skip (null routing)
+    local routed
+    routed="$(jq -c --arg role "$role" --arg level "$level" '
+      ."$routing"[$role][$level] // empty
+    ' "$models_file" 2>/dev/null || true)"
+    if [ -z "$routed" ] || [ "$routed" = "null" ]; then
+      if [ "$role" = "planner" ] && [ "$level" = "TRIVIAL" ]; then
+        err "Planner skipped for TRIVIAL complexity (no model)"
+        exit 2
+      fi
+      # Fall through to role default
+      jq -r --arg role "$role" '
+        .[$role] as $r
+        | [($r.model // "inherit"), ($r.model_reasoning_effort // $r.effort // "medium"), (($r.fallback_models // []) | join(","))]
+        | @tsv
+      ' "$models_file"
+      return 0
+    fi
+    jq -r --argjson r "$routed" --arg role "$role" '
+      .[$role] as $def
+      | [
+          ($r.model // $def.model // "inherit"),
+          ($r.model_reasoning_effort // $def.model_reasoning_effort // "medium"),
+          (($def.fallback_models // []) | join(","))
+        ]
+      | @tsv
+    ' "$models_file"
+    return 0
   fi
 
   if [ "${2:-}" = "--require-multimodal" ]; then
@@ -2081,7 +2208,7 @@ harness_phase_allowed() {
     "RESEARCHING->BUILDING") return 0 ;;
     "BUILDING->ESCALATED"|"BUILDING->VERIFYING") return 0 ;;
     "ESCALATED->BUILDING") return 0 ;;
-    "VERIFYING->REWORK"|"VERIFYING->REVIEWING") return 0 ;;
+    "VERIFYING->REWORK"|"VERIFYING->REVIEWING"|"VERIFYING->DONE"|"VERIFYING->QA"|"VERIFYING->VISUAL_REVIEW") return 0 ;;
     "REVIEWING->REWORK"|"REVIEWING->QA"|"REVIEWING->DONE"|"REVIEWING->VISUAL_REVIEW") return 0 ;;
     "QA->REWORK"|"QA->VISUAL_REVIEW"|"QA->DONE") return 0 ;;
     "VISUAL_REVIEW->REWORK"|"VISUAL_REVIEW->DONE") return 0 ;;
@@ -2100,6 +2227,8 @@ cmd_harness_init() {
 
   local route="feature"
   local qa_flag="" visual_flag=""
+  local complexity="NORMAL"
+  local planner_flag="" reviewer_flag=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --route)
@@ -2114,6 +2243,18 @@ cmd_harness_init() {
         visual_flag="${2:-}"
         shift 2
         ;;
+      --complexity)
+        complexity="${2:-}"
+        shift 2
+        ;;
+      --planner-required)
+        planner_flag="${2:-}"
+        shift 2
+        ;;
+      --reviewer-required)
+        reviewer_flag="${2:-}"
+        shift 2
+        ;;
       *)
         err "Unknown harness init arg: $1"
         exit 1
@@ -2124,6 +2265,11 @@ cmd_harness_init() {
   case "$route" in
     backend|feature|frontend) ;;
     *) err "route must be: backend, feature, or frontend"; exit 1 ;;
+  esac
+
+  case "$complexity" in
+    TRIVIAL|NORMAL|COMPLEX|ARCHITECTURAL) ;;
+    *) err "complexity must be: TRIVIAL, NORMAL, COMPLEX, or ARCHITECTURAL"; exit 1 ;;
   esac
 
   # Route-based defaults (backward compatible when --qa/--visual omitted)
@@ -2146,9 +2292,27 @@ cmd_harness_init() {
       *) err "--visual must be true or false"; exit 1 ;;
     esac
   fi
-  # If either flag was set, mark source explicit (partial override still counts)
   if [ -n "$qa_flag" ] || [ -n "$visual_flag" ]; then
     req_source="explicit"
+  fi
+
+  # Complexity defaults for planner/reviewer
+  local planner_req=true reviewer_req=true
+  if [ "$complexity" = "TRIVIAL" ]; then
+    planner_req=false
+    reviewer_req=false
+  fi
+  if [ -n "$planner_flag" ]; then
+    case "$planner_flag" in
+      true|false) planner_req="$planner_flag" ;;
+      *) err "--planner-required must be true or false"; exit 1 ;;
+    esac
+  fi
+  if [ -n "$reviewer_flag" ]; then
+    case "$reviewer_flag" in
+      true|false) reviewer_req="$reviewer_flag" ;;
+      *) err "--reviewer-required must be true or false"; exit 1 ;;
+    esac
   fi
 
   local max_rework max_escalations max_verify_retries
@@ -2156,19 +2320,45 @@ cmd_harness_init() {
   max_escalations="$(config_read max_escalations)"; max_escalations="${max_escalations:-2}"
   max_verify_retries="$(config_read max_verify_retries)"; max_verify_retries="${max_verify_retries:-3}"
 
+  local max_total max_planner max_researcher max_expert max_reviewer_runs max_qa max_visual
+  max_total="$(config_read max_total_spawns)"; max_total="${max_total:-5}"
+  max_planner="$(config_read max_planner_runs)"; max_planner="${max_planner:-1}"
+  max_researcher="$(config_read max_researcher_runs)"; max_researcher="${max_researcher:-1}"
+  max_expert="$(config_read max_builder_expert_runs)"; max_expert="${max_expert:-1}"
+  max_reviewer_runs="$(config_read max_reviewer_runs)"; max_reviewer_runs="${max_reviewer_runs:-2}"
+  max_qa="$(config_read max_qa_runs)"; max_qa="${max_qa:-1}"
+  max_visual="$(config_read max_visual_runs)"; max_visual="${max_visual:-1}"
+
   local harness
   harness="$(jq -n \
     --arg route "$route" \
+    --arg complexity "$complexity" \
     --argjson qa "$qa_req" \
     --argjson visual "$visual_req" \
+    --argjson planner_req "$planner_req" \
+    --argjson reviewer_req "$reviewer_req" \
     --arg req_source "$req_source" \
     --argjson max_rework "$max_rework" \
     --argjson max_escalations "$max_escalations" \
     --argjson max_verify_retries "$max_verify_retries" \
+    --argjson max_total "$max_total" \
+    --argjson max_planner "$max_planner" \
+    --argjson max_researcher "$max_researcher" \
+    --argjson max_expert "$max_expert" \
+    --argjson max_reviewer_runs "$max_reviewer_runs" \
+    --argjson max_qa "$max_qa" \
+    --argjson max_visual "$max_visual" \
     '{
       phase: "PLANNED",
       route: $route,
-      requirements: {qa: $qa, visual: $visual, source: $req_source},
+      complexity: $complexity,
+      requirements: {
+        qa: $qa,
+        visual: $visual,
+        planner: $planner_req,
+        reviewer: $reviewer_req,
+        source: $req_source
+      },
       tasks: [],
       gates: {
         PLAN: {status: "NOT_RUN"},
@@ -2186,6 +2376,27 @@ cmd_harness_init() {
         max_escalations: $max_escalations,
         max_verify_retries: $max_verify_retries
       },
+      budget: {
+        max_total_spawns: $max_total,
+        max_planner_runs: $max_planner,
+        max_researcher_runs: $max_researcher,
+        max_builder_expert_runs: $max_expert,
+        max_reviewer_runs: $max_reviewer_runs,
+        max_qa_runs: $max_qa,
+        max_visual_runs: $max_visual
+      },
+      metrics: {
+        agent_spawns: 0,
+        planner_runs: 0,
+        researcher_runs: 0,
+        builder_runs: 0,
+        expert_runs: 0,
+        reviewer_runs: 0,
+        qa_runs: 0,
+        visual_runs: 0,
+        rework_cycles: 0
+      },
+      context: {},
       events: []
     }')"
 
@@ -2195,10 +2406,16 @@ cmd_harness_init() {
   if [ "$visual_req" = false ]; then
     harness="$(echo "$harness" | jq '.gates.VISUAL = {status:"SKIPPED",reason:"requirements.visual=false"}')"
   fi
+  if [ "$planner_req" = false ]; then
+    harness="$(echo "$harness" | jq --arg c "$complexity" '.gates.PLAN = {status:"SKIPPED",reason:("complexity="+$c)}')"
+  fi
+  if [ "$reviewer_req" = false ]; then
+    harness="$(echo "$harness" | jq --arg c "$complexity" '.gates.REVIEW = {status:"SKIPPED",reason:("complexity="+$c)}')"
+  fi
 
   harness_put "$harness"
-  harness_event "harness" "init" "route=$route qa=$qa_req visual=$visual_req source=$req_source"
-  log "Harness initialized (route=$route, qa=$qa_req, visual=$visual_req, phase=PLANNED)"
+  harness_event "harness" "init" "route=$route complexity=$complexity qa=$qa_req visual=$visual_req planner=$planner_req reviewer=$reviewer_req"
+  log "Harness initialized (route=$route, complexity=$complexity, qa=$qa_req, visual=$visual_req, phase=PLANNED)"
   harness_get
 }
 
@@ -2740,7 +2957,9 @@ cmd_harness_done() {
   local required
   required="$(jq -c --argjson idx "$GOAL_IDX" '
     .[$idx].harness.requirements as $r
-    | ["PLAN","IMPLEMENTATION","VERIFICATION","REVIEW"]
+    | (if ($r.planner == false) then [] else ["PLAN"] end)
+      + ["IMPLEMENTATION","VERIFICATION"]
+      + (if ($r.reviewer == false) then [] else ["REVIEW"] end)
       + (if ($r.qa == true) then ["QA"] else [] end)
       + (if ($r.visual == true) then ["VISUAL"] else [] end)
   ' "$STATE_FILE")"
@@ -2753,6 +2972,7 @@ cmd_harness_done() {
         . as $name
         | $g[$name] as $gate
         | if ($gate.status == "PASS") then empty
+          elif ($gate.status == "SKIPPED" and ($name == "PLAN" or $name == "REVIEW")) then empty
           else {gate: $name, status: ($gate.status // "NOT_RUN"), reason: ($gate.reason // "")}
           end
       )
@@ -2780,6 +3000,102 @@ cmd_harness_done() {
 
   log "Harness DONE — all required gates passed"
   harness_get
+}
+
+cmd_harness_spawn() {
+  harness_require
+  local role="${1:-}"
+  [ -z "$role" ] && { err "harness spawn requires <role>"; exit 1; }
+
+  local metric_field budget_field
+  case "$role" in
+    planner) metric_field="planner_runs"; budget_field="max_planner_runs" ;;
+    researcher) metric_field="researcher_runs"; budget_field="max_researcher_runs" ;;
+    builder) metric_field="builder_runs"; budget_field="" ;;
+    builder-expert) metric_field="expert_runs"; budget_field="max_builder_expert_runs" ;;
+    reviewer) metric_field="reviewer_runs"; budget_field="max_reviewer_runs" ;;
+    qa) metric_field="qa_runs"; budget_field="max_qa_runs" ;;
+    visual-reviewer) metric_field="visual_runs"; budget_field="max_visual_runs" ;;
+    orchestrator) metric_field=""; budget_field="" ;;
+    *) err "Unknown spawn role: $role"; exit 1 ;;
+  esac
+
+  local total max_total
+  total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics.agent_spawns // 0' "$STATE_FILE")"
+  max_total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.budget.max_total_spawns // 5' "$STATE_FILE")"
+  if [ "$total" -ge "$max_total" ]; then
+    err "Spawn budget exceeded: agent_spawns=$total >= max_total_spawns=$max_total"
+    exit 1
+  fi
+
+  if [ -n "$budget_field" ] && [ -n "$metric_field" ]; then
+    local runs max_runs
+    runs="$(jq -r --argjson idx "$GOAL_IDX" --arg f "$metric_field" '.[$idx].harness.metrics[$f] // 0' "$STATE_FILE")"
+    max_runs="$(jq -r --argjson idx "$GOAL_IDX" --arg f "$budget_field" '.[$idx].harness.budget[$f] // 0' "$STATE_FILE")"
+    if [ "$runs" -ge "$max_runs" ]; then
+      err "Spawn budget exceeded for $role: $runs >= $max_runs ($budget_field)"
+      exit 1
+    fi
+  fi
+
+  if [ -n "$metric_field" ]; then
+    state_mutate --argjson idx "$GOAL_IDX" --arg f "$metric_field" '
+      .[$idx].harness.metrics.agent_spawns += 1
+      | .[$idx].harness.metrics[$f] += 1
+    '
+  else
+    state_mutate --argjson idx "$GOAL_IDX" '
+      .[$idx].harness.metrics.agent_spawns += 1
+    '
+  fi
+
+  harness_event "harness" "spawn" "$role"
+  jq --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics' "$STATE_FILE"
+}
+
+cmd_harness_metrics() {
+  harness_require
+  jq --argjson idx "$GOAL_IDX" '{metrics: .[$idx].harness.metrics, budget: .[$idx].harness.budget, complexity: .[$idx].harness.complexity}' "$STATE_FILE"
+}
+
+cmd_harness_context_put() {
+  harness_require
+  local name="${1:-}" src="${2:--}"
+  [ -z "$name" ] && { err "harness context put requires <name> [file|-]"; exit 1; }
+  case "$name" in
+    discovery_context|implementation_plan|research_report|repo_context|queue_plan) ;;
+    *) err "Unknown context name: $name (allowed: discovery_context, implementation_plan, research_report, repo_context, queue_plan)"; exit 1 ;;
+  esac
+
+  local payload
+  if [ "$src" = "-" ] || [ -z "$src" ]; then
+    payload="$(cat)"
+  else
+    [ -f "$src" ] || { err "Context file not found: $src"; exit 1; }
+    payload="$(cat "$src")"
+  fi
+  echo "$payload" | jq -e . >/dev/null || { err "Context payload must be valid JSON"; exit 1; }
+
+  # Also mirror discovery_context / repo_context to .codex/ for reuse
+  mkdir -p "$PROJECT_ROOT/.codex"
+  case "$name" in
+    discovery_context) printf '%s\n' "$payload" > "$PROJECT_ROOT/.codex/discovery-context.json" ;;
+    repo_context) printf '%s\n' "$payload" > "$PROJECT_ROOT/.codex/repo-context.json" ;;
+    queue_plan) printf '%s\n' "$payload" > "$PROJECT_ROOT/.codex/queue-plan.json" ;;
+  esac
+
+  state_mutate --argjson idx "$GOAL_IDX" --arg name "$name" --argjson payload "$payload" \
+    '.[$idx].harness.context[$name] = $payload'
+  harness_event "harness" "context_put" "$name"
+  log "Stored harness context: $name"
+}
+
+cmd_harness_context_get() {
+  harness_require
+  local name="${1:-}"
+  [ -z "$name" ] && { err "harness context get requires <name>"; exit 1; }
+  jq --argjson idx "$GOAL_IDX" --arg name "$name" \
+    '.[$idx].harness.context[$name] // empty' "$STATE_FILE"
 }
 
 cmd_harness() {
@@ -2815,8 +3131,17 @@ cmd_harness() {
     event) cmd_harness_event "$@" ;;
     progress) cmd_harness_progress "$@" ;;
     hook) cmd_harness_hook "$@" ;;
+    spawn) cmd_harness_spawn "$@" ;;
+    metrics) cmd_harness_metrics ;;
+    context)
+      case "${1:-}" in
+        put) shift; cmd_harness_context_put "$@" ;;
+        get) shift; cmd_harness_context_get "$@" ;;
+        *) err "harness context subcommand must be put or get"; exit 1 ;;
+      esac
+      ;;
     done) cmd_harness_done ;;
-    *) err "harness subcommand must be: init, phase, task, gate, retry, qa, visual, event, progress, hook, status, done"; exit 1 ;;
+    *) err "harness subcommand must be: init, phase, task, gate, retry, qa, visual, event, progress, hook, spawn, metrics, context, status, done"; exit 1 ;;
   esac
 }
 
@@ -3157,7 +3482,7 @@ case "${1:-}" in
   harness)  shift; cmd_harness "$@" ;;
   config)
     case "${2:-}" in
-      set) cmd_config_set "${3:-}" "${4:-}" "${5:-}" "${6:-1}" "${7:-false}" "${8:-inline}" "${9:-5}" "${10:-3}" "${11:-2}" "${12:-3}" "${13:-auto}" "${14:-auto}" ;;
+      set) cmd_config_set "${3:-}" "${4:-}" "${5:-}" "${6:-1}" "${7:-false}" "${8:-inline}" "${9:-2}" "${10:-3}" "${11:-2}" "${12:-3}" "${13:-auto}" "${14:-auto}" ;;
       get) cmd_config_get ;;
       *)   err "config subcommand must be 'set' or 'get'"; exit 1 ;;
     esac
@@ -3183,6 +3508,12 @@ case "${1:-}" in
     ;;
   selfcheck) cmd_selfcheck ;;
   models)   shift; cmd_models "$@" ;;
+  complexity)
+    case "${2:-}" in
+      classify) shift 2; cmd_complexity_classify "$@" ;;
+      *) err "complexity subcommand must be classify"; exit 1 ;;
+    esac
+    ;;
   issues)
     case "${2:-}" in
       list)   cmd_issues_list "${3:-}" "${4:-}" ;;

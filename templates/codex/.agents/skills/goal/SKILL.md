@@ -40,9 +40,16 @@ Fetch open issues from a GitHub/GitLab issue list URL and drive each to its own 
    ```bash
    .codex/scripts/goal-git.sh issues list "<url>" <count>
    ```
-4. Delegate `@orchestrator` in **ISSUE QUEUE** mode (see orchestrator agent): planner queue pass → per-issue batches → one PR per issue.
-   - Multi-repo: process **one issue at a time** (no concurrent issue worktrees).
-   - Single-repo with `concurrency` > 1: planner may batch independent issues; orchestrator uses `issues start <n> --worktree` per issue in a batch.
+4. **Token-optimized dispatch by count:**
+   - **If exactly 1 issue:** bypass queue orchestration.
+     - `issues start <number>`
+     - classify → (maybe planner) → build → verify → … as a normal single goal
+     - no queue-level Planner
+   - **If 2+ issues:** Delegate `@orchestrator` in **ISSUE QUEUE** mode:
+     - one queue Planner plan, persist via `harness context put queue_plan`
+     - per-issue batches → one PR per issue
+     - Multi-repo: process **one issue at a time**
+     - Single-repo with `concurrency` > 1: planner may batch independent issues
 5. Report **one PR URL per issue** when the run completes.
 
 Also run this path when `goal_source` is `issues` and the user invokes bare `$goal` with no args (use configured `issue_list_url` and `issue_limit`), or `$goal <count>` where `<count>` is only a number.
@@ -120,14 +127,17 @@ $goal --continue fix the healthcheck API            # active goal + new instruct
         Branch becomes `{task_type}/{TICKET}-{slug}` (e.g. `feat/DEL-4123-add-health-check`).
 3. For `prompt` and `markdown` only: run `GOAL_SOURCE_OVERRIDE=<effective_source> .codex/scripts/goal-git.sh start "<resolved goal>"` (branch `goal/<slug>`).
    For `jira`, start was already called in step 2.
-3b. After start (or continue), run baseline route detect. After Planner returns,
-   initialize harness with Planner routing signals (authoritative):
+3b. After start (or continue), classify cheaply, then baseline route detect.
+   After Planner returns (or if Planner is skipped for TRIVIAL), initialize harness:
    ```bash
+   .codex/scripts/goal-git.sh complexity classify "<resolved goal>"
    .codex/scripts/goal-git.sh route detect
    .codex/scripts/goal-git.sh harness init \
-     --route <route> --qa <qa_required> --visual <visual_required>
+     --route <route> --qa <qa_required> --visual <visual_required> \
+     --complexity <LEVEL> --planner-required <bool> --reviewer-required <bool>
    ```
    Omitting `--qa`/`--visual` keeps route-based defaults. Explicit flags win.
+   TRIVIAL may skip Planner entirely (see orchestrator PHASE B).
 4. **Multi-repo orchestration (when repos > 1 in config)**:
    - Read repos from `state.json` (`.codex/scripts/goal-git.sh state | jq '.repos'`).
    - Delegate `@planner` ONCE (planner sees ALL repos, produces repo-tagged tasks in dependency batches).

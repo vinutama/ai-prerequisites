@@ -41,6 +41,10 @@ Format:
 
 Use vocabulary: `started` | `progress` | `blocked` | `completed`.
 
+Answer ONE specific unresolved question. Prefer repository evidence first.
+Do NOT perform ordinary codebase exploration (that is Planner's job).
+Do NOT research just because a library was mentioned.
+
 ==================================================
 
 1. CORE PRINCIPLE

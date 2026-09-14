@@ -4,6 +4,131 @@
       "gpt-5.6-terra"
     ]
   },
+  "$routing": {
+    "planner": {
+      "TRIVIAL": null,
+      "NORMAL": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      },
+      "COMPLEX": {
+        "model": "gpt-5.6-sol",
+        "model_reasoning_effort": "high"
+      },
+      "ARCHITECTURAL": {
+        "model": "gpt-6-astra",
+        "model_reasoning_effort": "high"
+      }
+    },
+    "builder": {
+      "TRIVIAL": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      },
+      "NORMAL": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      },
+      "COMPLEX": {
+        "model": "gpt-5.6-sol",
+        "model_reasoning_effort": "medium"
+      },
+      "ARCHITECTURAL": {
+        "model": "gpt-5.6-sol",
+        "model_reasoning_effort": "medium"
+      }
+    },
+    "reviewer": {
+      "TRIVIAL": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      },
+      "NORMAL": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      },
+      "COMPLEX": {
+        "model": "gpt-5.6-sol",
+        "model_reasoning_effort": "medium"
+      },
+      "ARCHITECTURAL": {
+        "model": "gpt-5.6-sol",
+        "model_reasoning_effort": "medium"
+      }
+    },
+    "researcher": {
+      "TRIVIAL": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      },
+      "NORMAL": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      },
+      "COMPLEX": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      },
+      "ARCHITECTURAL": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      }
+    },
+    "builder-expert": {
+      "TRIVIAL": {
+        "model": "gpt-5.6-sol",
+        "model_reasoning_effort": "high"
+      },
+      "NORMAL": {
+        "model": "gpt-5.6-sol",
+        "model_reasoning_effort": "high"
+      },
+      "COMPLEX": {
+        "model": "gpt-5.6-sol",
+        "model_reasoning_effort": "high"
+      },
+      "ARCHITECTURAL": {
+        "model": "gpt-5.6-sol",
+        "model_reasoning_effort": "high"
+      }
+    },
+    "qa": {
+      "TRIVIAL": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      },
+      "NORMAL": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      },
+      "COMPLEX": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      },
+      "ARCHITECTURAL": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      }
+    },
+    "visual-reviewer": {
+      "TRIVIAL": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      },
+      "NORMAL": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      },
+      "COMPLEX": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      },
+      "ARCHITECTURAL": {
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium"
+      }
+    }
+  },
   "orchestrator": {
     "model": "gpt-5.6-terra",
     "model_reasoning_effort": "low",
@@ -25,26 +150,6 @@
     }
   },
   "planner": {
-    "model": "gpt-6-astra",
-    "model_reasoning_effort": "high",
-    "fallback_models": [
-      "gpt-5.6-sol",
-      "gpt-5.6-terra"
-    ],
-    "sandbox_mode": "read-only",
-    "capabilities": {
-      "multimodal": false,
-      "modalities": {
-        "input": [
-          "text"
-        ],
-        "output": [
-          "text"
-        ]
-      }
-    }
-  },
-  "researcher": {
     "model": "gpt-5.6-terra",
     "model_reasoning_effort": "medium",
     "fallback_models": [
@@ -64,11 +169,30 @@
       }
     }
   },
-  "builder": {
-    "model": "gpt-5.6-sol",
+  "researcher": {
+    "model": "gpt-5.6-terra",
     "model_reasoning_effort": "medium",
     "fallback_models": [
-      "gpt-5.6-terra",
+      "gpt-5.6-sol"
+    ],
+    "sandbox_mode": "read-only",
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "builder": {
+    "model": "gpt-5.6-terra",
+    "model_reasoning_effort": "medium",
+    "fallback_models": [
+      "gpt-5.6-sol",
       "gpt-5.6-luna"
     ],
     "sandbox_mode": "danger-full-access",
@@ -105,10 +229,10 @@
     }
   },
   "reviewer": {
-    "model": "gpt-5.6-sol",
+    "model": "gpt-5.6-terra",
     "model_reasoning_effort": "medium",
     "fallback_models": [
-      "gpt-5.6-terra",
+      "gpt-5.6-sol",
       "gpt-5.6-luna"
     ],
     "sandbox_mode": "danger-full-access",
@@ -125,10 +249,10 @@
     }
   },
   "qa": {
-    "model": "gpt-5.6-sol",
+    "model": "gpt-5.6-terra",
     "model_reasoning_effort": "medium",
     "fallback_models": [
-      "gpt-5.6-terra",
+      "gpt-5.6-sol",
       "gpt-5.6-luna"
     ],
     "sandbox_mode": "danger-full-access",

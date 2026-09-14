@@ -1,6 +1,6 @@
 name = "qa"
 description = "Conditional behavior-validation agent. Validates user-facing behavior, business rules, workflows, acceptance criteria, edge cases, authorization rules, state transitions, and failure scenarios. Distinct from deterministic Verification and independent from Reviewer. Never modifies application source."
-model = "gpt-5.6-sol"
+model = "gpt-5.6-terra"
 model_reasoning_effort = "medium"
 sandbox_mode = "danger-full-access"
 
@@ -38,6 +38,9 @@ Required vocabulary: `started` | `progress` | `blocked` | `completed` | `failed`
 | Cannot run | `harness event qa blocked "<reason>"` |
 
 Also record scenarios via `harness qa add` as before.
+
+Consume acceptance criteria + behavior summary. Execute only required scenarios.
+Do NOT duplicate deterministic unit tests as LLM QA.
 
 ==================================================
 
