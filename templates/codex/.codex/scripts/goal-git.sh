@@ -598,10 +598,27 @@ Closes #${issue_num}"
   local pr_number pr_url
   case "$platform" in
     github)
-      pr_number=$(cd "$workdir" && gh pr create --base "$base" --head "$branch" --title "$title" --body "$issue_body" --json number -q '.number')
-      local gh_owner
-      gh_owner=$(cd "$workdir" && gh repo view --json nameWithOwner -q '.nameWithOwner')
-      pr_url="https://github.com/$gh_owner/pull/$pr_number"
+      # gh pr create does not support --json; it prints the PR URL on success.
+      local create_out body_file
+      body_file="$(mktemp)"
+      printf '%s\n' "$issue_body" > "$body_file"
+      create_out="$(cd "$workdir" && gh pr create --base "$base" --head "$branch" --title "$title" --body-file "$body_file" 2>&1)" || true
+      rm -f "$body_file"
+      pr_url="$(printf '%s\n' "$create_out" | grep -Eo 'https://[^[:space:]]+/pull/[0-9]+' | tail -1 || true)"
+      if [ -z "$pr_url" ]; then
+        # Already-open PR for this head, or non-URL create output — resolve via branch.
+        pr_url="$(cd "$workdir" && gh pr view "$branch" --json url -q .url 2>/dev/null || true)"
+      fi
+      pr_number="$(printf '%s\n' "$pr_url" | grep -Eo '[0-9]+$' || true)"
+      if [ -z "$pr_number" ]; then
+        pr_number="$(cd "$workdir" && gh pr view "$branch" --json number -q .number 2>/dev/null || true)"
+        [ -n "$pr_number" ] && pr_url="$(cd "$workdir" && gh pr view "$branch" --json url -q .url 2>/dev/null || true)"
+      fi
+      if [ -z "${pr_number:-}" ] || [ -z "${pr_url:-}" ]; then
+        err "Failed to create or resolve GitHub PR for branch $branch"
+        [ -n "${create_out:-}" ] && err "gh output: $create_out"
+        exit 1
+      fi
       ;;
     gitlab)
       log "Creating MR: $title"
