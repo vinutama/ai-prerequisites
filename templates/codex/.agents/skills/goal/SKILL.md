@@ -36,7 +36,20 @@ Spawn `@orchestrator` once with that `model` + `reasoning_effort`. Pass a short 
 * active goal text (and continuation instruction if any)
 * multi-repo: yes/no (from `state.json` `repos`)
 * for issues: `GOAL_RUN_ID`, issue number(s), queue vs single
-* reminder: orchestrator owns harness + all worker spawns
+* reminder: orchestrator owns harness + **all** worker `spawn_agent` calls
+
+```text
+spawn_agent({
+  agent_type: "orchestrator",
+  model: "<from models orchestrator>",
+  reasoning_effort: "low",
+  fork_turns: "none"
+})
+```
+
+`.codex/config.toml` must have `[agents] max_depth = 3`. Otherwise Codex V1 hides
+`spawn_agent` on the orchestrator and the loop dies. **Do not spawn workers
+yourself** — fix config, new session, `$goal --continue`, spawn `@orchestrator` only.
 
 Wait until `@orchestrator` finishes. Then report PR URL(s) / blockers from its result (or `harness status` / `harness done`). Do **not** call `harness spawn orchestrator` (worker budget is for child agents only).
 

@@ -153,6 +153,32 @@ Only `@reviewer` and `@visual-reviewer` may perform review-thread
 resolution/comment actions.
 
 ==================================================
+3c. SPAWN CAPABILITY (orchestrator-only workers)
+==================================================
+
+MAIN never spawns `@planner` / `@builder` / `@reviewer` / `@qa` / `@visual-reviewer`.
+Only you spawn workers. This is the same for TRIVIAL, NORMAL, COMPLEX, and ARCHITECTURAL.
+
+Before ANY `harness spawn`, confirm this session has `spawn_agent`
+(or `collaboration.spawn_agent`).
+
+**If yes:** `models` → `harness spawn` → `spawn_agent` → `wait`.
+Never `harness spawn` without a following `spawn_agent` in the same turn.
+
+**If no:** Codex withheld the tool (typical V1 `agents.max_depth` too low, or this
+thread is already at max depth). Do **not** `harness spawn`. Do **not** ask MAIN
+to spawn workers.
+
+Stop with:
+
+```markdown
+## SPAWN_CAPABILITY_MISSING
+fix: .codex/config.toml [agents] max_depth = 3  (then NEW Codex session)
+next: MAIN runs $goal --continue and spawn_agent({ agent_type: "orchestrator" }) only
+workers: orchestrator (this role) — never MAIN
+```
+
+==================================================
 4. MODEL ROUTING (cheap by default)
 ===================================
 
@@ -1413,6 +1439,7 @@ Optional stable cache: `.codex/repo-context.json` (project_type, test/build comm
 16. Always `harness context put discovery_context` after Planner (after final `harness init`).
 17. Always `harness context put research_report` after Researcher.
 18. Always resolve `models <role> --complexity $LEVEL`, pass model+effort to `harness spawn` and `spawn_agent`. Never spawn workers on agent.toml defaults alone (COMPLEX would stay terra).
+19. Never `harness spawn` without `spawn_agent` in this session. Never ask MAIN to spawn workers.
 
 The goal is a predictable, auditable, token-efficient agent loop where:
 

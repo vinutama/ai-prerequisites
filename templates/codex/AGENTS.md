@@ -46,10 +46,10 @@ If a skill is absent, the agent proceeds normally. Re-run `/init-skills` with
 /goal --continue [id] [new instruction]  # resume a goal; optional new instruction
 ```
 
-**Delegation:** `$goal` runs on MAIN (thin). After `start` / `continue` / issue
-setup, MAIN spawns **one** `@orchestrator` and waits. Orchestrator owns harness,
-gates, and **all** worker spawns (`@planner`, `@builder`, `@reviewer`, `@qa`, …).
-MAIN must not spawn workers or drive the plan→build→review loop itself.
+**Delegation:** `$goal` runs on MAIN (thin). After setup, MAIN spawns **one**
+`@orchestrator` and waits. `.codex/config.toml` `[agents] max_depth` must be **3**
+so the orchestrator (depth 1) still has `spawn_agent` for workers (depth 2).
+MAIN never spawns `@planner` / `@builder` / `@reviewer` / `@qa`.
 
 Continue parsing (no quotes): first token is checked against existing goals via
 `goal-git.sh list` — if it matches, that token is the goal id and the rest is

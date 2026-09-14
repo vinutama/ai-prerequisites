@@ -951,8 +951,8 @@ merge_figma_mcp() {
     cat > "$config_toml" <<'TOML'
 [agents]
 enabled = true
-max_depth = 2
-max_concurrent_threads_per_session = 1
+max_depth = 3
+max_concurrent_threads_per_session = 8
 
 [sandbox_workspace_write]
 network_access = true
