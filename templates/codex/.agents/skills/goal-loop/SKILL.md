@@ -51,7 +51,8 @@ UI/UX/frontend design intelligence.
 ## Agent Roles
 | Agent | Role | Access |
 |---|---|---|
-| `orchestrator` | Manages workflow, harness, delegates | Full + task |
+| MAIN (`$goal`) | Thin: parse args, start/continue/list/status, spawn one `@orchestrator` | Setup only |
+| `orchestrator` | Owns workflow, harness, all worker spawns | Full + task |
 | `planner` | Architecture plans — route/research/risk signals | Read-only |
 | `researcher` | On-demand research (docs, APIs, unfamiliar tech) | Read-only |
 | `builder` | Routine execution across frontend and backend | Full |
@@ -61,6 +62,11 @@ UI/UX/frontend design intelligence.
 | `visual-reviewer` | UI quality, accessibility, visuals (conditional) | Bash (goal-git.sh only) |
 
 ## Delegation logic
+```
+User → MAIN ($goal) → @orchestrator → @planner / @builder / …
+```
+MAIN never spawns workers. Orchestrator owns the loop.
+
 Planner tags every implementation task `@builder` and emits:
 - `route`: backend | feature | frontend
 - `research_required`, `qa_required`, `visual_required`

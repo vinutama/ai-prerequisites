@@ -62,7 +62,7 @@ The Orchestrator owns:
 * task registration
 * retry counters
 * model resolution
-* agent spawning
+* **all worker agent spawning** (MAIN must not spawn workers)
 * git/state operations through goal-git.sh
 * final completion checks
 
@@ -291,13 +291,14 @@ After planning is accepted:
 `route detect` is a **baseline classifier only**. Prefer the Planner's
 `### Routing` block (`route`, `qa_required`, `visual_required`) when present.
 
-Initialize the harness with explicit requirements:
+Initialize the harness with explicit requirements, then persist discovery_context:
 
 ```bash
 .codex/scripts/goal-git.sh harness init \
   --route <route> \
   --qa <qa_required true|false> \
   --visual <visual_required true|false>
+.codex/scripts/goal-git.sh harness context put discovery_context -
 .codex/scripts/goal-git.sh harness gate PLAN PASS
 ```
 
@@ -427,38 +428,27 @@ Visual Reviewer MUST NOT run unless:
 
 # PHASE A — SETUP
 
-Determine the invocation mode from the user arguments.
+You are usually spawned by the MAIN `$goal` agent after `start` / `continue` /
+`issues start`. Do **not** expect MAIN to run the loop.
 
-### `--list`
+Handoff brief from MAIN may include: mode (`single` | `continue` | `issue` |
+`issue-queue`), goal text, continuation instruction, multi-repo flag, issue /
+`GOAL_RUN_ID`. If brief is missing, read active state + config and proceed.
 
-Run:
+### `--list` / `--status`
 
-```bash
-.codex/scripts/goal-git.sh list
-```
+If somehow invoked for list/status only: run the corresponding `goal-git.sh`
+command, display, and stop. Normally MAIN handles these without spawning you.
 
-Display the result and stop.
+### `--continue` / resume
 
-### `--continue`
+If MAIN already ran `continue`, skip re-continue. Carry any continuation
+instruction into Planner context. Do not create a new branch or PR for continue.
 
-Parse:
+### New goal / issue
 
-* identifier
-* continuation instruction
-
-Use:
-
-```bash
-.codex/scripts/goal-git.sh continue "<identifier>"
-```
-
-Do not create a new branch or PR.
-
-Carry the continuation instruction into Planner context.
-
-### New goal
-
-Resolve the goal text using the existing `$goal` mechanism, then:
+If MAIN already ran `start` or `issues start`, skip re-start. Otherwise resolve
+goal text and:
 
 ```bash
 .codex/scripts/goal-git.sh start "<goal>"
@@ -488,6 +478,8 @@ Required configuration:
 * max_escalations
 * max_verify_retries
 
+You (Orchestrator) own **all** worker spawns from here on. MAIN must not spawn
+`@planner` / `@builder` / `@reviewer` / `@qa` / etc.
 ==================================================
 
 # PHASE A2 — CLASSIFY (cheap, mandatory)
@@ -532,8 +524,17 @@ If `planner_required=false` (typically TRIVIAL):
 
 If `planner_required=true`:
 
+Provisional harness so `harness spawn` works before final routing:
+
 ```bash
 LEVEL=$(jq -r .complexity <<< "$classify_json")
+.codex/scripts/goal-git.sh harness init \
+  --route feature \
+  --qa false \
+  --visual false \
+  --complexity "$LEVEL" \
+  --planner-required true \
+  --reviewer-required true
 .codex/scripts/goal-git.sh models planner --complexity "$LEVEL"
 .codex/scripts/goal-git.sh harness spawn planner
 .codex/scripts/goal-git.sh harness event orchestrator planner_started
@@ -559,13 +560,12 @@ After planner returns:
 ```bash
 .codex/scripts/goal-git.sh harness event orchestrator planner_completed "<status>"
 # Replay ## Milestones
-.codex/scripts/goal-git.sh harness context put discovery_context -
-# paste discovery_context JSON on stdin
 ```
 
 Validate Planner output. Re-invoke Planner only if budget allows (`max_planner_runs`).
 
-Once accepted:
+Once accepted — **final init first, then persist discovery_context** (init preserves prior
+metrics/events; always put context after the final init):
 
 ```bash
 .codex/scripts/goal-git.sh harness init \
@@ -575,6 +575,8 @@ Once accepted:
   --complexity <LEVEL> \
   --planner-required true \
   --reviewer-required true
+.codex/scripts/goal-git.sh harness context put discovery_context -
+# paste discovery_context JSON on stdin (REQUIRED — PLAN/IMPLEMENTATION PASS will reject without it)
 .codex/scripts/goal-git.sh harness gate PLAN PASS
 ```
 
@@ -627,6 +629,8 @@ After researcher returns:
 .codex/scripts/goal-git.sh harness event orchestrator researcher_completed "<status>"
 # Replay each milestone from Researcher's ## Milestones block:
 # .codex/scripts/goal-git.sh harness event researcher <event> "<detail>"
+.codex/scripts/goal-git.sh harness context put research_report -
+# paste compact research_report JSON on stdin (REQUIRED when researcher ran)
 ```
 
 Pass only the relevant research findings to Builder.
@@ -938,10 +942,15 @@ When QA is required:
 
 ```bash
 .codex/scripts/goal-git.sh harness phase QA
+.codex/scripts/goal-git.sh harness spawn qa
+.codex/scripts/goal-git.sh models qa --complexity "$LEVEL"
 .codex/scripts/goal-git.sh harness event orchestrator qa_started
 ```
 
-Spawn `@qa`.
+Spawn `@qa` (mandatory). If `harness spawn qa` fails because budget is exhausted,
+STOP as BLOCKED — do **not** invent scenarios or mark QA PASS yourself.
+Spawn budget reserves a slot for required QA; prefer spawning QA over discretionary
+agents when near the limit.
 
 After QA returns:
 
@@ -959,13 +968,13 @@ QA must validate:
 * authorization/business constraints
 * expected failure behavior
 
-QA completion requires:
+QA completion requires `metrics.qa_runs >= 1` and:
 
 ```bash
 .codex/scripts/goal-git.sh harness qa pending
 ```
 
-to exit 0, with at least one recorded scenario.
+to exit 0, with at least one recorded scenario (recorded by `@qa`, not forged by Orchestrator).
 
 Then:
 
@@ -1007,11 +1016,13 @@ When required:
 ```bash
 .codex/scripts/goal-git.sh models visual-reviewer --require-multimodal
 .codex/scripts/goal-git.sh harness phase VISUAL_REVIEW
+.codex/scripts/goal-git.sh harness spawn visual-reviewer
 .codex/scripts/goal-git.sh harness event orchestrator visual_reviewer_started
 ```
 
 Spawn `@visual-reviewer` only after multimodal resolution succeeds, and only
-with the model returned by `--require-multimodal`.
+with the model returned by `--require-multimodal`. If spawn fails on budget,
+STOP as BLOCKED — do not forge visual observations.
 
 After visual-reviewer returns:
 
@@ -1250,12 +1261,16 @@ QA: acceptance criteria + behavior summary → required scenarios only.
 
 Visual: UI criteria + changed UI files + screenshots → relevant states only.
 
-Persist artifacts:
+Persist artifacts (mandatory when produced):
 
 ```bash
 .codex/scripts/goal-git.sh harness context put discovery_context -
+.codex/scripts/goal-git.sh harness context put research_report -
 .codex/scripts/goal-git.sh harness context get discovery_context
 ```
+
+`harness init` preserves existing `context` / `metrics` / `events` / `tasks`, but
+always re-put `discovery_context` after the **final** init so PLAN PASS can succeed.
 
 Optional stable cache: `.codex/repo-context.json` (project_type, test/build commands, conventions).
 
@@ -1271,8 +1286,8 @@ Optional stable cache: `.codex/repo-context.json` (project_type, test/build comm
 4. Never claim Verification PASS without `verify run`.
 5. Never spawn Builder Expert in parallel by default.
 6. Never spawn Researcher unless needed.
-7. Never spawn QA unless applicable.
-8. Never spawn Visual Reviewer unless applicable.
+7. Never spawn QA unless applicable; when `requirements.qa=true`, always `harness spawn qa` + `@qa` — never forge scenarios.
+8. Never spawn Visual Reviewer unless applicable; when required, always spawn the agent — never forge observations.
 9. Never allow uncontrolled loops.
 10. Never ignore a failed gate.
 11. Never convert UNKNOWN/NOT_RUN into PASS.
@@ -1280,6 +1295,8 @@ Optional stable cache: `.codex/repo-context.json` (project_type, test/build comm
 13. Every implementation change after review must be re-verified.
 14. Reviewer/Visual Reviewer own review-thread actions.
 15. When blocked, escalate or fail explicitly; never silently improvise.
+16. Always `harness context put discovery_context` after Planner (after final `harness init`).
+17. Always `harness context put research_report` after Researcher.
 
 The goal is a predictable, auditable, token-efficient agent loop where:
 

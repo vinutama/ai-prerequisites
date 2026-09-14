@@ -60,7 +60,7 @@ Commands:
   harness progress [-n N] [--json]
                             Render recent harness timeline (default last 20)
   harness hook              Read Codex hook JSON on stdin; emit START/END event
-  harness spawn <role>      Record agent spawn against budget (exit 1 if exceeded)
+  harness spawn <role>      Record agent spawn against budget; reserves slots for required QA/Visual
   harness metrics           Print spawn/run metrics
   harness context put <name> [file|-]
                             Store compact handoff artifact (discovery_context, …)
@@ -2321,13 +2321,26 @@ cmd_harness_init() {
   max_verify_retries="$(config_read max_verify_retries)"; max_verify_retries="${max_verify_retries:-3}"
 
   local max_total max_planner max_researcher max_expert max_reviewer_runs max_qa max_visual
-  max_total="$(config_read max_total_spawns)"; max_total="${max_total:-5}"
+  # Default 10 leaves room for planner+researcher+builder+reviewer+rework+qa+visual(+expert)
+  max_total="$(config_read max_total_spawns)"; max_total="${max_total:-10}"
   max_planner="$(config_read max_planner_runs)"; max_planner="${max_planner:-1}"
   max_researcher="$(config_read max_researcher_runs)"; max_researcher="${max_researcher:-1}"
   max_expert="$(config_read max_builder_expert_runs)"; max_expert="${max_expert:-1}"
   max_reviewer_runs="$(config_read max_reviewer_runs)"; max_reviewer_runs="${max_reviewer_runs:-2}"
   max_qa="$(config_read max_qa_runs)"; max_qa="${max_qa:-1}"
   max_visual="$(config_read max_visual_runs)"; max_visual="${max_visual:-1}"
+
+  # Re-init must not wipe handoffs/metrics already recorded (spawn/context put before final init).
+  local prev_context='{}' prev_events='[]' prev_tasks='[]' prev_metrics=''
+  if jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness != null' "$STATE_FILE" >/dev/null 2>&1; then
+    prev_context="$(jq -c --argjson idx "$GOAL_IDX" '.[$idx].harness.context // {}' "$STATE_FILE")"
+    prev_events="$(jq -c --argjson idx "$GOAL_IDX" '.[$idx].harness.events // []' "$STATE_FILE")"
+    prev_tasks="$(jq -c --argjson idx "$GOAL_IDX" '.[$idx].harness.tasks // []' "$STATE_FILE")"
+    prev_metrics="$(jq -c --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics // empty' "$STATE_FILE")"
+  fi
+  if [ -z "$prev_metrics" ] || [ "$prev_metrics" = "null" ]; then
+    prev_metrics='{"agent_spawns":0,"planner_runs":0,"researcher_runs":0,"builder_runs":0,"expert_runs":0,"reviewer_runs":0,"qa_runs":0,"visual_runs":0,"rework_cycles":0}'
+  fi
 
   local harness
   harness="$(jq -n \
@@ -2348,6 +2361,10 @@ cmd_harness_init() {
     --argjson max_reviewer_runs "$max_reviewer_runs" \
     --argjson max_qa "$max_qa" \
     --argjson max_visual "$max_visual" \
+    --argjson prev_context "$prev_context" \
+    --argjson prev_events "$prev_events" \
+    --argjson prev_tasks "$prev_tasks" \
+    --argjson prev_metrics "$prev_metrics" \
     '{
       phase: "PLANNED",
       route: $route,
@@ -2359,7 +2376,7 @@ cmd_harness_init() {
         reviewer: $reviewer_req,
         source: $req_source
       },
-      tasks: [],
+      tasks: $prev_tasks,
       gates: {
         PLAN: {status: "NOT_RUN"},
         IMPLEMENTATION: {status: "NOT_RUN"},
@@ -2385,19 +2402,9 @@ cmd_harness_init() {
         max_qa_runs: $max_qa,
         max_visual_runs: $max_visual
       },
-      metrics: {
-        agent_spawns: 0,
-        planner_runs: 0,
-        researcher_runs: 0,
-        builder_runs: 0,
-        expert_runs: 0,
-        reviewer_runs: 0,
-        qa_runs: 0,
-        visual_runs: 0,
-        rework_cycles: 0
-      },
-      context: {},
-      events: []
+      metrics: $prev_metrics,
+      context: $prev_context,
+      events: $prev_events
     }')"
 
   if [ "$qa_req" = false ]; then
@@ -2563,11 +2570,34 @@ harness_review_evidence_ok() {
   return 0
 }
 
+harness_discovery_context_ok() {
+  # When Planner ran (or is required), discovery_context must be persisted.
+  local planner_req
+  planner_req="$(jq -r --argjson idx "$GOAL_IDX" \
+    '.[$idx].harness.requirements.planner // true' "$STATE_FILE")"
+  if [ "$planner_req" != "true" ]; then
+    return 0
+  fi
+  if ! jq -e --argjson idx "$GOAL_IDX" \
+    '.[$idx].harness.context.discovery_context
+     | type == "object" or (type == "string" and length > 0)' \
+    "$STATE_FILE" >/dev/null 2>&1; then
+    err "Gate rejected — discovery_context missing (run: harness context put discovery_context)"
+    return 1
+  fi
+  return 0
+}
+
 harness_qa_evidence_ok() {
-  local req total failed
+  local req total failed qa_runs
   req="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.requirements.qa // false' "$STATE_FILE")"
   if [ "$req" != "true" ]; then
     err "QA PASS rejected — requirements.qa is false"
+    return 1
+  fi
+  qa_runs="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics.qa_runs // 0' "$STATE_FILE")"
+  if [ "${qa_runs:-0}" -lt 1 ]; then
+    err "QA PASS rejected — QA agent was not spawned (harness spawn qa + @qa). Do not forge scenarios."
     return 1
   fi
   total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.qa_findings | length' "$STATE_FILE")"
@@ -2585,10 +2615,15 @@ harness_qa_evidence_ok() {
 }
 
 harness_visual_evidence_ok() {
-  local req total failed
+  local req total failed visual_runs
   req="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.requirements.visual // false' "$STATE_FILE")"
   if [ "$req" != "true" ]; then
     err "VISUAL PASS rejected — requirements.visual is false"
+    return 1
+  fi
+  visual_runs="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics.visual_runs // 0' "$STATE_FILE")"
+  if [ "${visual_runs:-0}" -lt 1 ]; then
+    err "VISUAL PASS rejected — Visual agent was not spawned (harness spawn visual-reviewer + @visual-reviewer)"
     return 1
   fi
   total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.visual_findings // [] | length' "$STATE_FILE")"
@@ -2603,6 +2638,20 @@ harness_visual_evidence_ok() {
     return 1
   fi
   return 0
+}
+
+# Slots that must remain free for required agents not yet spawned.
+# Excludes the role currently being spawned when it is itself reserved.
+harness_spawn_reserved_remaining() {
+  local spawning_role="${1:-}"
+  jq -r --argjson idx "$GOAL_IDX" --arg role "$spawning_role" '
+    .[$idx].harness as $h
+    | ($h.requirements // {}) as $r
+    | ($h.metrics // {}) as $m
+    | 0
+      + (if ($r.qa == true) and (($m.qa_runs // 0) == 0) and ($role != "qa") then 1 else 0 end)
+      + (if ($r.visual == true) and (($m.visual_runs // 0) == 0) and ($role != "visual-reviewer") then 1 else 0 end)
+  ' "$STATE_FILE"
 }
 
 cmd_harness_gate() {
@@ -2627,8 +2676,12 @@ cmd_harness_gate() {
   # Evidence-backed PASS checks
   if [ "$status" = "PASS" ]; then
     case "$name" in
+      PLAN)
+        harness_discovery_context_ok || exit 1
+        ;;
       IMPLEMENTATION)
         harness_impl_tasks_ready || exit 1
+        harness_discovery_context_ok || exit 1
         ;;
       VERIFICATION)
         if [ "${HARNESS_GATE_SOURCE:-}" != "verify" ]; then
@@ -3020,11 +3073,18 @@ cmd_harness_spawn() {
     *) err "Unknown spawn role: $role"; exit 1 ;;
   esac
 
-  local total max_total
+  local total max_total reserved
   total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics.agent_spawns // 0' "$STATE_FILE")"
-  max_total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.budget.max_total_spawns // 5' "$STATE_FILE")"
+  max_total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.budget.max_total_spawns // 10' "$STATE_FILE")"
   if [ "$total" -ge "$max_total" ]; then
     err "Spawn budget exceeded: agent_spawns=$total >= max_total_spawns=$max_total"
+    exit 1
+  fi
+
+  # Reserve capacity for required QA/Visual that have not run yet.
+  reserved="$(harness_spawn_reserved_remaining "$role")"
+  if [ "$((total + 1 + reserved))" -gt "$max_total" ]; then
+    err "Spawn refused: would leave no room for required QA/Visual (spawns=$total, reserved=$reserved, max=$max_total). Spawn @qa/@visual-reviewer next, or raise max_total_spawns."
     exit 1
   fi
 

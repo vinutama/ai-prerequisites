@@ -46,6 +46,11 @@ If a skill is absent, the agent proceeds normally. Re-run `/init-skills` with
 /goal --continue [id] [new instruction]  # resume a goal; optional new instruction
 ```
 
+**Delegation:** `$goal` runs on MAIN (thin). After `start` / `continue` / issue
+setup, MAIN spawns **one** `@orchestrator` and waits. Orchestrator owns harness,
+gates, and **all** worker spawns (`@planner`, `@builder`, `@reviewer`, `@qa`, …).
+MAIN must not spawn workers or drive the plan→build→review loop itself.
+
 Continue parsing (no quotes): first token is checked against existing goals via
 `goal-git.sh list` — if it matches, that token is the goal id and the rest is
 the new instruction; if not, the whole remainder is the instruction for the
@@ -107,9 +112,11 @@ gates, budget, metrics, retries, findings). Orchestrator drives it via
 | COMPLEX | Sol/high | Plan → Research? → Build Sol → Verify → Review Sol | bounded |
 | ARCHITECTURAL | Astra/high | Plan Astra → Research? → Build Sol → Expert? → Verify → Review Sol | bounded |
 
-**Spawn budgets** (defaults): max_total_spawns=5, planner=1, researcher=1,
+**Spawn budgets** (defaults): max_total_spawns=**10**, planner=1, researcher=1,
 expert=1, reviewer=2, qa=1, visual=1. Use `harness spawn <role>` before each
-spawn; exceeding budget exits 1. `review_max_iterations` defaults to **2**.
+spawn; exceeding budget exits 1. Spawns **reserve** capacity for required QA /
+Visual that have not run yet (discretionary builder/reviewer rework cannot
+starve them). `review_max_iterations` defaults to **2**.
 
 Phases: `PLANNED` → `RESEARCHING?` → `BUILDING` → `ESCALATED?` → `VERIFYING` →
 `REVIEWING?` → `QA?` → `VISUAL_REVIEW?` → `REWORK?` → `DONE` | `FAILED`.
@@ -135,12 +142,12 @@ Conditional: `QA` / `VISUAL` from requirements.
 
 | Gate | PASS evidence |
 |---|---|
-| PLAN | Planner accepted |
-| IMPLEMENTATION | All `builder`/`builder-expert` tasks `DONE` (at least one) |
+| PLAN | Planner accepted + `discovery_context` persisted (`harness context put`) when planner required |
+| IMPLEMENTATION | All `builder`/`builder-expert` tasks `DONE` (at least one); `discovery_context` when planner required |
 | VERIFICATION | Only via `verify run` (manual PASS rejected) |
 | REVIEW | `pending` (inline) or `review pending` (local) exit 0 |
-| QA | `requirements.qa` + scenarios recorded + `harness qa pending` exit 0 |
-| VISUAL | `requirements.visual` + observations + `harness visual pending` exit 0 |
+| QA | `requirements.qa` + `qa_runs>=1` (`harness spawn qa`) + scenarios + `harness qa pending` exit 0 |
+| VISUAL | `requirements.visual` + `visual_runs>=1` + observations + `harness visual pending` exit 0 |
 
 Gate status: `NOT_RUN | PASS | FAIL | SKIPPED | UNKNOWN`.
 `harness done` exits 0 only when every **required** gate is `PASS`
