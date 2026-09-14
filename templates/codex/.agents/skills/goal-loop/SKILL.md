@@ -113,7 +113,9 @@ Project-level only — pinned to the project root, never global.
       "visual_findings": [],
       "counters": {"rework": 0, "escalations": 0, "verify_retries": 0},
       "limits": {"max_rework": 3, "max_escalations": 2, "max_verify_retries": 3},
-      "events": []
+      "events": [
+        {"at": "2026-09-13T20:12:00+07:00", "agent": "orchestrator", "event": "planner_started", "issue": 25, "detail": ""}
+      ]
     },
     "repos": [
       {"path": "repo-name", "pr_number": null, "pr_url": ""}
@@ -179,6 +181,8 @@ builder/builder-expert/reviewer/qa=`gpt-5.6-sol`.
 .codex/scripts/goal-git.sh harness qa pending
 .codex/scripts/goal-git.sh harness visual add <viewport> <PASS|FAIL> <note>
 .codex/scripts/goal-git.sh harness visual pending
+.codex/scripts/goal-git.sh harness event <agent> <event> [detail]
+.codex/scripts/goal-git.sh harness progress [-n N] [--json]
 .codex/scripts/goal-git.sh harness status
 .codex/scripts/goal-git.sh harness done
 .codex/scripts/goal-git.sh verify detect

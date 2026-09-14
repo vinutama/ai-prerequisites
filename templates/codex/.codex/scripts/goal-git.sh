@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPTS_DIR/../.." && pwd)"
 STATE_FILE="$PROJECT_ROOT/state.json"
+STATE_LOCK_DIR="$PROJECT_ROOT/.codex/.state.lock"
+PROGRESS_LOG="$PROJECT_ROOT/.codex/goal-progress.log"
 CONFIG_FILE="$PROJECT_ROOT/.codex/goal-config.json"
 FIGMA_ENV_FILE="$PROJECT_ROOT/.codex/figma.env"
 MCP_JSON="$PROJECT_ROOT/.codex/mcp.json"
@@ -53,6 +55,11 @@ Commands:
   harness qa pending        Exit 1 if any QA scenario failed
   harness visual add <viewport> <PASS|FAIL> <note>
   harness visual pending    Exit 1 if any visual observation failed
+  harness event <agent> <event> [detail]
+                            Append typed milestone to harness.events (best-effort)
+  harness progress [-n N] [--json]
+                            Render recent harness timeline (default last 20)
+  harness hook              Read Codex hook JSON on stdin; emit START/END event
   harness status            Print harness object
   harness done              Exit 0 only when required gates PASS (from requirements)
   selfcheck                 Run platform detection self-check
@@ -210,9 +217,73 @@ refresh_goal_idx
 
 # --- State Helpers ---
 
+state_lock_acquire() {
+  local max_attempts="${1:-100}"
+  local stale_secs="${2:-30}"
+  local attempt=0
+  local lock_mtime now lock_age lock_pid
+  mkdir -p "$(dirname "$STATE_LOCK_DIR")"
+  while ! mkdir "$STATE_LOCK_DIR" 2>/dev/null; do
+    attempt=$((attempt + 1))
+    if [ -d "$STATE_LOCK_DIR" ]; then
+      lock_mtime="$(stat -f %m "$STATE_LOCK_DIR" 2>/dev/null || true)"
+      if [ -z "$lock_mtime" ]; then
+        lock_mtime="$(stat -c %Y "$STATE_LOCK_DIR" 2>/dev/null || true)"
+      fi
+      now="$(date +%s)"
+      if [ -n "$lock_mtime" ] && [ "$lock_mtime" -gt 0 ] 2>/dev/null; then
+        lock_age=$((now - lock_mtime))
+      else
+        lock_age=0
+      fi
+      lock_pid="$(cat "$STATE_LOCK_DIR/pid" 2>/dev/null || true)"
+      # Break only when lock is old AND holder is gone (or pid unknown)
+      if [ "$lock_age" -ge "$stale_secs" ]; then
+        if [ -z "$lock_pid" ] || ! kill -0 "$lock_pid" 2>/dev/null; then
+          warn "Breaking stale state lock (age=${lock_age}s pid=${lock_pid:-none})"
+          rm -rf "$STATE_LOCK_DIR"
+          continue
+        fi
+      fi
+    fi
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      err "Could not acquire state lock after $max_attempts attempts"
+      return 1
+    fi
+    sleep 0.05
+  done
+  printf '%s\n' "$$" > "$STATE_LOCK_DIR/pid" 2>/dev/null || true
+  return 0
+}
+
+state_lock_release() {
+  rm -rf "$STATE_LOCK_DIR"
+}
+
+# Run jq write under lock: state_mutate [jq args...]  (STATE_FILE is the input)
+state_mutate() {
+  local tmp
+  tmp="$STATE_FILE.tmp.$$"
+  if ! state_lock_acquire; then
+    return 1
+  fi
+  if ! jq "$@" "$STATE_FILE" > "$tmp"; then
+    rm -f "$tmp"
+    state_lock_release
+    return 1
+  fi
+  if ! mv "$tmp" "$STATE_FILE"; then
+    rm -f "$tmp"
+    state_lock_release
+    return 1
+  fi
+  state_lock_release
+  return 0
+}
+
 state_ensure_array() {
   if [ -f "$STATE_FILE" ] && jq -e 'type == "object"' "$STATE_FILE" >/dev/null 2>&1; then
-    jq '[.]' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    state_mutate '[.]'
   fi
 }
 
@@ -223,7 +294,7 @@ state_active() {
 
 state_update() {
   local field="$1" value="$2"
-  jq --argjson idx "$GOAL_IDX" --arg v "$value" ".[\$idx].$field = \$v" "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  state_mutate --argjson idx "$GOAL_IDX" --arg v "$value" ".[\$idx].$field = \$v"
 }
 
 require_active_goal() {
@@ -406,7 +477,7 @@ cmd_start() {
   fi
 
   if [ -f "$STATE_FILE" ]; then
-    jq --argjson entry "$new_goal" '. + [$entry]' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    state_mutate --argjson entry "$new_goal" '. + [$entry]'
   else
     echo "[$new_goal]" > "$STATE_FILE"
   fi
@@ -462,9 +533,8 @@ cmd_pr() {
     create_pr "" "$branch" "$base" "$title" "$goal"
     local result_pr_number="${PR_RESULT_NUMBER:-}"
     local result_pr_url="${PR_RESULT_URL:-}"
-    jq --argjson idx "$GOAL_IDX" --argjson pn "$result_pr_number" --arg url "$result_pr_url" \
-      '.[$idx].pr_number = $pn | .[$idx].pr_url = $url' \
-      "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    state_mutate --argjson idx "$GOAL_IDX" --argjson pn "$result_pr_number" --arg url "$result_pr_url" \
+      '.[$idx].pr_number = $pn | .[$idx].pr_url = $url'
     log "Created: $result_pr_url"
     return
   fi
@@ -495,7 +565,7 @@ cmd_pr() {
     repo_idx=$((repo_idx + 1))
   done
 
-  jq --argjson idx "$GOAL_IDX" --argjson repos "$updated_repos" '.[$idx].repos = $repos' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  state_mutate --argjson idx "$GOAL_IDX" --argjson repos "$updated_repos" '.[$idx].repos = $repos'
 }
 
 create_pr() {
@@ -755,12 +825,12 @@ cmd_continue() {
       err "Goal not found: $identifier (use 'list' to see all goals)"
       exit 1
     fi
-    jq --argjson idx "$idx" '.[:$idx] + .[($idx+1):] + [.[$idx]]' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    state_mutate --argjson idx "$idx" '.[:$idx] + .[($idx+1):] + [.[$idx]]'
     branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch' "$STATE_FILE")
     log "Switched to goal on branch: $branch"
   fi
 
-  jq --argjson idx "$GOAL_IDX" '.[$idx].status = "in_progress"' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  state_mutate --argjson idx "$GOAL_IDX" '.[$idx].status = "in_progress"'
 
   local branch
   branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch' "$STATE_FILE")
@@ -1568,7 +1638,7 @@ ${body}"
     }')
 
   if [ -f "$STATE_FILE" ]; then
-    jq --argjson entry "$new_goal" '. + [$entry]' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    state_mutate --argjson entry "$new_goal" '. + [$entry]'
   else
     echo "[$new_goal]" > "$STATE_FILE"
   fi
@@ -1597,10 +1667,10 @@ cmd_issues_finish() {
       git worktree remove "$wt_path" --force 2>/dev/null || git worktree remove "$wt_path" 2>/dev/null || true
       log "Removed issue worktree: $wt_rel"
     fi
-    jq --argjson idx "$GOAL_IDX" 'del(.[$idx].worktree)' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    state_mutate --argjson idx "$GOAL_IDX" 'del(.[$idx].worktree)'
   fi
 
-  jq --argjson idx "$GOAL_IDX" '.[$idx].status = "completed"' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  state_mutate --argjson idx "$GOAL_IDX" '.[$idx].status = "completed"'
   log "Issue #$number marked completed"
 }
 
@@ -1918,17 +1988,90 @@ harness_get() {
 
 harness_put() {
   local harness_json="$1"
-  jq --argjson idx "$GOAL_IDX" --argjson h "$harness_json" \
-    '.[$idx].harness = $h' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  state_mutate --argjson idx "$GOAL_IDX" --argjson h "$harness_json" \
+    '.[$idx].harness = $h'
 }
 
+harness_now() {
+  # Local timestamp with colon in offset: 2026-09-13T20:12:00+07:00
+  # Avoid bash 4+ ${var: -2} (macOS ships bash 3.2).
+  local raw prefix suffix
+  raw="$(date +"%Y-%m-%dT%H:%M:%S%z")"
+  prefix="${raw%??}"
+  suffix="${raw#"$prefix"}"
+  printf '%s:%s\n' "$prefix" "$suffix"
+}
+
+harness_active_issue() {
+  # Prints issue number or empty. GOAL_IDX=-1 means last/active goal (jq convention).
+  if [ ! -f "$STATE_FILE" ]; then
+    echo ""
+    return 0
+  fi
+  jq -r --argjson idx "${GOAL_IDX:--1}" \
+    '(.[$idx].issue.number // empty)' \
+    "$STATE_FILE" 2>/dev/null || true
+}
+
+progress_mirror_line() {
+  local at="$1" agent="$2" event="$3" detail="${4:-}"
+  mkdir -p "$(dirname "$PROGRESS_LOG")"
+  if [ -n "$detail" ]; then
+    printf '%s  %-16s  %-12s  %s\n' "$at" "$agent" "$event" "$detail" >> "$PROGRESS_LOG"
+  else
+    printf '%s  %-16s  %-12s\n' "$at" "$agent" "$event" >> "$PROGRESS_LOG"
+  fi
+}
+
+# Typed event append. agent + event required. Returns 0 always for agent-facing use.
+harness_event() {
+  local agent="${1:-}" event="${2:-}" detail="${3:-}"
+  local at issue_num issue_json
+
+  if [ -z "$agent" ] || [ -z "$event" ]; then
+    return 0
+  fi
+
+  at="$(harness_now)"
+  refresh_goal_idx 2>/dev/null || true
+  issue_num="$(harness_active_issue)"
+  if [ -n "$issue_num" ]; then
+    issue_json="$issue_num"
+  else
+    issue_json="null"
+  fi
+
+  progress_mirror_line "$at" "$agent" "$event" "$detail"
+
+  # Best-effort: no state / no harness / lock failure → still exit 0
+  if [ ! -f "$STATE_FILE" ]; then
+    return 0
+  fi
+  if ! jq -e --argjson idx "${GOAL_IDX:--1}" '.[$idx].harness' "$STATE_FILE" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  state_mutate --argjson idx "${GOAL_IDX:--1}" \
+    --arg at "$at" \
+    --arg agent "$agent" \
+    --arg event "$event" \
+    --arg detail "$detail" \
+    --argjson issue "$issue_json" \
+    '.[$idx].harness.events += [{
+      at: $at,
+      agent: $agent,
+      event: $event,
+      issue: $issue,
+      detail: $detail
+    }]' || true
+
+  return 0
+}
+
+# Compatibility wrapper for internal call sites that previously passed a free-form string
 harness_append_event() {
-  local event="$1"
-  local ts
-  ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  jq --argjson idx "$GOAL_IDX" --arg ts "$ts" --arg event "$event" \
-    '.[$idx].harness.events += [{ts: $ts, event: $event}]' \
-    "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  local msg="$1"
+  harness_event "harness" "internal" "$msg"
 }
 
 harness_phase_allowed() {
@@ -2054,7 +2197,7 @@ cmd_harness_init() {
   fi
 
   harness_put "$harness"
-  harness_append_event "init route=$route qa=$qa_req visual=$visual_req source=$req_source"
+  harness_event "harness" "init" "route=$route qa=$qa_req visual=$visual_req source=$req_source"
   log "Harness initialized (route=$route, qa=$qa_req, visual=$visual_req, phase=PLANNED)"
   harness_get
 }
@@ -2082,9 +2225,9 @@ cmd_harness_phase() {
     exit 1
   fi
 
-  jq --argjson idx "$GOAL_IDX" --arg to "$to" \
-    '.[$idx].harness.phase = $to' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
-  harness_append_event "phase $from -> $to"
+  state_mutate --argjson idx "$GOAL_IDX" --arg to "$to" \
+    '.[$idx].harness.phase = $to'
+  harness_event "harness" "phase" "$from -> $to"
   log "Harness phase: $from -> $to"
 }
 
@@ -2110,7 +2253,7 @@ cmd_harness_task_add() {
   local parent_json="null"
   [ -n "$parent" ] && parent_json="$(jq -n --arg p "$parent" '$p')"
 
-  jq --argjson idx "$GOAL_IDX" \
+  state_mutate --argjson idx "$GOAL_IDX" \
     --arg id "$id" \
     --arg role "$role" \
     --arg title "$title" \
@@ -2122,9 +2265,9 @@ cmd_harness_task_add() {
       title: $title,
       state: "PENDING",
       attempts: 0
-    }]' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    }]'
 
-  harness_append_event "task add $id role=$role"
+  harness_event "harness" "task_add" "$id role=$role"
   printf '%s\n' "$id"
 }
 
@@ -2144,16 +2287,16 @@ cmd_harness_task_set() {
     exit 1
   fi
 
-  jq --argjson idx "$GOAL_IDX" --arg id "$id" --arg state "$state" '
+  state_mutate --argjson idx "$GOAL_IDX" --arg id "$id" --arg state "$state" '
     .[$idx].harness.tasks |= map(
       if .id == $id then
         .state = $state
         | if $state == "RUNNING" then .attempts += 1 else . end
       else . end
     )
-  ' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  '
 
-  harness_append_event "task set $id=$state"
+  harness_event "harness" "task_set" "$id=$state"
   log "Task $id -> $state"
 }
 
@@ -2289,16 +2432,14 @@ cmd_harness_gate() {
   fi
 
   if [ -n "$reason" ]; then
-    jq --argjson idx "$GOAL_IDX" --arg name "$name" --arg status "$status" --arg reason "$reason" \
-      '.[$idx].harness.gates[$name] = {status: $status, reason: $reason}' \
-      "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    state_mutate --argjson idx "$GOAL_IDX" --arg name "$name" --arg status "$status" --arg reason "$reason" \
+      '.[$idx].harness.gates[$name] = {status: $status, reason: $reason}'
   else
-    jq --argjson idx "$GOAL_IDX" --arg name "$name" --arg status "$status" \
-      '.[$idx].harness.gates[$name] = {status: $status}' \
-      "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    state_mutate --argjson idx "$GOAL_IDX" --arg name "$name" --arg status "$status" \
+      '.[$idx].harness.gates[$name] = {status: $status}'
   fi
 
-  harness_append_event "gate $name=$status${reason:+ ($reason)}"
+  harness_event "harness" "gate" "$name=$status${reason:+ ($reason)}"
   log "Gate $name -> $status"
 }
 
@@ -2321,11 +2462,10 @@ cmd_harness_retry() {
   limit="$(jq -r --argjson idx "$GOAL_IDX" --arg lf "$limit_field" \
     '.[$idx].harness.limits[$lf]' "$STATE_FILE")"
 
-  jq --argjson idx "$GOAL_IDX" --arg f "$field" --argjson n "$next" \
-    '.[$idx].harness.counters[$f] = $n' \
-    "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  state_mutate --argjson idx "$GOAL_IDX" --arg f "$field" --argjson n "$next" \
+    '.[$idx].harness.counters[$f] = $n'
 
-  harness_append_event "retry $field=$next (limit=$limit)"
+  harness_event "harness" "retry" "$field=$next (limit=$limit)"
 
   if [ "$next" -gt "$limit" ]; then
     err "Retry limit exceeded for $field: $next > $limit"
@@ -2351,15 +2491,14 @@ cmd_harness_qa_add() {
     | "q" + (($n + 1) | tostring)
   ' "$STATE_FILE")"
 
-  jq --argjson idx "$GOAL_IDX" \
+  state_mutate --argjson idx "$GOAL_IDX" \
     --arg id "$id" \
     --arg scenario "$scenario" \
     --arg result "$result" \
     --arg note "$note" \
-    '.[$idx].harness.qa_findings += [{id: $id, scenario: $scenario, result: $result, note: $note}]' \
-    "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    '.[$idx].harness.qa_findings += [{id: $id, scenario: $scenario, result: $result, note: $note}]'
 
-  harness_append_event "qa $id $result $scenario"
+  harness_event "harness" "qa" "$id $result $scenario"
   printf '%s\n' "$id"
 }
 
@@ -2390,15 +2529,14 @@ cmd_harness_visual_add() {
     | "v" + (($n + 1) | tostring)
   ' "$STATE_FILE")"
 
-  jq --argjson idx "$GOAL_IDX" \
+  state_mutate --argjson idx "$GOAL_IDX" \
     --arg id "$id" \
     --arg viewport "$viewport" \
     --arg result "$result" \
     --arg note "$note" \
-    '.[$idx].harness.visual_findings = ((.[$idx].harness.visual_findings // []) + [{id: $id, viewport: $viewport, result: $result, note: $note}])' \
-    "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    '.[$idx].harness.visual_findings = ((.[$idx].harness.visual_findings // []) + [{id: $id, viewport: $viewport, result: $result, note: $note}])'
 
-  harness_append_event "visual $id $result $viewport"
+  harness_event "harness" "visual" "$id $result $viewport"
   printf '%s\n' "$id"
 }
 
@@ -2416,6 +2554,184 @@ cmd_harness_visual_pending() {
 cmd_harness_status() {
   harness_require
   harness_get
+}
+
+cmd_harness_event() {
+  # Agent-facing: never fails the caller
+  local agent="${1:-}" event="${2:-}" detail="${3:-}"
+  if [ -z "$agent" ] || [ -z "$event" ]; then
+    # Still exit 0 — malformed milestone must not break an agent turn
+    return 0
+  fi
+  shift 2 || true
+  if [ $# -gt 0 ]; then
+    detail="$*"
+  fi
+  harness_event "$agent" "$event" "$detail"
+  return 0
+}
+
+harness_humanize_event() {
+  # stdin: snake_case event → "Title case with spaces"
+  local e="$1"
+  echo "$e" | sed 's/_/ /g' | awk '{
+    for (i = 1; i <= NF; i++) {
+      $i = toupper(substr($i,1,1)) tolower(substr($i,2))
+    }
+    print
+  }'
+}
+
+harness_humanize_agent() {
+  local a="$1"
+  case "$a" in
+    orchestrator) echo "Orchestrator" ;;
+    planner) echo "Planner" ;;
+    researcher) echo "Researcher" ;;
+    builder) echo "Builder" ;;
+    builder-expert) echo "Builder Expert" ;;
+    reviewer) echo "Reviewer" ;;
+    qa) echo "QA" ;;
+    visual-reviewer) echo "Visual Reviewer" ;;
+    harness) echo "Harness" ;;
+    *) echo "$a" | awk '{print toupper(substr($0,1,1)) substr($0,2)}' ;;
+  esac
+}
+
+cmd_harness_progress() {
+  local limit=20 json=false
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -n)
+        limit="${2:-20}"
+        shift 2
+        ;;
+      --json)
+        json=true
+        shift
+        ;;
+      *)
+        err "Unknown harness progress arg: $1"
+        exit 1
+        ;;
+    esac
+  done
+
+  if [ ! -f "$STATE_FILE" ]; then
+    err "No state found"
+    exit 1
+  fi
+  require_cmd jq
+  refresh_goal_idx
+
+  if [ "$json" = true ]; then
+    if jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness' "$STATE_FILE" >/dev/null 2>&1; then
+      jq --argjson idx "$GOAL_IDX" --argjson n "$limit" \
+        '.[$idx].harness.events[-$n:]' "$STATE_FILE"
+    else
+      echo '[]'
+    fi
+    return 0
+  fi
+
+  local issue phase branch
+  issue="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].issue.number // empty' "$STATE_FILE")"
+  branch="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch // empty' "$STATE_FILE")"
+  phase="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.phase // "—"' "$STATE_FILE" 2>/dev/null || echo "—")"
+
+  if [ -n "$issue" ]; then
+    echo "Issue #$issue"
+  elif [ -n "$branch" ]; then
+    echo "Goal: $branch"
+  else
+    echo "Goal: (active)"
+  fi
+  echo "Phase: $phase"
+  echo ""
+
+  # Normalize legacy {ts,event} and typed {at,agent,event,issue,detail}
+  local events
+  events="$(jq -c --argjson idx "$GOAL_IDX" --argjson n "$limit" '
+    (.[$idx].harness.events // []) as $ev
+    | ($ev | length) as $len
+    | ($ev[([0, $len - $n] | max):])
+    | map(
+        if has("agent") then
+          {
+            at: (.at // .ts // ""),
+            agent: .agent,
+            event: .event,
+            detail: (.detail // "")
+          }
+        else
+          {
+            at: (.ts // .at // ""),
+            agent: "harness",
+            event: "legacy",
+            detail: (.event // "")
+          }
+        end
+      )
+  ' "$STATE_FILE" 2>/dev/null || echo '[]')"
+
+  if [ "$(echo "$events" | jq 'length')" -eq 0 ]; then
+    echo "(no events yet)"
+    return 0
+  fi
+
+  echo "$events" | jq -r '.[] | [.at, .agent, .event, .detail] | @tsv' | while IFS=$'\t' read -r at agent event detail; do
+    clock="$(echo "$at" | sed -E 's/.*T([0-9]{2}:[0-9]{2}:[0-9]{2}).*/\1/')"
+    [ "$clock" = "$at" ] && clock="--:--:--"
+    label="$(harness_humanize_agent "$agent")"
+    if [ "$event" = "legacy" ]; then
+      human="$detail"
+      detail=""
+    else
+      human="$(harness_humanize_event "$event")"
+    fi
+    if [ -n "$detail" ]; then
+      printf '%-8s  %-14s  %s — %s\n' "$clock" "$label" "$human" "$detail"
+    else
+      printf '%-8s  %-14s  %s\n' "$clock" "$label" "$human"
+    fi
+  done
+}
+
+cmd_harness_hook() {
+  # Read Codex hook JSON from stdin. Emit START/END event. Print JSON for SubagentStop.
+  require_cmd jq
+  local payload
+  payload="$(cat)"
+  if [ -z "$payload" ]; then
+    # SubagentStop requires valid JSON on exit 0
+    echo '{"continue":true}'
+    return 0
+  fi
+
+  local hook_event agent_type agent_id last_msg first_line
+  hook_event="$(echo "$payload" | jq -r '.hook_event_name // empty')"
+  agent_type="$(echo "$payload" | jq -r '.agent_type // "unknown"')"
+  agent_id="$(echo "$payload" | jq -r '.agent_id // empty')"
+  last_msg="$(echo "$payload" | jq -r '.last_assistant_message // empty')"
+  first_line="$(echo "$last_msg" | head -n 1 | tr '\n' ' ' | cut -c1-120)"
+
+  case "$hook_event" in
+    SubagentStart)
+      harness_event "$agent_type" "started" "${agent_id:+id=$agent_id}"
+      # async Start may ignore stdout; still emit valid JSON
+      echo '{"continue":true}'
+      ;;
+    SubagentStop)
+      harness_event "$agent_type" "completed" "${first_line:-id=$agent_id}"
+      jq -n --arg msg "${agent_type} completed${first_line:+: $first_line}" \
+        '{continue: true, systemMessage: $msg}'
+      ;;
+    *)
+      harness_event "${agent_type:-hook}" "hook" "$hook_event"
+      echo '{"continue":true}'
+      ;;
+  esac
+  return 0
 }
 
 cmd_harness_done() {
@@ -2454,9 +2770,8 @@ cmd_harness_done() {
   phase="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.phase' "$STATE_FILE")"
   if [ "$phase" != "DONE" ]; then
     if harness_phase_allowed "$phase" "DONE"; then
-      jq --argjson idx "$GOAL_IDX" '.[$idx].harness.phase = "DONE"' \
-        "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
-      harness_append_event "phase $phase -> DONE (harness done)"
+      state_mutate --argjson idx "$GOAL_IDX" '.[$idx].harness.phase = "DONE"'
+      harness_event "harness" "phase" "$phase -> DONE (harness done)"
     else
       err "Cannot mark DONE from phase $phase — transition to DONE first or fix gates"
       exit 1
@@ -2497,8 +2812,11 @@ cmd_harness() {
       esac
       ;;
     status) cmd_harness_status ;;
+    event) cmd_harness_event "$@" ;;
+    progress) cmd_harness_progress "$@" ;;
+    hook) cmd_harness_hook "$@" ;;
     done) cmd_harness_done ;;
-    *) err "harness subcommand must be: init, phase, task, gate, retry, qa, visual, status, done"; exit 1 ;;
+    *) err "harness subcommand must be: init, phase, task, gate, retry, qa, visual, event, progress, hook, status, done"; exit 1 ;;
   esac
 }
 

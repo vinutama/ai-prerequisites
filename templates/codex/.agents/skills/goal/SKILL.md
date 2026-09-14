@@ -1,7 +1,7 @@
 ---
 name: goal
 description: >-
-  Set, list, continue, or run issue queue. Usage: $goal <objective> | $goal --list | $goal --issues [url] [count] | $goal --continue [id] [new instruction]
+  Set, list, continue, status, or run issue queue. Usage: $goal <objective> | $goal --list | $goal --status | $goal --issues [url] [count] | $goal --continue [id] [new instruction]
 ---
 
 Read the project README and AGENTS.md to understand conventions first.
@@ -13,6 +13,17 @@ Inspect the text after `$goal` in the user message and follow the matching path:
 ### `$goal --list`
 Run `.codex/scripts/goal-git.sh list` and display the output.
 If the state has `repos` with more than one entry, also show each repo path and its active branch from `state.json` (run `.codex/scripts/goal-git.sh state | jq '.repos'`). Stop.
+
+### `$goal --status`
+Show live harness progress for the active goal:
+
+```bash
+.codex/scripts/goal-git.sh harness progress
+.codex/scripts/goal-git.sh harness status | jq '{phase, route, requirements, gates, tasks}'
+```
+
+Also mention `.codex/goal-progress.log` for `tail -f`, and Codex `/agent` to
+inspect a live child thread. Stop after displaying.
 
 ### `$goal --issues [url] [count]`
 Fetch open issues from a GitHub/GitLab issue list URL and drive each to its own branch and PR.

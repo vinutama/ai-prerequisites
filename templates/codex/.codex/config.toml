@@ -1,6 +1,9 @@
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 
+[features]
+hooks = true
+
 [agents]
 enabled = true
 max_depth = 2

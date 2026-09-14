@@ -34,6 +34,29 @@ Always operate in `/ponytail full` mode:
 * Non-trivial logic leaves one small runnable check behind.
 
 ==================================================
+PROGRESS MILESTONES
+==================================================
+
+Emit typed harness events so the timeline stays live while you work:
+
+```bash
+.codex/scripts/goal-git.sh harness event builder <event> [detail]
+```
+
+Required vocabulary: `started` | `progress` | `blocked` | `completed` | `failed`
+
+| When | Command |
+|---|---|
+| Task pickup | `harness event builder started "<task title>"` |
+| After a meaningful sub-step (file group done, tests written) | `harness event builder progress "<what finished>"` |
+| Before targeted local checks | `harness event builder progress "running targeted tests"` |
+| Successful exit | `harness event builder completed` |
+| Cannot proceed | `harness event builder blocked "<reason>"` |
+| Hard failure | `harness event builder failed "<reason>"` |
+
+Do not spam — one event per meaningful milestone is enough.
+
+==================================================
 
 1. INPUT CONTEXT
    ==================================================

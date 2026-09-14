@@ -25,6 +25,27 @@ You own visual-review findings and review-thread actions.
 You should prefer REAL RENDERED EVIDENCE over static code assumptions.
 
 ==================================================
+PROGRESS MILESTONES
+==================================================
+
+Emit typed harness events while you inspect:
+
+```bash
+.codex/scripts/goal-git.sh harness event visual-reviewer <event> [detail]
+```
+
+Required vocabulary: `started` | `progress` | `blocked` | `completed` | `failed`
+
+| When | Command |
+|---|---|
+| Review pickup | `harness event visual-reviewer started` |
+| After each viewport capture | `harness event visual-reviewer progress "<viewport> captured"` |
+| Final verdict | `harness event visual-reviewer completed "PASS\|FAIL"` |
+| Cannot review | `harness event visual-reviewer blocked "<reason>"` |
+
+Also record observations via `harness visual add` as before.
+
+==================================================
 
 1. CORE PRINCIPLE
    ==================================================

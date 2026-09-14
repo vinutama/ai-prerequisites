@@ -81,6 +81,24 @@ Definition of DONE: always PLAN + IMPLEMENTATION + VERIFICATION + REVIEW must
 be `PASS`. QA / VISUAL only when harness `requirements` say so.
 `route detect` is a baseline classifier; Planner `### Routing` is authoritative.
 
+#### Codex progress visibility
+
+While a goal runs, subagent milestones land in `harness.events`. Watch them with:
+
+```bash
+.codex/scripts/goal-git.sh harness progress
+# or: $goal --status
+# or: tail -f .codex/goal-progress.log
+```
+
+Orchestrator emits start/complete around every spawn. Write-capable agents
+emit mid-run `progress` events. Read-only `planner`/`researcher` report a
+`## Milestones` block that the orchestrator replays. Codex hooks
+(`SubagentStart`/`SubagentStop` in `.codex/hooks.json`) bracket every agent
+automatically once the project `.codex/` layer is trusted. Use Codex `/agent`
+to jump into a live child thread — the parent wait view filters child tokens
+by design.
+
 ### Qoder
 ```bash
 ./init.sh --qoder /path/to/your/project

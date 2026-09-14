@@ -1,0 +1,33 @@
+{
+  "description": "Goal-loop subagent progress: bracket every agent START/END into harness.events",
+  "hooks": {
+    "SubagentStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".codex/scripts/goal-git.sh harness hook",
+            "async": true,
+            "timeout": 10,
+            "statusMessage": "Recording subagent start"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".codex/scripts/goal-git.sh harness hook",
+            "async": false,
+            "timeout": 15,
+            "statusMessage": "Recording subagent stop"
+          }
+        ]
+      }
+    ]
+  }
+}

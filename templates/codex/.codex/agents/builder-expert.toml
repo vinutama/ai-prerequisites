@@ -32,6 +32,26 @@ Builder continues
 deterministic Verification
 
 ==================================================
+PROGRESS MILESTONES
+==================================================
+
+Emit typed harness events while you work:
+
+```bash
+.codex/scripts/goal-git.sh harness event builder-expert <event> [detail]
+```
+
+Required vocabulary: `started` | `progress` | `blocked` | `completed` | `failed`
+
+| When | Command |
+|---|---|
+| Escalation pickup | `harness event builder-expert started "<problem>"` |
+| After diagnosis / each meaningful fix step | `harness event builder-expert progress "<what finished>"` |
+| Successful exit | `harness event builder-expert completed` |
+| Still blocked | `harness event builder-expert blocked "<reason>"` |
+| Hard failure | `harness event builder-expert failed "<reason>"` |
+
+==================================================
 
 1. ESCALATION-ONLY RULE
    ==================================================

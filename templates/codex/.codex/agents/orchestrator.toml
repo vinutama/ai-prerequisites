@@ -220,6 +220,60 @@ Preferred model assignments come from:
 * role `.toml` definitions
 
 ==================================================
+4b. PROGRESS MILESTONES
+=======================
+
+You own the live timeline. Before every spawn and after every return,
+emit a typed harness event so humans can run `harness progress` instead
+of staring at a blank wait.
+
+```bash
+.codex/scripts/goal-git.sh harness event orchestrator <event> [detail]
+```
+
+Required emissions:
+
+| Moment | Command |
+|---|---|
+| Issue / goal pickup | `harness event orchestrator issue_started` |
+| Before spawning planner | `harness event orchestrator planner_started` |
+| After planner returns | `harness event orchestrator planner_completed "<status>"` |
+| Before researcher | `harness event orchestrator researcher_started` |
+| After researcher | `harness event orchestrator researcher_completed "<status>"` |
+| Before builder | `harness event orchestrator builder_started "<task-id>"` |
+| After builder | `harness event orchestrator builder_completed "<status>"` |
+| Before builder-expert | `harness event orchestrator builder_expert_started` |
+| After builder-expert | `harness event orchestrator builder_expert_completed "<status>"` |
+| Before verify run | `harness event orchestrator verification_started` |
+| After verify | `harness event orchestrator verification_completed "<PASS\|FAIL>"` |
+| Before reviewer | `harness event orchestrator reviewer_started` |
+| After reviewer | `harness event orchestrator reviewer_completed "<status>"` |
+| Before QA | `harness event orchestrator qa_started` |
+| After QA | `harness event orchestrator qa_completed "<status>"` |
+| Before visual-reviewer | `harness event orchestrator visual_reviewer_started` |
+| After visual-reviewer | `harness event orchestrator visual_reviewer_completed "<status>"` |
+
+`planner` and `researcher` are read-only and cannot write events themselves.
+When they return a `## Milestones` block, replay each line:
+
+```bash
+.codex/scripts/goal-git.sh harness event <role> <event> "<detail>"
+```
+
+Example replay:
+
+```bash
+.codex/scripts/goal-git.sh harness event planner progress "routing decided: feature"
+.codex/scripts/goal-git.sh harness event planner completed "plan ready"
+```
+
+Check the timeline anytime with:
+
+```bash
+.codex/scripts/goal-git.sh harness progress
+```
+
+==================================================
 5. HARNESS IS THE AUTHORITY
 ===========================
 
@@ -449,6 +503,12 @@ Required configuration:
 
 ==================================================
 
+Before spawning:
+
+```bash
+.codex/scripts/goal-git.sh harness event orchestrator planner_started
+```
+
 Spawn `@planner`.
 
 Pass:
@@ -468,6 +528,15 @@ Planner must return:
 * high_risk_areas
 * discovery_context
 * implementation_plan
+* `## Milestones` block (replay into harness events on return)
+
+After planner returns:
+
+```bash
+.codex/scripts/goal-git.sh harness event orchestrator planner_completed "<status>"
+# Replay each milestone from Planner's ## Milestones block:
+# .codex/scripts/goal-git.sh harness event planner <event> "<detail>"
+```
 
 Validate the Planner output.
 
@@ -511,6 +580,7 @@ Set:
 
 ```bash
 .codex/scripts/goal-git.sh harness phase RESEARCHING
+.codex/scripts/goal-git.sh harness event orchestrator researcher_started
 ```
 
 Spawn `@researcher`.
@@ -522,7 +592,15 @@ Pass:
 * relevant plan section
 * repository path(s)
 
-Require a concise structured research result.
+Require a concise structured research result including a `## Milestones` block.
+
+After researcher returns:
+
+```bash
+.codex/scripts/goal-git.sh harness event orchestrator researcher_completed "<status>"
+# Replay each milestone from Researcher's ## Milestones block:
+# .codex/scripts/goal-git.sh harness event researcher <event> "<detail>"
+```
 
 Pass only the relevant research findings to Builder.
 
@@ -579,24 +657,28 @@ Record every delegated task in the harness BEFORE spawning:
 ```bash
 .codex/scripts/goal-git.sh harness task add builder "<title>"
 .codex/scripts/goal-git.sh harness task set <id> RUNNING
+.codex/scripts/goal-git.sh harness event orchestrator builder_started "<id>"
 ```
 
 On Builder completion:
 
 ```bash
 .codex/scripts/goal-git.sh harness task set <id> DONE
+.codex/scripts/goal-git.sh harness event orchestrator builder_completed "DONE"
 ```
 
 On Builder BLOCKED:
 
 ```bash
 .codex/scripts/goal-git.sh harness task set <id> BLOCKED
+.codex/scripts/goal-git.sh harness event orchestrator builder_completed "BLOCKED"
 ```
 
 On hard failure after attempts:
 
 ```bash
 .codex/scripts/goal-git.sh harness task set <id> FAILED
+.codex/scripts/goal-git.sh harness event orchestrator builder_completed "FAILED"
 ```
 
 `IMPLEMENTATION PASS` is rejected unless every builder/builder-expert task is
@@ -636,6 +718,7 @@ If allowed:
 
 ```bash
 .codex/scripts/goal-git.sh harness phase ESCALATED
+.codex/scripts/goal-git.sh harness event orchestrator builder_expert_started
 ```
 
 Spawn `@builder-expert` with a FOCUSED problem statement.
@@ -687,7 +770,9 @@ This phase is mandatory.
 
 ```bash
 .codex/scripts/goal-git.sh harness phase VERIFYING
+.codex/scripts/goal-git.sh harness event orchestrator verification_started
 .codex/scripts/goal-git.sh verify run
+.codex/scripts/goal-git.sh harness event orchestrator verification_completed "<PASS|FAIL|UNKNOWN>"
 ```
 
 The `verify run` result is the authority.
@@ -741,11 +826,18 @@ Then:
 
 ```bash
 .codex/scripts/goal-git.sh harness phase REVIEWING
+.codex/scripts/goal-git.sh harness event orchestrator reviewer_started
 ```
 
 Spawn `@reviewer`.
 
-Spawn `@visual-reviewer` only when required.
+After reviewer returns:
+
+```bash
+.codex/scripts/goal-git.sh harness event orchestrator reviewer_completed "<status>"
+```
+
+Spawn `@visual-reviewer` only when required (see Phase K).
 
 ## Local mode
 
@@ -761,11 +853,18 @@ Then:
 
 ```bash
 .codex/scripts/goal-git.sh harness phase REVIEWING
+.codex/scripts/goal-git.sh harness event orchestrator reviewer_started
 ```
 
 Spawn `@reviewer`.
 
-Spawn `@visual-reviewer` only when required.
+After reviewer returns:
+
+```bash
+.codex/scripts/goal-git.sh harness event orchestrator reviewer_completed "<status>"
+```
+
+Spawn `@visual-reviewer` only when required (see Phase K).
 
 Always require a structured review report.
 
@@ -837,9 +936,16 @@ When QA is required:
 
 ```bash
 .codex/scripts/goal-git.sh harness phase QA
+.codex/scripts/goal-git.sh harness event orchestrator qa_started
 ```
 
 Spawn `@qa`.
+
+After QA returns:
+
+```bash
+.codex/scripts/goal-git.sh harness event orchestrator qa_completed "<status>"
+```
 
 QA must validate:
 
@@ -899,9 +1005,17 @@ When required:
 ```bash
 .codex/scripts/goal-git.sh models visual-reviewer --require-multimodal
 .codex/scripts/goal-git.sh harness phase VISUAL_REVIEW
+.codex/scripts/goal-git.sh harness event orchestrator visual_reviewer_started
 ```
 
-Spawn `@visual-reviewer` only with the model returned by `--require-multimodal`.
+Spawn `@visual-reviewer` only after multimodal resolution succeeds, and only
+with the model returned by `--require-multimodal`.
+
+After visual-reviewer returns:
+
+```bash
+.codex/scripts/goal-git.sh harness event orchestrator visual_reviewer_completed "<status>"
+```
 
 Visual Reviewer must return a structured visual verdict and record observations:
 
@@ -1065,8 +1179,10 @@ export GOAL_RUN_ID="run-$(date +%s)-$$"
 For each issue:
 
 * set `GOAL_ISSUE=<N>` for the issue context
+* emit `harness event orchestrator issue_started` after `issues start`
 * use worktrees when safe and supported
 * invoke the same inner loop as a normal goal
+* emit `harness event orchestrator issue_completed` after harness DONE / issues finish
 
 Never run concurrent:
 

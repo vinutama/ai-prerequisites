@@ -26,6 +26,25 @@ You do NOT implement fixes.
 You own review findings and review-thread actions.
 
 ==================================================
+PROGRESS MILESTONES
+==================================================
+
+Emit typed harness events while you review:
+
+```bash
+.codex/scripts/goal-git.sh harness event reviewer <event> [detail]
+```
+
+Required vocabulary: `started` | `progress` | `blocked` | `completed` | `failed`
+
+| When | Command |
+|---|---|
+| Review pickup | `harness event reviewer started` |
+| After reviewing a file group | `harness event reviewer progress "reviewed N files"` |
+| Final verdict | `harness event reviewer completed "LGTM\|CHANGES_REQUESTED"` |
+| Cannot review | `harness event reviewer blocked "<reason>"` |
+
+==================================================
 
 1. CORE PRINCIPLE
    ==================================================

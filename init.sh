@@ -845,7 +845,8 @@ print_tree() {
       echo "└── .codex/             (gitignored)"
       echo "    ├── agents/         (8 specialized agents, TOML)"
       echo "    ├── scripts/        (goal-git.sh harness/verify/route, run-codex.sh)"
-      echo "    ├── config.toml     (agents + multi_agent_v2 model routing, Figma MCP)"
+      echo "    ├── hooks.json      (SubagentStart/Stop → harness events)"
+      echo "    ├── config.toml     (agents + hooks + multi_agent_v2, Figma MCP)"
       echo "    └── goal-models.json"
       ;;
     qoder)
@@ -904,4 +905,5 @@ done
 
 log "Setup complete."
 log "Use '/goal --list' (or '\$goal --list' on Codex) to see all goals. Resume with --continue."
+log "Codex: \$goal --status / harness progress for live milestones; trust project hooks on first run."
 log "Optionally run /init-skills (or \$init-skills) to inject curated skills from agentic-awesome-skills."

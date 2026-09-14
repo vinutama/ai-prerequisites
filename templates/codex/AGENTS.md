@@ -133,6 +133,41 @@ Gate status: `NOT_RUN | PASS | FAIL | SKIPPED | UNKNOWN`.
 `harness done` exits 0 only when every **required** gate is `PASS`
 (SKIPPED does not clear a required gate). Retries hard-stop at limits.
 
+**Progress timeline**
+Agents emit typed milestones into `harness.events`:
+
+```json
+{"at":"2026-09-13T20:12:00+07:00","agent":"orchestrator","event":"planner_started","issue":25,"detail":""}
+```
+
+```bash
+.codex/scripts/goal-git.sh harness event <agent> <event> [detail]   # append (best-effort)
+.codex/scripts/goal-git.sh harness progress [-n 20] [--json]        # human timeline
+```
+
+Example `harness progress` output:
+
+```
+Issue #25
+Phase: BUILDING
+
+20:12:00  Orchestrator  Planner started
+20:12:18  Planner       Completed
+20:12:20  Builder       Started
+20:14:03  Builder       Running targeted tests
+```
+
+Write-capable agents (`builder`, `builder-expert`, `reviewer`, `qa`,
+`visual-reviewer`, `orchestrator`) call `harness event` themselves.
+`planner` / `researcher` are read-only — they emit a `## Milestones` block
+that the Orchestrator replays. Codex `SubagentStart`/`SubagentStop` hooks
+also bracket every agent automatically (requires project `.codex/` trust and
+`features.hooks = true`). A plain-text mirror lives at
+`.codex/goal-progress.log` for `tail -f`.
+
+While waiting in the parent UI, use Codex `/agent` to switch into a live
+child thread — child reasoning is filtered from the parent stream by design.
+
 **analyze ≠ verify**
 - `analyze` — gitnexus + rtk gain (tooling/analysis)
 - `verify run` — application correctness only (build/test/lint/typecheck/…)
@@ -239,6 +274,8 @@ MUST go through `.codex/scripts/goal-git.sh`:
 .codex/scripts/goal-git.sh harness retry <rework|escalations|verify_retries>
 .codex/scripts/goal-git.sh harness qa add|pending
 .codex/scripts/goal-git.sh harness visual add|pending
+.codex/scripts/goal-git.sh harness event <agent> <event> [detail]
+.codex/scripts/goal-git.sh harness progress [-n N] [--json]
 .codex/scripts/goal-git.sh harness status|done
 .codex/scripts/goal-git.sh models                # print goal-models.json
 .codex/scripts/goal-git.sh models <role>         # model + effort + fallbacks

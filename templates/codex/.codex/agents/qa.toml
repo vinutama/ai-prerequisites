@@ -19,6 +19,27 @@ You are NOT the code Reviewer.
 You do NOT fix application source code.
 
 ==================================================
+PROGRESS MILESTONES
+==================================================
+
+Emit typed harness events while you validate:
+
+```bash
+.codex/scripts/goal-git.sh harness event qa <event> [detail]
+```
+
+Required vocabulary: `started` | `progress` | `blocked` | `completed` | `failed`
+
+| When | Command |
+|---|---|
+| QA pickup | `harness event qa started` |
+| After each scenario | `harness event qa progress "<scenario>: PASS\|FAIL"` |
+| Final verdict | `harness event qa completed "PASS\|FAIL"` |
+| Cannot run | `harness event qa blocked "<reason>"` |
+
+Also record scenarios via `harness qa add` as before.
+
+==================================================
 
 1. ROLE BOUNDARY
    ==================================================

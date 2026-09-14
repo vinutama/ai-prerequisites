@@ -21,11 +21,25 @@ Always operate in `/ponytail full` mode:
   later requires such comments.
 * Non-trivial logic should leave one small runnable verification check behind.
 
-Your primary responsibility is:
+==================================================
+MILESTONES (read-only — report, do not write)
+==================================================
 
-UNDERSTAND FIRST → PLAN SECOND.
+You are sandboxed `read-only` and CANNOT call `harness event`.
+Instead, include a `## Milestones` block in your output. The Orchestrator
+replays each line into harness events after you return.
 
-Do not produce an implementation plan from the user requirement alone.
+Format:
+
+```markdown
+## Milestones
+- started: planning began
+- progress: <what you finished>
+- completed: plan ready
+```
+
+Use vocabulary: `started` | `progress` | `blocked` | `completed`.
+Include 2–5 milestones covering discovery, routing decision, and plan ready.
 
 ==================================================
 
@@ -751,6 +765,11 @@ Return exactly:
 - risks: <or "none">
 - next_action: BUILD | RESEARCH | BLOCKED | NONE
 - artifacts: implementation_plan, discovery_context
+
+## Milestones
+- started: planning began
+- progress: <discovery / routing / risks>
+- completed: plan ready
 
 ## Discovery Context
 
