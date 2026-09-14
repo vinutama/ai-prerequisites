@@ -63,21 +63,22 @@ Goal source (configured via `/init-goal`):
 - `issues` — fetches open issues from a GitHub/GitLab issue list URL (`/goal --issues [url] [count]` or bare `/goal` when configured); **one branch + one PR per issue**; branch `{task_type}/{number}-{slug}`; planner orders by dependency and batches concurrent work (single-repo only; multi-repo processes one issue at a time)
 
 ### Agent roles
-| Agent | Role | Default model | Effort | Escalation |
-|---|---|---|---|---|
-| `orchestrator` | Thin state machine + harness | gpt-5.6-terra | low | luna → sol (transient) |
-| `planner` | Plans — skipped on TRIVIAL | gpt-5.6-terra | medium | COMPLEX: sol/high; ARCHITECTURAL: astra/high |
-| `researcher` | On-demand research (conditional) | gpt-5.6-terra | medium | sol on reasoning failure |
-| `builder` | Routine execution | gpt-5.6-terra | medium | COMPLEX+: sol/medium |
-| `builder-expert` | Escalation-only complex execution | gpt-5.6-sol | high | astra/high |
-| `reviewer` | Diff-first code review (skippable TRIVIAL) | gpt-5.6-terra | medium | COMPLEX+: sol/medium |
-| `qa` | Behavior QA (conditional) | gpt-5.6-terra | medium | — |
-| `visual-reviewer` | UI/multimodal review (conditional) | gpt-5.6-terra | medium | multimodal-hard |
+| Agent | Role |
+|---|---|
+| `orchestrator` | Thin state machine + harness; owns all worker spawns |
+| `planner` | Plans — skipped on TRIVIAL |
+| `researcher` | On-demand research (conditional) |
+| `builder` | Routine execution |
+| `builder-expert` | Escalation-only complex execution |
+| `reviewer` | Diff-first code review (skippable TRIVIAL) |
+| `qa` | Behavior QA (conditional) |
+| `visual-reviewer` | UI/multimodal review (conditional) |
 
-`goal-models.json` is the single source of truth (`$routing` by complexity + role defaults).
-`init.sh` does **not** pin worker models into `.toml` — Codex would lock those
-over `spawn_agent`. Orchestrator stays terra/low; workers get the model at spawn.
-**Astra is escalation-only for architectural planning — never the default.**
+**Model catalog:** `.codex/goal-models.json` is the **only** place model IDs live
+(`$routing` by complexity + role defaults + `$capabilities.vision_models`).
+Edit that file per project to customize; do not hardcode models in AGENTS.md.
+`init.sh` pins only `orchestrator.toml` from JSON (Codex locks role-toml `model`
+over `spawn_agent`). Workers omit `model` so spawn-time routing applies.
 
 | Agent | Multimodal | Input modalities |
 |---|---|---|
@@ -106,12 +107,14 @@ gates, budget, metrics, retries, findings). Orchestrator drives it via
 # TRIVIAL | NORMAL | COMPLEX | ARCHITECTURAL
 ```
 
-| Level | Planner | Typical models | Flow |
-|---|---|---|---|
-| TRIVIAL | skipped | Builder Terra → Verify → optional Review | ~1–2 agents |
-| NORMAL | Terra/medium | Plan → Build → Verify → Review | ~2–4 agents |
-| COMPLEX | Sol/high | Plan → Research? → Build Sol → Verify → Review Sol | bounded |
-| ARCHITECTURAL | Astra/high | Plan Astra → Research? → Build Sol → Expert? → Verify → Review Sol | bounded |
+| Level | Planner | Flow |
+|---|---|---|
+| TRIVIAL | skipped | Builder → Verify → optional Review |
+| NORMAL | yes | Plan → Build → Verify → Review |
+| COMPLEX | yes (stronger `$routing`) | Plan → Research? → Build → Verify → Review |
+| ARCHITECTURAL | yes (strongest `$routing`) | Plan → Research? → Build → Expert? → Verify → Review |
+
+Models for each cell come from `.codex/goal-models.json` `$routing` — not this file.
 
 **Spawn budgets** (defaults): `max_reviewer_runs = 1 + max_rework` (4 when
 rework=3), `max_total_spawns` sized to match (~13). planner=1, researcher=1,
@@ -206,26 +209,22 @@ builder `handoff`, `escalation_solution`, `review_report`, `qa_findings`,
 **Visual reviewer**
 Requires a vision-capable model. Resolve with
 `models visual-reviewer --require-multimodal` (allowlist:
-`$capabilities.vision_models` in `goal-models.json`, seeded with
-`gpt-5.6-terra`). Never silently downgrade to text-only. Prefer Playwright
-screenshots at 375 / 768 / 1024 / 1440 when the app can start.
+`$capabilities.vision_models` in `goal-models.json`). Never silently downgrade
+to text-only. Prefer Playwright screenshots at 375 / 768 / 1024 / 1440 when the
+app can start.
 
 ### Model routing
-Codex does not use the OpenCode fallback plugin. Per-agent models are pinned in
-two layers:
+Codex does not use the OpenCode fallback plugin. Catalog = `.codex/goal-models.json`.
 
-1. **Durable** — `orchestrator.toml` keeps `model = gpt-5.6-terra` (cheap).
-   Worker roles **omit** `model` / `model_reasoning_effort`. Codex **locks**
-   a role-toml `model` over `spawn_agent` overrides, so pinning terra on
-   `reviewer.toml` makes COMPLEX→sol silently stay terra.
-2. **Spawn-time (authoritative)** — orchestrator MUST resolve
-   `models <role> --complexity <LEVEL>` and pass `model` + `reasoning_effort`
-   to both `harness spawn <role> <model> <effort>` and `spawn_agent`.
-   Confirm on the spawn line: `Spawned … [reviewer] (gpt-5.6-sol medium)`.
-   The parent UI `model: gpt-5.6-terra medium` is MAIN — not the child.
+1. **Durable** — `init.sh` pins **only** `orchestrator.toml` `model` /
+   `model_reasoning_effort` from JSON. Worker roles **omit** those keys — Codex
+   **locks** a role-toml `model` over `spawn_agent` overrides.
+2. **Spawn-time (authoritative)** — resolve
+   `models <role> --complexity <LEVEL>` (reads `$routing`) and pass
+   `model` + `reasoning_effort` to `harness spawn` and `spawn_agent`.
+   Confirm the child spawn label shows the JSON model — not MAIN's session model.
 
-COMPLEX → planner/builder/reviewer = **sol**; researcher/qa/visual stay terra.
-ARCHITECTURAL → planner = **astra**.
+Customize per project by editing `.codex/goal-models.json` only.
 
 On model-unavailable / rate-limit, call `models <role> --next <model>` and
 re-spawn. For multimodal roles, `--next` only returns models in

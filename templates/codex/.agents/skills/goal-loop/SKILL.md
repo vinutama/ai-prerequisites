@@ -155,13 +155,14 @@ Project-level only — set via `/init-goal`.
 `qa_mode` / `visual_mode`: `auto|always|never`.
 
 ## Model routing (`goal-models.json` + orchestrator)
-Per-agent models are pinned in agent `.toml` files and resolved at spawn time:
+Catalog = `.codex/goal-models.json` only (edit per project). Resolved at spawn time:
 
 1. `init.sh` syncs `sandbox_mode` into worker `.toml` files and **does not**
    pin worker `model` (Codex would lock it over spawn_agent). Orchestrator
-   stays pinned terra/low.
-2. Orchestrator runs `.codex/scripts/goal-git.sh models <role>` before each
-   `spawn_agent`, always passing `agent_type` + `model` + `reasoning_effort`.
+   `model` is pinned from JSON. `default_subagent_model` in `config.toml` is
+   synced from `orchestrator.model`.
+2. Orchestrator runs `.codex/scripts/goal-git.sh models <role> --complexity <LEVEL>`
+   before each `spawn_agent`, always passing `agent_type` + `model` + `reasoning_effort`.
 3. On failure, `models <role> --next <model>` picks the next
    `fallback_models` entry (vision-filtered for multimodal roles).
    Exhausted fallbacks → STOP and report.
@@ -169,10 +170,7 @@ Per-agent models are pinned in agent `.toml` files and resolved at spawn time:
    `models visual-reviewer --require-multimodal`. Never downgrade to text-only.
    Allowlist: `$capabilities.vision_models` in `goal-models.json`.
 
-Default map: Terra-first. planner/builder/reviewer/qa=`gpt-5.6-terra` medium;
-orchestrator/researcher/visual=`gpt-5.6-terra`; builder-expert=`gpt-5.6-sol` high.
-`$routing` selects stronger models by complexity (COMPLEX→sol, ARCHITECTURAL planner→astra).
-Astra is never the default planner.
+Do not document concrete model IDs here — read `$routing` / role defaults in JSON.
 
 ## Git Helper (`.codex/scripts/goal-git.sh`)
 ```bash

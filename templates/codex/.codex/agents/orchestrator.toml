@@ -1,6 +1,6 @@
 name = "orchestrator"
 description = "Goal-loop orchestrator. Drives the /goal workflow through the harness state machine: plan → research? → build → escalate? → verify → review → qa? → visual? → done. Never edits application source. Delegates work, enforces gates, controls escalation, and prevents token waste and uncontrolled loops."
-model = "gpt-5.6-terra"
+model = "opencode-go/deepseek-v4.1-flash"
 model_reasoning_effort = "low"
 sandbox_mode = "danger-full-access"
 
@@ -179,12 +179,13 @@ workers: orchestrator (this role) — never MAIN
 ```
 
 ==================================================
-4. MODEL ROUTING (cheap by default)
+4. MODEL ROUTING (from goal-models.json only)
 ===================================
 
 Every spawned worker MUST receive an explicit model and reasoning effort from
-`$routing` for the active complexity. Agent `.toml` defaults are Terra (NORMAL
-baseline) — without a spawn-time override, COMPLEX stays on terra forever.
+`.codex/goal-models.json` `$routing` for the active complexity. Worker `.toml`
+files omit `model` so spawn-time overrides apply. Do not invent model names —
+always resolve via `models`.
 
 **Canonical spawn recipe (mandatory for every worker):**
 
@@ -199,26 +200,14 @@ spawn_agent({ agent_type: "<role>", model: "$MODEL", reasoning_effort: "$EFFORT"
 ```
 
 `harness spawn <role>` without model/effort now **exits 1** (forces audit trail).
-Progress will show: `harness spawn planner model=gpt-5.6-sol effort=high`.
+Progress will show: `harness spawn <role> model=<from-json> effort=<from-json>`.
 
-**Codex lock:** if a role `.toml` sets `model = ...`, Codex **ignores** `spawn_agent` model
-and uses the toml pin. Worker roles therefore omit `model` / `model_reasoning_effort`.
-Only `orchestrator.toml` stays pinned (terra/low). Confirm the child label, e.g.
-`Spawned Epicurus [reviewer] (gpt-5.6-sol medium)` — the parent header staying
-terra/medium is the MAIN session and is expected.
+**Codex lock:** if a role `.toml` sets `model = ...`, Codex **ignores** `spawn_agent`
+model and uses the toml pin. Worker roles omit `model` / `model_reasoning_effort`.
+Only `orchestrator.toml` stays pinned (from JSON via `init.sh`). Confirm the child
+spawn label matches `$routing` — MAIN's session model is unrelated.
 
-COMPLEX routing (from `goal-models.json` `$routing`):
-
-| Role | COMPLEX model |
-|---|---|
-| planner | gpt-5.6-sol / high |
-| builder | gpt-5.6-sol / medium |
-| reviewer | gpt-5.6-sol / medium |
-| researcher / qa / visual | terra (stay cheap) |
-
-Astra is ONLY for ARCHITECTURAL planning.
-
-Never inherit the Orchestrator's model.
+Never inherit the Orchestrator's model for workers.
 
 For `@visual-reviewer`, ALWAYS resolve a vision-capable model first:
 
@@ -235,7 +224,8 @@ read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models visual-reviewer 
 
 Never silently change models. Never downgrade `visual-reviewer` to text-only.
 
-Preferred assignments come from `.codex/goal-models.json` (`$routing` + role defaults).
+All assignments come from `.codex/goal-models.json` (`$routing` + role defaults).
+Customize per project by editing that file only.
 
 **Wait policy:** After spawning, `wait` once for completion. Do NOT burn turns on
 "still waiting" / queue polling chatter. Use `harness progress` if a human needs status.
@@ -572,7 +562,7 @@ read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models planner --comple
 # spawn_agent({ agent_type: "planner", model: "$MODEL", reasoning_effort: "$EFFORT" })
 ```
 
-Spawn `@planner` once with the resolved model/effort (COMPLEX → sol/high).
+Spawn `@planner` once with the resolved model/effort from `$routing`.
 
 Pass:
 
@@ -729,7 +719,7 @@ read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models builder --comple
 
 Pass Builder: task, discovery_context (or goal+acceptance for TRIVIAL), not full transcripts.
 
-**Initial build** — first `@builder` spawn for a task (COMPLEX → sol/medium):
+**Initial build** — first `@builder` spawn for a task (`$routing` by complexity):
 
 * mode: `INITIAL`
 * pass: task + `discovery_context` (or goal + acceptance for TRIVIAL) + plan slice if needed
@@ -955,7 +945,7 @@ read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models reviewer --compl
 
 Spawn `@reviewer` only when `requirements.reviewer != false`.
 
-**Initial review** — first `@reviewer` spawn after first push/PR (COMPLEX → sol/medium):
+**Initial review** — first `@reviewer` spawn after first push/PR (`$routing` by complexity):
 
 * mode: `INITIAL`
 * pass: goal + acceptance + diff + verify evidence + high-risk slice from discovery_context
@@ -1438,7 +1428,7 @@ Optional stable cache: `.codex/repo-context.json` (project_type, test/build comm
 15. When blocked, escalate or fail explicitly; never silently improvise.
 16. Always `harness context put discovery_context` after Planner (after final `harness init`).
 17. Always `harness context put research_report` after Researcher.
-18. Always resolve `models <role> --complexity $LEVEL`, pass model+effort to `harness spawn` and `spawn_agent`. Never spawn workers on agent.toml defaults alone (COMPLEX would stay terra).
+18. Always resolve `models <role> --complexity $LEVEL`, pass model+effort to `harness spawn` and `spawn_agent`. Never invent model IDs — only `.codex/goal-models.json`.
 19. Never `harness spawn` without `spawn_agent` in this session. Never ask MAIN to spawn workers.
 
 The goal is a predictable, auditable, token-efficient agent loop where:

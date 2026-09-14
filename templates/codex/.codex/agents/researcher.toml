@@ -1,7 +1,7 @@
 name = "researcher"
 description = "On-demand investigation agent. Resolves specific technical questions that cannot be confidently answered from the Planner's repository discovery or provided context. Investigates unfamiliar libraries, APIs, external documentation, architecture trade-offs, performance, security, and unresolved codebase behavior. Read-only — never implements code."
 sandbox_mode = "read-only"
-# model omitted — spawn_agent supplies routing (terra by default).
+# model omitted — spawn_agent supplies `$routing` from goal-models.json.
 
 developer_instructions = '''
 You are an ON-DEMAND RESEARCH AGENT.
@@ -309,10 +309,11 @@ Do not default to Level 3.
 
 Default model:
 
-Terra / Medium
+Whatever `$routing.researcher` / role default is in `.codex/goal-models.json`
+(resolved by Orchestrator via `models researcher --complexity`).
 
 Escalate only when the research question genuinely requires stronger reasoning
-or synthesis.
+or synthesis (Orchestrator may re-spawn with `models researcher --next`).
 
 Examples:
 

@@ -355,7 +355,7 @@ sync_agent_toml_key() {
 }
 
 # Codex locks role-toml `model` / `model_reasoning_effort` over spawn_agent overrides.
-# Worker roles must omit those keys so COMPLEX→sol (etc.) can apply at spawn time.
+# Worker roles must omit those keys so `$routing` spawn overrides can apply.
 remove_agent_toml_key() {
   local file="$1"
   local key="$2"
@@ -364,6 +364,48 @@ remove_agent_toml_key() {
     $0 ~ ("^" key " = ") { next }
     { print }
   ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+}
+
+# Keep [agents] default_subagent_* aligned with goal-models.json orchestrator (catalog SSOT).
+sync_codex_config_defaults() {
+  local dest="$1"
+  local models_file="$dest/.codex/goal-models.json"
+  local config_toml="$dest/.codex/config.toml"
+  [ -f "$models_file" ] || return 0
+  [ -f "$config_toml" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  local model effort
+  model="$(jq -r '.orchestrator.model // empty' "$models_file")"
+  effort="$(jq -r '.orchestrator.model_reasoning_effort // "medium"' "$models_file")"
+  [ -n "$model" ] || return 0
+
+  if grep -qE '^default_subagent_model = ' "$config_toml"; then
+    awk -v model="$model" '
+      /^default_subagent_model = / { print "default_subagent_model = \"" model "\""; next }
+      { print }
+    ' "$config_toml" > "$config_toml.tmp" && mv "$config_toml.tmp" "$config_toml"
+  else
+    awk -v model="$model" '
+      BEGIN { done = 0 }
+      !done && /^\[agents\]/ {
+        print
+        print "default_subagent_model = \"" model "\""
+        done = 1
+        next
+      }
+      { print }
+    ' "$config_toml" > "$config_toml.tmp" && mv "$config_toml.tmp" "$config_toml"
+  fi
+
+  if grep -qE '^default_subagent_reasoning_effort = ' "$config_toml"; then
+    awk -v effort="$effort" '
+      /^default_subagent_reasoning_effort = / { print "default_subagent_reasoning_effort = \"" effort "\""; next }
+      { print }
+    ' "$config_toml" > "$config_toml.tmp" && mv "$config_toml.tmp" "$config_toml"
+  fi
+
+  log "Synced .codex/config.toml default_subagent_model → $model ($effort)"
 }
 
 sync_agent_models() {
@@ -412,7 +454,7 @@ sync_agent_models() {
       fi
       [ -n "$sandbox" ] && sync_agent_toml_key "$agent_file" sandbox_mode "$sandbox"
       if [ "$agent_name" = "orchestrator" ]; then
-        # Pin orchestrator cheap; workers omit model so spawn_agent COMPLEX routing wins.
+        # Pin orchestrator from JSON; workers omit model so spawn_agent $routing wins.
         [ -n "$effort" ] && sync_agent_toml_key "$agent_file" model_reasoning_effort "$effort"
         [ -n "$model" ] && sync_agent_toml_key "$agent_file" model "$model"
         log "Synced model for $name agent: $agent_name → $model ($effort)"
@@ -422,6 +464,7 @@ sync_agent_models() {
         log "Synced $name agent $agent_name (model unpinned — spawn_agent supplies routing)"
       fi
     done
+    sync_codex_config_defaults "$dest"
   elif [ "$name" = "qoder" ]; then
     jq -r 'to_entries[] | select(.key | startswith("$") | not) | "\(.key)\t\(.value.model // "inherit")\t\(.value.effort // "")\t\(.value.readonly // "")"' "$models_file" | while IFS=$'\t' read -r agent_name model effort readonly; do
       [ -n "$agent_name" ] || continue

@@ -3102,11 +3102,10 @@ cmd_harness_spawn() {
     *) err "Unknown spawn role: $role"; exit 1 ;;
   esac
 
-  # Workers must log the spawn-time model so COMPLEX→sol (etc.) is auditable.
-  # Agent .toml defaults are terra; without an override Codex stays on terra.
+  # Agent .toml workers omit model; without spawn override Codex uses default_subagent_model.
   if [ "$role" != "orchestrator" ] && [ -z "$model" ]; then
     err "harness spawn $role requires <model> [effort] from: models $role --complexity <LEVEL>"
-    err "Example: harness spawn planner gpt-5.6-sol high"
+    err "Example: harness spawn planner \"\$(models planner --complexity COMPLEX | cut -f1)\" high"
     exit 1
   fi
 

@@ -52,10 +52,10 @@ Codex removed custom prompts in 0.117.0. Entry points are skills invoked with
 `$goal`, `$init-goal`, `$init-skills` — not slash commands.
 
 Codex includes an expanded harness (`goal-git.sh harness|verify|route|complexity`),
-Terra-first model defaults with complexity-aware escalation (Astra only for
-architectural planning), Planner skip on TRIVIAL, single-issue queue bypass,
-spawn budgets, evidence-backed gates, deterministic `verify run`, vision
-enforcement for `visual-reviewer`, and `researcher` / `qa` agents.
+model routing from `.codex/goal-models.json` (`$routing` by complexity), Planner
+skip on TRIVIAL, single-issue queue bypass, spawn budgets, evidence-backed gates,
+deterministic `verify run`, vision enforcement for `visual-reviewer`, and
+`researcher` / `qa` agents. Customize models per project in that JSON only.
 
 #### Codex harness gates
 
@@ -363,14 +363,14 @@ filter: `safe,none`.
 
 | Agent | Role | OpenCode | Claude | Cursor | Codex | Qoder |
 |---|---|---|---|---|---|---|
-| `planner` | Architecture & plans | `opencode-go/qwen3.7-max` | `opus` | inherit | `gpt-5.6-terra` medium (COMPLEX→sol, ARCH→astra); read-only | performance |
-| `researcher` | On-demand research (Codex only) | — | — | — | `gpt-5.6-terra`, medium, read-only | — |
-| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | `gpt-5.6-terra` medium (COMPLEX+→sol) | efficient |
-| `builder-expert` | Complex execution (Codex: escalation-only) | `opencode-go/kimi-k2.7-code` | `opus` | inherit | `gpt-5.6-sol`, high | performance |
-| `reviewer` | Code review + inline PR comments | `opencode-go/deepseek-v4-pro` | `opus` | inherit | `gpt-5.6-terra` medium (COMPLEX+→sol) | performance |
-| `qa` | Behavior/business QA (Codex only, conditional) | — | — | — | `gpt-5.6-terra`, medium | — |
-| `orchestrator` | Workflow manager | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | `gpt-5.6-terra`, low | efficient |
-| `visual-reviewer` | UI/multimodal review + inline PR comments | `opencode-go/mimo-v2.5-pro` | `sonnet` | inherit | `gpt-5.6-terra`, medium | inherit |
+| `planner` | Architecture & plans | `opencode-go/qwen3.7-max` | `opus` | inherit | see `.codex/goal-models.json` `$routing` (read-only) | performance |
+| `researcher` | On-demand research (Codex only) | — | — | — | see `goal-models.json` (read-only) | — |
+| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | see `goal-models.json` `$routing` | efficient |
+| `builder-expert` | Complex execution (Codex: escalation-only) | `opencode-go/kimi-k2.7-code` | `opus` | inherit | see `goal-models.json` | performance |
+| `reviewer` | Code review + inline PR comments | `opencode-go/deepseek-v4-pro` | `opus` | inherit | see `goal-models.json` `$routing` | performance |
+| `qa` | Behavior/business QA (Codex only, conditional) | — | — | — | see `goal-models.json` | — |
+| `orchestrator` | Workflow manager | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | see `goal-models.json` | efficient |
+| `visual-reviewer` | UI/multimodal review + inline PR comments | `opencode-go/mimo-v2.5-pro` | `sonnet` | inherit | see `goal-models.json` + vision allowlist | inherit |
 
 Every agent operates in `/ponytail full` mode.
 
@@ -393,8 +393,8 @@ The loop is the same. These are the harness limits:
 - **Codex has no slash commands.** Custom prompts were removed in CLI 0.117.0. Use `$goal`.
 - **Codex CLI 0.138.0+** is required. 0.137.0 hid `agent_type` from `spawn_agent`, which blocks custom-agent delegation.
 - **Codex `.codex/config.toml` loads only for trusted projects.** Without trust, `max_depth`, network access, and the Figma MCP block are ignored. Confirm with `/status` after first launch.
-- **Codex harness** (`harness` / `verify` / `route` / `complexity` on `goal-git.sh`) and the `researcher` / `qa` agents are Codex-only; other platforms keep the prior six-agent loop. Gates are evidence-backed; `analyze` is not part of `verify`. Terra-first defaults; Astra is architectural-planning escalation only. TRIVIAL skips Planner; single-issue queues bypass queue orchestration; spawn budgets cap runaway loops.
-- **Codex visual-reviewer** hard-fails rather than downgrading to a text-only model. Vision allowlist is `$capabilities.vision_models` in `goal-models.json` (ships seeded with `gpt-5.6-terra` only — extend by hand).
+- **Codex harness** (`harness` / `verify` / `route` / `complexity` on `goal-git.sh`) and the `researcher` / `qa` agents are Codex-only; other platforms keep the prior six-agent loop. Gates are evidence-backed; `analyze` is not part of `verify`. Models live only in `.codex/goal-models.json` (`$routing` by complexity). TRIVIAL skips Planner; single-issue queues bypass queue orchestration; spawn budgets cap runaway loops.
+- **Codex visual-reviewer** hard-fails rather than downgrading to a text-only model. Vision allowlist is `$capabilities.vision_models` in `goal-models.json` (edit per project).
 - **Codex and Cursor cannot machine-enforce `edit: deny`** on `orchestrator`, `reviewer`, or `visual-reviewer`. That rule is prompt-enforced. (Claude Code uses a `tools` allowlist; OpenCode uses `permission.edit: deny`.)
 - **Goal-loop installs auto-approve tool prompts** (paths, bash, MCP) on all five targets so agents are not interrupted for permission dialogs. Orchestrator/planner/reviewer still cannot edit application source via role tool limits.
 - **Cursor allows two levels of subagent nesting.** `/goal` (main) → `orchestrator` → `builder` fits; builders must never spawn subagents.
