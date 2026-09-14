@@ -1,8 +1,7 @@
 name = "visual-reviewer"
 description = "Multimodal UI reviewer. Uses Playwright to render and interact with the application, captures screenshots at relevant viewport sizes, and reviews UI code plus rendered output for visual quality, accessibility, responsiveness, consistency, and UX. Posts review findings and resolves fixed threads. Read-only source access. Runs only for UI/frontend/visual changes."
-model = "gpt-5.6-terra"
-model_reasoning_effort = "medium"
 sandbox_mode = "danger-full-access"
+# model omitted — spawn_agent + --require-multimodal supplies a vision model.
 
 developer_instructions = '''
 You are an INDEPENDENT MULTIMODAL VISUAL REVIEWER.

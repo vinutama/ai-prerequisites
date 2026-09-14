@@ -75,7 +75,8 @@ Goal source (configured via `/init-goal`):
 | `visual-reviewer` | UI/multimodal review (conditional) | gpt-5.6-terra | medium | multimodal-hard |
 
 `goal-models.json` is the single source of truth (`$routing` by complexity + role defaults).
-`init.sh` syncs `model` / `model_reasoning_effort` into each agent `.toml`.
+`init.sh` does **not** pin worker models into `.toml` — Codex would lock those
+over `spawn_agent`. Orchestrator stays terra/low; workers get the model at spawn.
 **Astra is escalation-only for architectural planning — never the default.**
 
 | Agent | Multimodal | Input modalities |
@@ -112,14 +113,19 @@ gates, budget, metrics, retries, findings). Orchestrator drives it via
 | COMPLEX | Sol/high | Plan → Research? → Build Sol → Verify → Review Sol | bounded |
 | ARCHITECTURAL | Astra/high | Plan Astra → Research? → Build Sol → Expert? → Verify → Review Sol | bounded |
 
-**Spawn budgets** (defaults): max_total_spawns=**10**, planner=1, researcher=1,
-expert=1, reviewer=2, qa=1, visual=1. Use `harness spawn <role>` before each
-spawn; exceeding budget exits 1. Spawns **reserve** capacity for required QA /
-Visual that have not run yet (discretionary builder/reviewer rework cannot
-starve them). `review_max_iterations` defaults to **2**.
+**Spawn budgets** (defaults): `max_reviewer_runs = 1 + max_rework` (4 when
+rework=3), `max_total_spawns` sized to match (~13). planner=1, researcher=1,
+expert=1, qa=1, visual=1. Use `harness spawn <role>` before each spawn.
+If a verified rework cannot start the closing re-review, raise the live cap:
+`harness budget set max_reviewer_runs 4`. Do not mark REVIEW PASS without a
+reviewer spawn. `review_max_iterations` defaults to **2** (local-mode finding cap).
 
 Phases: `PLANNED` → `RESEARCHING?` → `BUILDING` → `ESCALATED?` → `VERIFYING` →
-`REVIEWING?` → `QA?` → `VISUAL_REVIEW?` → `REWORK?` → `DONE` | `FAILED`.
+`REVIEWING?` → `QA?` → `VISUAL_REVIEW?` → `REWORK?` → `BUILDING` | `VERIFYING` →
+`DONE` | `FAILED`.
+
+`REWORK` may go to `BUILDING` (spawn the fix) or `VERIFYING` (fix builder already
+done). Never `REWORK` → `REVIEWING` / `QA` / `DONE`.
 
 Task states: `PENDING | RUNNING | DONE | BLOCKED | FAILED`.
 
@@ -208,17 +214,23 @@ screenshots at 375 / 768 / 1024 / 1440 when the app can start.
 Codex does not use the OpenCode fallback plugin. Per-agent models are pinned in
 two layers:
 
-1. **Durable** — each `.codex/agents/<role>.toml` sets `model` and
-   `model_reasoning_effort` (synced from `goal-models.json` by `init.sh`).
-   `.codex/config.toml` also sets `default_subagent_model` and
-   `hide_spawn_agent_metadata = false` so spawn-time overrides are visible.
-2. **Spawn-time** — the orchestrator resolves the model via
-   `.codex/scripts/goal-git.sh models <role>` and always passes
-   `agent_type` + `model` + `reasoning_effort` to `spawn_agent`.
-   On model-unavailable / rate-limit, it calls `models <role> --next <model>`
-   and re-spawns. For multimodal roles, `--next` only returns models in
-   `$capabilities.vision_models`. Before spawning `visual-reviewer`, run
-   `models visual-reviewer --require-multimodal` — never downgrade to text-only.
+1. **Durable** — `orchestrator.toml` keeps `model = gpt-5.6-terra` (cheap).
+   Worker roles **omit** `model` / `model_reasoning_effort`. Codex **locks**
+   a role-toml `model` over `spawn_agent` overrides, so pinning terra on
+   `reviewer.toml` makes COMPLEX→sol silently stay terra.
+2. **Spawn-time (authoritative)** — orchestrator MUST resolve
+   `models <role> --complexity <LEVEL>` and pass `model` + `reasoning_effort`
+   to both `harness spawn <role> <model> <effort>` and `spawn_agent`.
+   Confirm on the spawn line: `Spawned … [reviewer] (gpt-5.6-sol medium)`.
+   The parent UI `model: gpt-5.6-terra medium` is MAIN — not the child.
+
+COMPLEX → planner/builder/reviewer = **sol**; researcher/qa/visual stay terra.
+ARCHITECTURAL → planner = **astra**.
+
+On model-unavailable / rate-limit, call `models <role> --next <model>` and
+re-spawn. For multimodal roles, `--next` only returns models in
+`$capabilities.vision_models`. Before spawning `visual-reviewer`, run
+`models visual-reviewer --require-multimodal` — never downgrade to text-only.
 
 ### Delegation
 The planner tags every implementation task `@builder` and emits routing signals

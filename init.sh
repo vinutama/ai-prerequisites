@@ -354,6 +354,18 @@ sync_agent_toml_key() {
   fi
 }
 
+# Codex locks role-toml `model` / `model_reasoning_effort` over spawn_agent overrides.
+# Worker roles must omit those keys so COMPLEX→sol (etc.) can apply at spawn time.
+remove_agent_toml_key() {
+  local file="$1"
+  local key="$2"
+  grep -qE "^${key} = " "$file" || return 0
+  awk -v key="$key" '
+    $0 ~ ("^" key " = ") { next }
+    { print }
+  ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+}
+
 sync_agent_models() {
   local dest="$1"
   local name="$2"
@@ -398,10 +410,17 @@ sync_agent_models() {
         warn "Agent file not found for $agent_name: $agent_file"
         continue
       fi
-      [ -n "$effort" ] && sync_agent_toml_key "$agent_file" model_reasoning_effort "$effort"
       [ -n "$sandbox" ] && sync_agent_toml_key "$agent_file" sandbox_mode "$sandbox"
-      [ -n "$model" ] && sync_agent_toml_key "$agent_file" model "$model"
-      log "Synced model for $name agent: $agent_name → ${model:-<effort/sandbox only>}"
+      if [ "$agent_name" = "orchestrator" ]; then
+        # Pin orchestrator cheap; workers omit model so spawn_agent COMPLEX routing wins.
+        [ -n "$effort" ] && sync_agent_toml_key "$agent_file" model_reasoning_effort "$effort"
+        [ -n "$model" ] && sync_agent_toml_key "$agent_file" model "$model"
+        log "Synced model for $name agent: $agent_name → $model ($effort)"
+      else
+        remove_agent_toml_key "$agent_file" model
+        remove_agent_toml_key "$agent_file" model_reasoning_effort
+        log "Synced $name agent $agent_name (model unpinned — spawn_agent supplies routing)"
+      fi
     done
   elif [ "$name" = "qoder" ]; then
     jq -r 'to_entries[] | select(.key | startswith("$") | not) | "\(.key)\t\(.value.model // "inherit")\t\(.value.effort // "")\t\(.value.readonly // "")"' "$models_file" | while IFS=$'\t' read -r agent_name model effort readonly; do

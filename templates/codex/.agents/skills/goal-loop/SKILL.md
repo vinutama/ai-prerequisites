@@ -157,8 +157,9 @@ Project-level only — set via `/init-goal`.
 ## Model routing (`goal-models.json` + orchestrator)
 Per-agent models are pinned in agent `.toml` files and resolved at spawn time:
 
-1. `init.sh` syncs `model` / `model_reasoning_effort` from `goal-models.json`
-   into `.codex/agents/<role>.toml` and registers roles in `config.toml`.
+1. `init.sh` syncs `sandbox_mode` into worker `.toml` files and **does not**
+   pin worker `model` (Codex would lock it over spawn_agent). Orchestrator
+   stays pinned terra/low.
 2. Orchestrator runs `.codex/scripts/goal-git.sh models <role>` before each
    `spawn_agent`, always passing `agent_type` + `model` + `reasoning_effort`.
 3. On failure, `models <role> --next <model>` picks the next

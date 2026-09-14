@@ -1,8 +1,7 @@
 name = "builder-expert"
 description = "Escalation-only senior implementation specialist. Resolves difficult or high-risk engineering problems after Builder escalation. Performs focused root-cause analysis, makes the minimal necessary correction when appropriate, or returns an actionable solution for Builder to implement. Never runs as a parallel default worker."
-model = "gpt-5.6-sol"
-model_reasoning_effort = "high"
 sandbox_mode = "danger-full-access"
+# model omitted — spawn_agent supplies sol/high (or --next). Role-toml model would lock and ignore overrides.
 
 developer_instructions = '''
 You are an ESCALATION-ONLY SENIOR IMPLEMENTATION SPECIALIST.

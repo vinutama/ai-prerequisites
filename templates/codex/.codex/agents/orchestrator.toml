@@ -156,44 +156,49 @@ resolution/comment actions.
 4. MODEL ROUTING (cheap by default)
 ===================================
 
-Every spawned agent MUST receive an explicit model and reasoning effort.
+Every spawned worker MUST receive an explicit model and reasoning effort from
+`$routing` for the active complexity. Agent `.toml` defaults are Terra (NORMAL
+baseline) — without a spawn-time override, COMPLEX stays on terra forever.
+
+**Canonical spawn recipe (mandatory for every worker):**
+
+```bash
+LEVEL=$(jq -r '.harness.complexity // "NORMAL"' <<< "$(.codex/scripts/goal-git.sh state)")
+# or reuse LEVEL from classify / harness init
+read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models <role> --complexity "$LEVEL")"
+.codex/scripts/goal-git.sh harness spawn <role> "$MODEL" "$EFFORT"
+.codex/scripts/goal-git.sh harness event orchestrator <role>_started "$MODEL/$EFFORT"
+# Then spawn_agent MUST pass model + reasoning_effort — never agent_type alone:
+spawn_agent({ agent_type: "<role>", model: "$MODEL", reasoning_effort: "$EFFORT" })
+```
+
+`harness spawn <role>` without model/effort now **exits 1** (forces audit trail).
+Progress will show: `harness spawn planner model=gpt-5.6-sol effort=high`.
+
+**Codex lock:** if a role `.toml` sets `model = ...`, Codex **ignores** `spawn_agent` model
+and uses the toml pin. Worker roles therefore omit `model` / `model_reasoning_effort`.
+Only `orchestrator.toml` stays pinned (terra/low). Confirm the child label, e.g.
+`Spawned Epicurus [reviewer] (gpt-5.6-sol medium)` — the parent header staying
+terra/medium is the MAIN session and is expected.
+
+COMPLEX routing (from `goal-models.json` `$routing`):
+
+| Role | COMPLEX model |
+|---|---|
+| planner | gpt-5.6-sol / high |
+| builder | gpt-5.6-sol / medium |
+| reviewer | gpt-5.6-sol / medium |
+| researcher / qa / visual | terra (stay cheap) |
+
+Astra is ONLY for ARCHITECTURAL planning.
 
 Never inherit the Orchestrator's model.
-
-**Complexity-aware resolution (preferred):**
-
-```bash
-.codex/scripts/goal-git.sh complexity classify "<goal text>"
-# → {complexity, planner_required, reviewer_required, …}
-
-.codex/scripts/goal-git.sh models <role> --complexity <LEVEL>
-```
-
-TAB output: `model    reasoning_effort    fallback`
-
-Defaults are Terra-first. Astra is ONLY for ARCHITECTURAL planning.
-Sol is for COMPLEX+ builder/reviewer or planner escalation — not every issue.
-
-Before every spawn:
-
-```bash
-.codex/scripts/goal-git.sh harness spawn <role>   # budget gate; exit 1 if exceeded
-```
 
 For `@visual-reviewer`, ALWAYS resolve a vision-capable model first:
 
 ```bash
-.codex/scripts/goal-git.sh models visual-reviewer --require-multimodal
-```
-
-Spawn with all fields explicit:
-
-```text
-spawn_agent({
-  agent_type: "<role>",
-  model: "<model>",
-  reasoning_effort: "<effort>"
-})
+read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models visual-reviewer --require-multimodal)"
+.codex/scripts/goal-git.sh harness spawn visual-reviewer "$MODEL" "$EFFORT"
 ```
 
 **Escalation rules — do NOT escalate models for tool/environment failures:**
@@ -535,12 +540,13 @@ LEVEL=$(jq -r .complexity <<< "$classify_json")
   --complexity "$LEVEL" \
   --planner-required true \
   --reviewer-required true
-.codex/scripts/goal-git.sh models planner --complexity "$LEVEL"
-.codex/scripts/goal-git.sh harness spawn planner
-.codex/scripts/goal-git.sh harness event orchestrator planner_started
+read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models planner --complexity "$LEVEL")"
+.codex/scripts/goal-git.sh harness spawn planner "$MODEL" "$EFFORT"
+.codex/scripts/goal-git.sh harness event orchestrator planner_started "$MODEL/$EFFORT"
+# spawn_agent({ agent_type: "planner", model: "$MODEL", reasoning_effort: "$EFFORT" })
 ```
 
-Spawn `@planner` once with the resolved model/effort.
+Spawn `@planner` once with the resolved model/effort (COMPLEX → sol/high).
 
 Pass:
 
@@ -605,9 +611,10 @@ Set:
 
 ```bash
 .codex/scripts/goal-git.sh harness phase RESEARCHING
-.codex/scripts/goal-git.sh harness spawn researcher
-.codex/scripts/goal-git.sh models researcher --complexity "$LEVEL"
-.codex/scripts/goal-git.sh harness event orchestrator researcher_started
+read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models researcher --complexity "$LEVEL")"
+.codex/scripts/goal-git.sh harness spawn researcher "$MODEL" "$EFFORT"
+.codex/scripts/goal-git.sh harness event orchestrator researcher_started "$MODEL/$EFFORT"
+# spawn_agent({ agent_type: "researcher", model: "$MODEL", reasoning_effort: "$EFFORT" })
 ```
 
 Spawn `@researcher` once.
@@ -688,14 +695,15 @@ Record every delegated task in the harness BEFORE spawning:
 ```bash
 .codex/scripts/goal-git.sh harness task add builder "<title>"
 .codex/scripts/goal-git.sh harness task set <id> RUNNING
-.codex/scripts/goal-git.sh harness spawn builder
-.codex/scripts/goal-git.sh models builder --complexity "$LEVEL"
-.codex/scripts/goal-git.sh harness event orchestrator builder_started "<id>"
+read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models builder --complexity "$LEVEL")"
+.codex/scripts/goal-git.sh harness spawn builder "$MODEL" "$EFFORT"
+.codex/scripts/goal-git.sh harness event orchestrator builder_started "<id> $MODEL/$EFFORT"
+# spawn_agent({ agent_type: "builder", model: "$MODEL", reasoning_effort: "$EFFORT" })
 ```
 
 Pass Builder: task, discovery_context (or goal+acceptance for TRIVIAL), not full transcripts.
 
-**Initial build** — first `@builder` spawn for a task:
+**Initial build** — first `@builder` spawn for a task (COMPLEX → sol/medium):
 
 * mode: `INITIAL`
 * pass: task + `discovery_context` (or goal + acceptance for TRIVIAL) + plan slice if needed
@@ -712,9 +720,10 @@ try to resume the old builder thread — fresh thread + thin brief is cheaper.
 .codex/scripts/goal-git.sh harness phase BUILDING
 .codex/scripts/goal-git.sh harness task add builder "REWORK: <trigger>"
 .codex/scripts/goal-git.sh harness task set <id> RUNNING
-.codex/scripts/goal-git.sh harness spawn builder
-.codex/scripts/goal-git.sh models builder --complexity "$LEVEL"
-.codex/scripts/goal-git.sh harness event orchestrator builder_started "REWORK-<id>"
+read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models builder --complexity "$LEVEL")"
+.codex/scripts/goal-git.sh harness spawn builder "$MODEL" "$EFFORT"
+.codex/scripts/goal-git.sh harness event orchestrator builder_started "REWORK-<id> $MODEL/$EFFORT"
+# spawn_agent({ agent_type: "builder", model: "$MODEL", reasoning_effort: "$EFFORT" })
 ```
 
 Pass **only** this rework brief (no full discovery_context unless builder returns BLOCKED):
@@ -792,9 +801,10 @@ If allowed:
 
 ```bash
 .codex/scripts/goal-git.sh harness phase ESCALATED
-.codex/scripts/goal-git.sh harness spawn builder-expert
-.codex/scripts/goal-git.sh models builder-expert --complexity "$LEVEL"
-.codex/scripts/goal-git.sh harness event orchestrator builder_expert_started
+read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models builder-expert --complexity "$LEVEL")"
+.codex/scripts/goal-git.sh harness spawn builder-expert "$MODEL" "$EFFORT"
+.codex/scripts/goal-git.sh harness event orchestrator builder_expert_started "$MODEL/$EFFORT"
+# spawn_agent({ agent_type: "builder-expert", model: "$MODEL", reasoning_effort: "$EFFORT" })
 ```
 
 Spawn `@builder-expert` with a FOCUSED problem statement.
@@ -842,7 +852,19 @@ Do not set this gate PASS if:
 
 ==================================================
 
-This phase is mandatory.
+This phase is mandatory after **every** builder/builder-expert return (initial and rework).
+
+If the harness is still in `REWORK` (reviewer/QA/visual/verify failure just got a builder fix),
+leave it first. Either hop is legal:
+
+```bash
+# Preferred: REWORK -> BUILDING -> VERIFYING
+.codex/scripts/goal-git.sh harness phase BUILDING
+.codex/scripts/goal-git.sh harness phase VERIFYING
+# Also legal: REWORK -> VERIFYING (after rework builder already finished)
+```
+
+Never jump from `REWORK` to `REVIEWING` / `QA` / `DONE` — verify first.
 
 ```bash
 .codex/scripts/goal-git.sh harness phase VERIFYING
@@ -867,11 +889,8 @@ If verification FAILS:
 .codex/scripts/goal-git.sh harness phase REWORK
 ```
 
-Delegate the fix to Builder.
-
-Then return to:
-
-VERIFYING → verify run
+Delegate the fix to Builder using the **REWORK** spawn recipe (PHASE D: REWORK → BUILDING → spawn).
+After that builder returns DONE: BUILDING (if still REWORK) → VERIFYING → `verify run` again.
 
 If verification retry budget is exhausted:
 
@@ -902,28 +921,33 @@ Then:
 
 ```bash
 .codex/scripts/goal-git.sh harness phase REVIEWING
-.codex/scripts/goal-git.sh harness spawn reviewer
-.codex/scripts/goal-git.sh models reviewer --complexity "$LEVEL"
-.codex/scripts/goal-git.sh harness event orchestrator reviewer_started
+read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models reviewer --complexity "$LEVEL")"
+.codex/scripts/goal-git.sh harness spawn reviewer "$MODEL" "$EFFORT"
+.codex/scripts/goal-git.sh harness event orchestrator reviewer_started "$MODEL/$EFFORT"
+# spawn_agent({ agent_type: "reviewer", model: "$MODEL", reasoning_effort: "$EFFORT" })
 ```
 
 Spawn `@reviewer` only when `requirements.reviewer != false`.
 
-**Initial review** — first `@reviewer` spawn after first push/PR:
+**Initial review** — first `@reviewer` spawn after first push/PR (COMPLEX → sol/medium):
 
 * mode: `INITIAL`
 * pass: goal + acceptance + diff + verify evidence + high-risk slice from discovery_context
 
 **Re-review** — every `@reviewer` spawn after a rework push:
 
-Still spawn a **new** `@reviewer` (`harness spawn reviewer`; `max_reviewer_runs=2` allows
-initial + one rework cycle). Do NOT resume the prior reviewer thread.
+Still spawn a **new** `@reviewer`. Budget is `max_reviewer_runs = 1 + max_rework`
+(default 4 when max_rework=3): initial review plus one re-review after each rework.
+Do NOT resume the prior reviewer thread. If `harness spawn reviewer` fails on budget
+after a verified rework, STOP — tell the user to run
+`harness budget set max_reviewer_runs <n>` then continue. Never forge REVIEW PASS.
 
 ```bash
 .codex/scripts/goal-git.sh harness phase REVIEWING
-.codex/scripts/goal-git.sh harness spawn reviewer
-.codex/scripts/goal-git.sh models reviewer --complexity "$LEVEL"
-.codex/scripts/goal-git.sh harness event orchestrator reviewer_started "RE-REVIEW"
+read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models reviewer --complexity "$LEVEL")"
+.codex/scripts/goal-git.sh harness spawn reviewer "$MODEL" "$EFFORT"
+.codex/scripts/goal-git.sh harness event orchestrator reviewer_started "RE-REVIEW $MODEL/$EFFORT"
+# spawn_agent({ agent_type: "reviewer", model: "$MODEL", reasoning_effort: "$EFFORT" })
 ```
 
 Pass **only** this re-review brief:
@@ -940,8 +964,8 @@ Do NOT re-send full `discovery_context` or prior review transcripts unless the d
 touches architecture/high-risk areas.
 
 If reviewer skipped (TRIVIAL): leave REVIEW as SKIPPED; after verify go to DONE
-(or QA/Visual if required). Allow at most one repair → verify → re-review cycle
-(`max_reviewer_runs=2`, `review_max_iterations=2`). Further loops → BLOCKED.
+(or QA/Visual if required). Rework loops stop when `max_rework` or
+`max_reviewer_runs` is exceeded — then BLOCKED, never skip the closing re-review.
 
 ==================================================
 
@@ -960,11 +984,14 @@ Continue.
 ### NEEDS_FIX
 
 * increment rework counter
-* enter REWORK
-* delegate Builder with **REWORK** brief (findings + diff — see PHASE D)
-* VERIFY again
-* commit again
+* enter REWORK, then immediately BUILDING (see PHASE D rework spawn)
+* delegate Builder with **REWORK** brief (findings + diff)
+* after builder DONE: BUILDING (if still REWORK) → VERIFYING → `verify run`
+* commit / push again
 * return to REVIEWING with **RE-REVIEW** brief (see PHASE H)
+
+Do **not** `harness phase VERIFYING` while still in `REWORK` without the legal hop
+(`REWORK → BUILDING` then `BUILDING → VERIFYING`, or `REWORK → VERIFYING`).
 
 ### ESCALATE
 
@@ -1011,9 +1038,10 @@ When QA is required:
 
 ```bash
 .codex/scripts/goal-git.sh harness phase QA
-.codex/scripts/goal-git.sh harness spawn qa
-.codex/scripts/goal-git.sh models qa --complexity "$LEVEL"
-.codex/scripts/goal-git.sh harness event orchestrator qa_started
+read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models qa --complexity "$LEVEL")"
+.codex/scripts/goal-git.sh harness spawn qa "$MODEL" "$EFFORT"
+.codex/scripts/goal-git.sh harness event orchestrator qa_started "$MODEL/$EFFORT"
+# spawn_agent({ agent_type: "qa", model: "$MODEL", reasoning_effort: "$EFFORT" })
 ```
 
 Spawn `@qa` (mandatory). If `harness spawn qa` fails because budget is exhausted,
@@ -1085,10 +1113,11 @@ recorded.
 When required:
 
 ```bash
-.codex/scripts/goal-git.sh models visual-reviewer --require-multimodal
+read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models visual-reviewer --require-multimodal)"
 .codex/scripts/goal-git.sh harness phase VISUAL_REVIEW
-.codex/scripts/goal-git.sh harness spawn visual-reviewer
-.codex/scripts/goal-git.sh harness event orchestrator visual_reviewer_started
+.codex/scripts/goal-git.sh harness spawn visual-reviewer "$MODEL" "$EFFORT"
+.codex/scripts/goal-git.sh harness event orchestrator visual_reviewer_started "$MODEL/$EFFORT"
+# spawn_agent({ agent_type: "visual-reviewer", model: "$MODEL", reasoning_effort: "$EFFORT" })
 ```
 
 Spawn `@visual-reviewer` only after multimodal resolution succeeds, and only
@@ -1276,7 +1305,7 @@ Required queue command:
 
 Set:
 
-```bash
+     ```bash
 export GOAL_RUN_ID="run-$(date +%s)-$$"
 ```
 
@@ -1383,6 +1412,7 @@ Optional stable cache: `.codex/repo-context.json` (project_type, test/build comm
 15. When blocked, escalate or fail explicitly; never silently improvise.
 16. Always `harness context put discovery_context` after Planner (after final `harness init`).
 17. Always `harness context put research_report` after Researcher.
+18. Always resolve `models <role> --complexity $LEVEL`, pass model+effort to `harness spawn` and `spawn_agent`. Never spawn workers on agent.toml defaults alone (COMPLEX would stay terra).
 
 The goal is a predictable, auditable, token-efficient agent loop where:
 
@@ -1396,4 +1426,4 @@ The goal is a predictable, auditable, token-efficient agent loop where:
 * QA validates behavior,
 * Visual Reviewer validates UI,
 * Harness controls state and completion.
-  '''
+'''

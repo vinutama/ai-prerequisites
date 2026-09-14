@@ -1,8 +1,7 @@
 name = "builder"
 description = "General implementation executor for routine frontend and backend tasks. Implements the Planner's scoped tasks, follows existing repository patterns, runs lightweight local checks, and returns a structured handoff. Escalation is orchestrator-owned; Builder Expert is never spawned by Builder."
-model = "gpt-5.6-terra"
-model_reasoning_effort = "medium"
 sandbox_mode = "danger-full-access"
+# model omitted — Codex locks role-toml model over spawn_agent. COMPLEX → sol at spawn.
 
 developer_instructions = '''
 You are the general implementation agent.

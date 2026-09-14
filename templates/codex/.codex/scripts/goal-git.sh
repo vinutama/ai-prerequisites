@@ -60,7 +60,10 @@ Commands:
   harness progress [-n N] [--json]
                             Render recent harness timeline (default last 20)
   harness hook              Read Codex hook JSON on stdin; emit START/END event
-  harness spawn <role>      Record agent spawn against budget; reserves slots for required QA/Visual
+  harness spawn <role> [model [effort]]
+                            Record spawn against budget; log resolved model (required for audit)
+  harness budget set <key> <n>
+                            Raise a live spawn cap (e.g. max_reviewer_runs) without re-init
   harness metrics           Print spawn/run metrics
   harness context put <name> [file|-]
                             Store compact handoff artifact (discovery_context, …)
@@ -2229,7 +2232,7 @@ harness_phase_allowed() {
     "REVIEWING->REWORK"|"REVIEWING->QA"|"REVIEWING->DONE"|"REVIEWING->VISUAL_REVIEW") return 0 ;;
     "QA->REWORK"|"QA->VISUAL_REVIEW"|"QA->DONE") return 0 ;;
     "VISUAL_REVIEW->REWORK"|"VISUAL_REVIEW->DONE") return 0 ;;
-    "REWORK->BUILDING"|"REWORK->FAILED") return 0 ;;
+    "REWORK->BUILDING"|"REWORK->VERIFYING"|"REWORK->ESCALATED"|"REWORK->FAILED") return 0 ;;
     *)
       [ "$to" = "FAILED" ] && return 0
       return 1
@@ -2338,14 +2341,21 @@ cmd_harness_init() {
   max_verify_retries="$(config_read max_verify_retries)"; max_verify_retries="${max_verify_retries:-3}"
 
   local max_total max_planner max_researcher max_expert max_reviewer_runs max_qa max_visual
-  # Default 10 leaves room for planner+researcher+builder+reviewer+rework+qa+visual(+expert)
-  max_total="$(config_read max_total_spawns)"; max_total="${max_total:-10}"
   max_planner="$(config_read max_planner_runs)"; max_planner="${max_planner:-1}"
   max_researcher="$(config_read max_researcher_runs)"; max_researcher="${max_researcher:-1}"
   max_expert="$(config_read max_builder_expert_runs)"; max_expert="${max_expert:-1}"
-  max_reviewer_runs="$(config_read max_reviewer_runs)"; max_reviewer_runs="${max_reviewer_runs:-2}"
+  max_reviewer_runs="$(config_read max_reviewer_runs)"
+  if [ -z "$max_reviewer_runs" ]; then
+    # Initial review + one re-review after each allowed rework (avoids 2-reviewer deadlock).
+    max_reviewer_runs=$((max_rework + 1))
+  fi
   max_qa="$(config_read max_qa_runs)"; max_qa="${max_qa:-1}"
   max_visual="$(config_read max_visual_runs)"; max_visual="${max_visual:-1}"
+  max_total="$(config_read max_total_spawns)"
+  if [ -z "$max_total" ]; then
+    # planner + researcher + builders(1+rework) + reviewers + expert + qa + visual
+    max_total=$((1 + 1 + 1 + max_rework + max_reviewer_runs + 1 + 1 + 1))
+  fi
 
   # Re-init must not wipe handoffs/metrics already recorded (spawn/context put before final init).
   local prev_context='{}' prev_events='[]' prev_tasks='[]' prev_metrics=''
@@ -3075,7 +3085,9 @@ cmd_harness_done() {
 cmd_harness_spawn() {
   harness_require
   local role="${1:-}"
-  [ -z "$role" ] && { err "harness spawn requires <role>"; exit 1; }
+  local model="${2:-}"
+  local effort="${3:-}"
+  [ -z "$role" ] && { err "harness spawn requires <role> [model [effort]]"; exit 1; }
 
   local metric_field budget_field
   case "$role" in
@@ -3089,6 +3101,14 @@ cmd_harness_spawn() {
     orchestrator) metric_field=""; budget_field="" ;;
     *) err "Unknown spawn role: $role"; exit 1 ;;
   esac
+
+  # Workers must log the spawn-time model so COMPLEX→sol (etc.) is auditable.
+  # Agent .toml defaults are terra; without an override Codex stays on terra.
+  if [ "$role" != "orchestrator" ] && [ -z "$model" ]; then
+    err "harness spawn $role requires <model> [effort] from: models $role --complexity <LEVEL>"
+    err "Example: harness spawn planner gpt-5.6-sol high"
+    exit 1
+  fi
 
   local total max_total reserved
   total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics.agent_spawns // 0' "$STATE_FILE")"
@@ -3126,8 +3146,32 @@ cmd_harness_spawn() {
     '
   fi
 
-  harness_event "harness" "spawn" "$role"
+  local detail="$role"
+  if [ -n "$model" ]; then
+    detail="$role model=$model"
+    [ -n "$effort" ] && detail="$detail effort=$effort"
+  fi
+  harness_event "harness" "spawn" "$detail"
   jq --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics' "$STATE_FILE"
+}
+
+cmd_harness_budget_set() {
+  harness_require
+  local key="${1:-}" val="${2:-}"
+  [ -z "$key" ] || [ -z "$val" ] && { err "harness budget set requires <key> <n>"; exit 1; }
+  case "$key" in
+    max_total_spawns|max_planner_runs|max_researcher_runs|max_builder_expert_runs|max_reviewer_runs|max_qa_runs|max_visual_runs) ;;
+    *) err "Unknown budget key: $key"; exit 1 ;;
+  esac
+  if ! [[ "$val" =~ ^[0-9]+$ ]] || [ "$val" -lt 1 ]; then
+    err "budget value must be a positive integer"
+    exit 1
+  fi
+  state_mutate --argjson idx "$GOAL_IDX" --arg k "$key" --argjson v "$val" \
+    '.[$idx].harness.budget[$k] = $v'
+  harness_event "harness" "budget_set" "$key=$val"
+  log "Budget $key -> $val"
+  jq --argjson idx "$GOAL_IDX" '.[$idx].harness.budget' "$STATE_FILE"
 }
 
 cmd_harness_metrics() {
@@ -3210,6 +3254,12 @@ cmd_harness() {
     hook) cmd_harness_hook "$@" ;;
     spawn) cmd_harness_spawn "$@" ;;
     metrics) cmd_harness_metrics ;;
+    budget)
+      case "${1:-}" in
+        set) shift; cmd_harness_budget_set "$@" ;;
+        *) err "harness budget subcommand must be set"; exit 1 ;;
+      esac
+      ;;
     context)
       case "${1:-}" in
         put) shift; cmd_harness_context_put "$@" ;;
@@ -3218,7 +3268,7 @@ cmd_harness() {
       esac
       ;;
     done) cmd_harness_done ;;
-    *) err "harness subcommand must be: init, phase, task, gate, retry, qa, visual, event, progress, hook, spawn, metrics, context, status, done"; exit 1 ;;
+    *) err "harness subcommand must be: init, phase, task, gate, retry, qa, visual, event, progress, hook, spawn, metrics, budget, context, status, done"; exit 1 ;;
   esac
 }
 
