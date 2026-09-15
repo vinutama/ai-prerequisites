@@ -157,10 +157,10 @@ Project-level only — set via `/init-goal`.
 ## Model routing (`goal-models.json` + orchestrator)
 Catalog = `.codex/goal-models.json` only (edit per project). Resolved at spawn time:
 
-1. `init.sh` syncs `sandbox_mode` into worker `.toml` files and **does not**
-   pin worker `model` (Codex would lock it over spawn_agent). Orchestrator
-   `model` is pinned from JSON. `default_subagent_model` in `config.toml` is
-   synced from `orchestrator.model`.
+1. `init.sh` syncs `sandbox_mode` into role `.toml` files and **strips**
+   `model` / `model_reasoning_effort` from every role (Codex would lock a
+   toml pin over `spawn_agent`). `default_subagent_model` in `config.toml` is
+   a last-resort fallback synced from JSON `orchestrator.model`.
 2. Orchestrator runs `.codex/scripts/goal-git.sh models <role> --complexity <LEVEL>`
    before each `spawn_agent`, always passing `agent_type` + `model` + `reasoning_effort`.
 3. On failure, `models <role> --next <model>` picks the next

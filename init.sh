@@ -355,7 +355,7 @@ sync_agent_toml_key() {
 }
 
 # Codex locks role-toml `model` / `model_reasoning_effort` over spawn_agent overrides.
-# Worker roles must omit those keys so `$routing` spawn overrides can apply.
+# All Codex roles omit those keys so `$routing` from goal-models.json applies at spawn.
 remove_agent_toml_key() {
   local file="$1"
   local key="$2"
@@ -376,8 +376,18 @@ sync_codex_config_defaults() {
   command -v jq >/dev/null 2>&1 || return 0
 
   local model effort
-  model="$(jq -r '.orchestrator.model // empty' "$models_file")"
-  effort="$(jq -r '.orchestrator.model_reasoning_effort // "medium"' "$models_file")"
+  model="$(jq -r '
+    .["$routing"].orchestrator.NORMAL.model
+    // .["$routing"].orchestrator.TRIVIAL.model
+    // .orchestrator.model
+    // empty
+  ' "$models_file")"
+  effort="$(jq -r '
+    .["$routing"].orchestrator.NORMAL.model_reasoning_effort
+    // .["$routing"].orchestrator.TRIVIAL.model_reasoning_effort
+    // .orchestrator.model_reasoning_effort
+    // "medium"
+  ' "$models_file")"
   [ -n "$model" ] || return 0
 
   if grep -qE '^default_subagent_model = ' "$config_toml"; then
@@ -453,16 +463,10 @@ sync_agent_models() {
         continue
       fi
       [ -n "$sandbox" ] && sync_agent_toml_key "$agent_file" sandbox_mode "$sandbox"
-      if [ "$agent_name" = "orchestrator" ]; then
-        # Pin orchestrator from JSON; workers omit model so spawn_agent $routing wins.
-        [ -n "$effort" ] && sync_agent_toml_key "$agent_file" model_reasoning_effort "$effort"
-        [ -n "$model" ] && sync_agent_toml_key "$agent_file" model "$model"
-        log "Synced model for $name agent: $agent_name → $model ($effort)"
-      else
-        remove_agent_toml_key "$agent_file" model
-        remove_agent_toml_key "$agent_file" model_reasoning_effort
-        log "Synced $name agent $agent_name (model unpinned — spawn_agent supplies routing)"
-      fi
+      # Never pin model on Codex role tomls — spawn_agent + goal-models.json `$routing` own it.
+      remove_agent_toml_key "$agent_file" model
+      remove_agent_toml_key "$agent_file" model_reasoning_effort
+      log "Synced $name agent $agent_name (model unpinned — spawn_agent supplies routing)"
     done
     sync_codex_config_defaults "$dest"
   elif [ "$name" = "qoder" ]; then

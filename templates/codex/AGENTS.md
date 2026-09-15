@@ -48,8 +48,10 @@ If a skill is absent, the agent proceeds normally. Re-run `/init-skills` with
 
 **Delegation:** `$goal` runs on MAIN (thin). After setup, MAIN spawns **one**
 `@orchestrator` and waits. `.codex/config.toml` `[agents] max_depth` must be **3**
-so the orchestrator (depth 1) still has `spawn_agent` for workers (depth 2).
-MAIN never spawns `@planner` / `@builder` / `@reviewer` / `@qa`.
+**and the project must be trusted** (`/status` shows effective `max_depth = 3`).
+Without trust Codex ignores project config (default `max_depth = 1`): MAIN can
+spawn the orchestrator, then V1 hides `spawn_agent` on that child. MAIN never
+spawns `@planner` / `@builder` / `@reviewer` / `@qa`.
 
 Continue parsing (no quotes): first token is checked against existing goals via
 `goal-git.sh list` — if it matches, that token is the goal id and the rest is
@@ -76,9 +78,9 @@ Goal source (configured via `/init-goal`):
 
 **Model catalog:** `.codex/goal-models.json` is the **only** place model IDs live
 (`$routing` by complexity + role defaults + `$capabilities.vision_models`).
-Edit that file per project to customize; do not hardcode models in AGENTS.md.
-`init.sh` pins only `orchestrator.toml` from JSON (Codex locks role-toml `model`
-over `spawn_agent`). Workers omit `model` so spawn-time routing applies.
+Edit that file per project to customize; do not hardcode models in AGENTS.md
+or agent `.toml` files. Role tomls omit `model` so `spawn_agent` `$routing`
+applies (Codex would lock a toml pin over the spawn override).
 
 | Agent | Multimodal | Input modalities |
 |---|---|---|
@@ -216,9 +218,9 @@ app can start.
 ### Model routing
 Codex does not use the OpenCode fallback plugin. Catalog = `.codex/goal-models.json`.
 
-1. **Durable** — `init.sh` pins **only** `orchestrator.toml` `model` /
-   `model_reasoning_effort` from JSON. Worker roles **omit** those keys — Codex
-   **locks** a role-toml `model` over `spawn_agent` overrides.
+1. **Durable** — `init.sh` **strips** `model` / `model_reasoning_effort` from
+   every Codex role `.toml` (including orchestrator). Codex **locks** a
+   role-toml `model` over `spawn_agent` overrides, so pins would ignore JSON.
 2. **Spawn-time (authoritative)** — resolve
    `models <role> --complexity <LEVEL>` (reads `$routing`) and pass
    `model` + `reasoning_effort` to `harness spawn` and `spawn_agent`.

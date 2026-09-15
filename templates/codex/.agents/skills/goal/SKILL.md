@@ -27,7 +27,13 @@ User → MAIN ($goal) → @orchestrator → workers
 
 ```bash
 LEVEL=$(.codex/scripts/goal-git.sh complexity classify "<goal or issue text>" | jq -r .complexity)
-read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models orchestrator --complexity "$LEVEL")"
+if ! read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models orchestrator --complexity "$LEVEL")"; then
+  # Failed lookup is a catalog/script problem — NOT max_depth / spawn capability.
+  STOP. Show the command error. Tell the user to copy the latest
+  `.codex/scripts/goal-git.sh` (or re-run `./init.sh --codex`) so `models`
+  accepts `$routing.orchestrator`. Do **not** ask for `/status` or a new
+  session for this error.
+fi
 # TAB from models: model · reasoning_effort · fallbacks (from .codex/goal-models.json)
 ```
 
@@ -49,9 +55,27 @@ spawn_agent({
 })
 ```
 
-`.codex/config.toml` must have `[agents] max_depth = 3`. Otherwise Codex V1 hides
-`spawn_agent` on the orchestrator and the loop dies. **Do not spawn workers
-yourself** — fix config, new session, `$goal --continue`, spawn `@orchestrator` only.
+If `models orchestrator --complexity` prints `Unknown role`:
+the project's `goal-git.sh` is stale (it only treats **top-level** JSON keys as
+roles, and ignores `$routing.orchestrator`). Copy
+`templates/codex/.codex/scripts/goal-git.sh` into the project (or
+`./init.sh --codex`), then `$goal --continue`. **Do not** treat this as
+`max_depth` / `/status`.
+
+`.codex/config.toml` must have `[agents] max_depth = 3` **and the project must be
+trusted** so Codex loads that file. Untrusted projects keep the default
+`max_depth = 1`: MAIN can spawn `@orchestrator`, then Codex V1 **hides**
+`spawn_agent` on that child. **Do not spawn workers yourself.**
+
+If `@orchestrator` returns `SPAWN_CAPABILITY_MISSING`:
+1. `grep -n max_depth .codex/config.toml` — if it is already `3`, do **not**
+   edit the file and do **not** say “start a new session” as the only fix.
+   That is the stuck loop.
+2. STOP. Tell the user to run `/status` in this Codex session and confirm
+   **effective** `agents.max_depth` is 3. If it is not 3, **trust this
+   project** (approve project config when Codex prompts), then a **new**
+   session, then `$goal --continue`.
+3. Spawn `@orchestrator` only after they confirm `/status` shows 3.
 
 Model IDs come only from `.codex/goal-models.json` — never hardcode them in this skill.
 

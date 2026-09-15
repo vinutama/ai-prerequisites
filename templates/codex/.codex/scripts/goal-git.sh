@@ -1957,8 +1957,9 @@ cmd_models() {
     return 0
   fi
 
-  if ! jq -e --arg role "$role" 'has($role)' "$models_file" >/dev/null; then
-    err "Unknown role: $role"
+  if ! jq -e --arg role "$role" --arg rk '$routing' \
+      'has($role) or ((.[$rk] // {}) | has($role))' "$models_file" >/dev/null; then
+    err "Unknown role: $role (add \$routing.$role or a top-level \"$role\" object in goal-models.json)"
     exit 1
   fi
 
@@ -1970,26 +1971,31 @@ cmd_models() {
     esac
     # TRIVIAL + planner → skip (null routing)
     local routed
-    routed="$(jq -c --arg role "$role" --arg level "$level" '
-      ."$routing"[$role][$level] // empty
+    routed="$(jq -c --arg role "$role" --arg level "$level" --arg rk '$routing' '
+      .[$rk][$role][$level] // empty
     ' "$models_file" 2>/dev/null || true)"
     if [ -z "$routed" ] || [ "$routed" = "null" ]; then
       if [ "$role" = "planner" ] && [ "$level" = "TRIVIAL" ]; then
         err "Planner skipped for TRIVIAL complexity (no model)"
         exit 2
       fi
-      # Fall through to role default
-      jq -r --arg role "$role" '
+      local fallback
+      fallback="$(jq -r --arg role "$role" '
         .[$role] as $r
-        | [($r.model // "inherit"), ($r.model_reasoning_effort // $r.effort // "medium"), (($r.fallback_models // []) | join(","))]
+        | [($r.model // empty), ($r.model_reasoning_effort // $r.effort // "medium"), (($r.fallback_models // []) | join(","))]
         | @tsv
-      ' "$models_file"
+      ' "$models_file")"
+      if [ -z "${fallback%%	*}" ]; then
+        err "No model for role '$role' at $level — set \$routing.$role.$level (or top-level $role.model) in goal-models.json"
+        exit 1
+      fi
+      printf '%s\n' "$fallback"
       return 0
     fi
     jq -r --argjson r "$routed" --arg role "$role" '
       .[$role] as $def
       | [
-          ($r.model // $def.model // "inherit"),
+          ($r.model // $def.model // empty),
           ($r.model_reasoning_effort // $def.model_reasoning_effort // "medium"),
           (($def.fallback_models // []) | join(","))
         ]
