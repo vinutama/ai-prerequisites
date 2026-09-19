@@ -40,7 +40,11 @@ fi
 Spawn `@orchestrator` once with that `model` + `reasoning_effort`. Pass a short brief:
 
 * mode: `single` | `continue` | `issue` | `issue-queue`
+* `goal_source` (`prompt` | `markdown` | `jira` | `issues`)
 * active goal text (and continuation instruction if any)
+* when `markdown`: the `.md` **path** — orchestrator must still spawn `@planner`
+  unless classify printed `planner_required=false`. The file is draft input,
+  not a skip.
 * multi-repo: yes/no (from `state.json` `repos`)
 * for issues: `GOAL_RUN_ID`, issue number(s), queue vs single
 * complexity: `$LEVEL`
@@ -144,5 +148,5 @@ Parse remainder after `--continue`:
      GOAL_SOURCE_OVERRIDE=<effective_source> .codex/scripts/goal-git.sh start "<goal>" "<ticket>" "<task_type>"
      ```
 3. For `prompt` / `markdown`: `GOAL_SOURCE_OVERRIDE=… .codex/scripts/goal-git.sh start "<resolved goal>"`.
-4. **Handoff** mode `single` (orchestrator classifies, plans, builds, verifies, reviews, QA/Visual, DONE).
+4. **Handoff** mode `single` (orchestrator classifies, **plans**, builds, verifies, reviews, QA/Visual, DONE). Markdown does **not** skip `@planner`.
 5. Report the final PR URL(s).

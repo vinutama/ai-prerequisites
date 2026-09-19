@@ -531,10 +531,16 @@ You (Orchestrator) own **all** worker spawns from here on. MAIN must not spawn
 Before any expensive Planner spawn:
 
 ```bash
-.codex/scripts/goal-git.sh complexity classify "<goal or issue text>"
+.codex/scripts/goal-git.sh complexity classify "<short goal title or first heading — not a full markdown spec>"
 ```
 
-Record `complexity`, `planner_required`, `reviewer_required`.
+Record `complexity`, `planner_required`, `reviewer_required` **from that JSON**.
+Honor them. Do not invent a skip.
+
+A markdown file, `.codex/plan/*.md`, or "the plan already exists" is **goal
+input**, not planner output. Never set `--planner-required false` unless
+classify printed `"planner_required": false` (TRIVIAL). `goal_source=markdown`
+does not skip `@planner`.
 
 Optionally seed/read `.codex/repo-context.json` if present (stable project facts only).
 
@@ -544,7 +550,7 @@ Optionally seed/read `.codex/repo-context.json` if present (stable project facts
 
 ==================================================
 
-If `planner_required=false` (typically TRIVIAL):
+If classify printed `"planner_required": false` (typically TRIVIAL only):
 
 * Do NOT spawn Planner.
 * Initialize harness with complexity flags and skip PLAN:
@@ -595,6 +601,8 @@ Spawn `@planner` once with the resolved model/effort from `$routing`.
 Pass:
 
 * active goal
+* `goal_source` (`prompt` | `markdown` | `jira` | `issues`)
+* when `markdown`: the **path** to the `.md` (draft spec to **replan**, not a finished plan)
 * continuation instruction when applicable
 * repo-context if available (NOT full transcript)
 * queue/issue mode when applicable
@@ -626,7 +634,7 @@ metrics/events; always put context after the final init):
   --planner-required true \
   --reviewer-required true
 .codex/scripts/goal-git.sh harness context put discovery_context -
-# paste discovery_context JSON on stdin (REQUIRED — PLAN/IMPLEMENTATION PASS will reject without it)
+# paste Planner discovery_context JSON on stdin only — never raw markdown
 .codex/scripts/goal-git.sh harness gate PLAN PASS
 ```
 
@@ -821,22 +829,26 @@ judgment alone.
 
 ==================================================
 
-Builder Expert is escalation-only.
+Builder Expert is escalation-only. **Never the first implementer for a task.**
 
-Possible escalation triggers:
+Do **not** wait for Builder to say BLOCKED / ESCALATE — cheap builders almost
+never do. Primary evidence is harness + verify + review:
 
-* Builder returns BLOCKED
-* Builder explicitly returns ESCALATE
-* repeated Builder failure
-* high-risk area from Planner becomes active and Builder cannot proceed
-* Reviewer finds a serious architectural defect
-* unresolved concurrency issue
-* unresolved transaction/data-consistency issue
-* unresolved Redis/cache consistency issue
-* unresolved messaging/distributed-systems issue
-* security-sensitive issue
-* difficult performance issue
-* repeated verification failure that indicates an architectural problem
+1. `@builder` has already spawned for that task (metrics / task history).
+2. Then **either**:
+   * `verify run` is FAIL after that builder (not UNKNOWN, not missing
+     binary / env / lock / network), **or**
+   * `@reviewer` records a serious architectural defect after implementation.
+
+Optional extras (use if present, do not require): Builder `BLOCKED` / `FAILED`
+via `harness task set`, or `next_action: ESCALATE` in the handoff.
+
+Planner `high_risk_areas`, COMPLEX/ARCHITECTURAL, or words like auth / Redis /
+Kafka / concurrency / security / performance are **not** triggers.
+
+Do not skip `@builder` because the domain looks hard. `$routing` already
+upgrades `@builder`'s model by complexity. Do not treat `FIXES_COMPLETE` +
+failed `verify run` as success.
 
 Before escalation:
 
@@ -930,15 +942,19 @@ Never infer PASS from:
 * successful compilation mentioned in text
 * previous verification runs
 
-If verification FAILS:
+If verification FAILS (and it is a real test/build failure, not UNKNOWN /
+missing tooling):
+
+* `@builder` already ran for this work → **PHASE E** (`@builder-expert`) if
+  escalation budget remains. Do not wait for a BLOCKED handoff.
+* Expert already ran or escalation budget exhausted → `harness retry verify_retries`
+  and **REWORK** `@builder` (PHASE D). After that builder: BUILDING (if still
+  REWORK) → VERIFYING → `verify run` again.
 
 ```bash
 .codex/scripts/goal-git.sh harness retry verify_retries
 .codex/scripts/goal-git.sh harness phase REWORK
 ```
-
-Delegate the fix to Builder using the **REWORK** spawn recipe (PHASE D: REWORK → BUILDING → spawn).
-After that builder returns DONE: BUILDING (if still REWORK) → VERIFYING → `verify run` again.
 
 If verification retry budget is exhausted:
 

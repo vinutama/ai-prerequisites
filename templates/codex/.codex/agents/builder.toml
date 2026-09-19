@@ -300,7 +300,9 @@ Do not create a PR.
 6. BLOCKERS / ESCALATION
 ========================
 
-Builder does not spawn Builder Expert.
+Builder does not spawn Builder Expert. Orchestrator escalates from **`verify run`
+FAIL** or a reviewer architectural defect — not from this prose. Still call
+`harness task set` so the harness has a real state.
 
 When blocked, do not guess.
 
@@ -368,7 +370,18 @@ The Builder may use:
 * `status`
 * `stage`
 * `restore`
+* `harness task set <id> DONE|BLOCKED|FAILED` for **this** task only
 * other explicitly permitted non-commit operations required by the harness
+
+Before the Handoff, you MUST record the task:
+
+```bash
+.codex/scripts/goal-git.sh harness task set <id> DONE      # implementation finished, staged
+.codex/scripts/goal-git.sh harness task set <id> BLOCKED   # cannot finish confidently
+.codex/scripts/goal-git.sh harness task set <id> FAILED    # hard failure
+```
+
+Use the task id from the Orchestrator brief. Do not skip this.
 
 The Builder must NEVER:
 
@@ -378,7 +391,8 @@ The Builder must NEVER:
 * merge
 * resolve review threads
 * post review comments
-* manipulate harness phase/gates unless explicitly delegated by the harness
+* change harness phase or gates
+* spawn Builder Expert (Orchestrator escalates from `verify run` / review)
 
 ==================================================
 9. HANDOFF

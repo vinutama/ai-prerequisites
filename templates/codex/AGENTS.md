@@ -60,7 +60,7 @@ active goal.
 
 Goal source (configured via `/init-goal`):
 - `prompt` — free-text objective (e.g. `/goal Add health check endpoint`); branch `goal/<slug>`
-- `markdown` — reads a `.md` file as the goal (`/goal` uses `markdown_path` from config; `/goal docs/other.md` overrides); branch `goal/<slug>`
+- `markdown` — reads a `.md` file as the **goal draft** (`/goal` uses `markdown_path` from config; `/goal docs/other.md` overrides); branch `goal/<slug>`. `@planner` still runs unless classify is TRIVIAL.
 - `jira` — fetches a Jira ticket as the goal (`/goal` uses `jira_ticket` from config; `/goal OTHER-123` or `/goal bugfix DEL-4123` overrides) — requires Atlassian MCP; branch `{task_type}/{TICKET}-{slug}` (e.g. `feat/DEL-4123-add-health-check`)
 - `issues` — fetches open issues from a GitHub/GitLab issue list URL (`/goal --issues [url] [count]` or bare `/goal` when configured); **one branch + one PR per issue**; branch `{task_type}/{number}-{slug}`; planner orders by dependency and batches concurrent work (single-repo only; multi-repo processes one issue at a time)
 
@@ -236,9 +236,10 @@ re-spawn. For multimodal roles, `--next` only returns models in
 ### Delegation
 The planner tags every implementation task `@builder` and emits routing signals
 (`route`, `research_required`, `qa_required`, `visual_required`, `high_risk_areas`).
-`@builder-expert` is escalation-only — orchestrator spawns it when Builder is
-blocked, fails repeatedly, or a high-risk area needs deep reasoning — never as
-a default parallel worker.
+`@builder-expert` is escalation-only — **after** `@builder` has attempted the
+task **and** `verify run` FAILs (or reviewer records a serious architectural
+defect). Do not wait for Builder to say BLOCKED. Domain labels and
+`high_risk_areas` are not enough. Never a default or first implementer.
 
 `@researcher` and `@qa` are on-demand / conditional. Verification is deterministic
 via `goal-git.sh verify run` (not an LLM claim).

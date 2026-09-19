@@ -2334,6 +2334,10 @@ cmd_harness_init() {
       *) err "--planner-required must be true or false"; exit 1 ;;
     esac
   fi
+  if [ "$complexity" != "TRIVIAL" ] && [ "$planner_req" = false ]; then
+    err "harness init: --planner-required false is only allowed when --complexity TRIVIAL (got $complexity). Honor classify and spawn @planner. A markdown/plan file is planner input, not a skip."
+    exit 1
+  fi
   if [ -n "$reviewer_flag" ]; then
     case "$reviewer_flag" in
       true|false) reviewer_req="$reviewer_flag" ;;

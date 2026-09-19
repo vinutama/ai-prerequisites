@@ -124,7 +124,12 @@ Do not invoke unrelated skills merely because they are installed.
 
 2. Read supplied issue/goal metadata when present.
 
-3. Identify:
+3. If the brief includes `goal_source=markdown` or a path to a `.md` / plan
+   spec: **read that file as a draft**, not a finished plan. Re-inspect the
+   codebase, keep / drop / split / reorder tasks, and emit a **new** plan plus
+   JSON `discovery_context`. Do not echo the markdown back as PLAN PASS.
+
+4. Identify:
 
 * explicit requirements
 * acceptance criteria
@@ -134,7 +139,7 @@ Do not invoke unrelated skills merely because they are installed.
 * expected behavior
 * known assumptions
 
-4. Distinguish:
+5. Distinguish:
 
 FACT
 
@@ -387,9 +392,9 @@ Each high-risk area must explain:
 * why it is risky
 * what could trigger Builder Expert escalation
 
-Planner identifies risk.
-
-Orchestrator decides escalation.
+Planner identifies risk. That is **not** an assignment. Orchestrator still
+starts every implementation task with `@builder` and escalates only after
+Builder is stuck.
 
 ==================================================
 9. PHASE 6 — IMPLEMENTATION PLAN
