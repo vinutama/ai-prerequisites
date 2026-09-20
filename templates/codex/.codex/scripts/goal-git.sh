@@ -47,7 +47,7 @@ Commands:
   harness phase <STATE>     Transition harness phase (validated)
   harness task add <role> <title> [--parent tN]
   harness task set <id> <state>
-                            state: PENDING|RUNNING|DONE|BLOCKED|FAILED
+                            state: PENDING|SPAWNING|RUNNING|DONE|BLOCKED|FAILED
   harness gate <NAME> <STATUS> [reason]
                             Evidence-backed PASS for IMPLEMENTATION/VERIFICATION/REVIEW/QA/VISUAL
   harness retry <counter>   Increment retry counter (exit 1 if limit exceeded)
@@ -106,7 +106,7 @@ Commands:
   review list [repo_path]       List local findings as JSON
   review resolve <id> [repo_path]  Mark local finding resolved
   review pending [repo_path]    Check unresolved local findings (exit 0 = clean)
-  review iterate [repo_path]      Increment review iteration (exit 1 if cap exceeded)
+  review iterate [repo_path]      Increment review iteration counter (no cap; loop until clean)
 EOF
   exit 1
 }
@@ -912,9 +912,24 @@ cmd_analyze() {
   wd="$(goal_workdir)"
   cd "$wd" || { err "Cannot cd into goal workdir: $wd"; exit 1; }
   log "Running gitnexus analyze…"
-  npx --yes gitnexus@latest analyze || { err "gitnexus analyze failed"; exit 1; }
+  if ! npx --yes gitnexus@latest analyze; then
+    if [ -f "$STATE_FILE" ] && jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness' "$STATE_FILE" >/dev/null 2>&1; then
+      cmd_harness_gate ANALYSIS FAIL "gitnexus analyze failed" || true
+    fi
+    err "gitnexus analyze failed"
+    exit 1
+  fi
   log "Running rtk gain…"
-  rtk gain || { err "rtk gain failed"; exit 1; }
+  if ! rtk gain; then
+    if [ -f "$STATE_FILE" ] && jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness' "$STATE_FILE" >/dev/null 2>&1; then
+      cmd_harness_gate ANALYSIS FAIL "rtk gain failed" || true
+    fi
+    err "rtk gain failed"
+    exit 1
+  fi
+  if [ -f "$STATE_FILE" ] && jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness' "$STATE_FILE" >/dev/null 2>&1; then
+    HARNESS_GATE_SOURCE=analyze cmd_harness_gate ANALYSIS PASS
+  fi
   log "Analyze complete"
 }
 
@@ -1093,7 +1108,7 @@ cmd_figma_status() {
 
 cmd_config_set() {
   require_cmd jq
-  local source="${1:-}" target="${2:-}" plat="${3:-}" concurrency="${4:-1}" auto_merge="${5:-false}" review_mode="${6:-inline}" review_max_iterations="${7:-2}"
+  local source="${1:-}" target="${2:-}" plat="${3:-}" concurrency="${4:-1}" auto_merge="${5:-false}" review_mode="${6:-inline}" review_max_iterations="${7:-0}"
   local max_rework="${8:-3}" max_escalations="${9:-2}" max_verify_retries="${10:-3}" qa_mode="${11:-auto}" visual_mode="${12:-auto}"
 
   [ -z "$source" ] || [ -z "$target" ] || [ -z "$plat" ] && {
@@ -1126,8 +1141,8 @@ cmd_config_set() {
     *) err "review_mode must be: inline or local"; exit 1 ;;
   esac
 
-  if ! [[ "$review_max_iterations" =~ ^[0-9]+$ ]] || [ "$review_max_iterations" -lt 1 ]; then
-    err "review_max_iterations must be a positive integer"
+  if ! [[ "$review_max_iterations" =~ ^[0-9]+$ ]]; then
+    err "review_max_iterations must be a non-negative integer (0 = unlimited, loop until pending is clean)"
     exit 1
   fi
 
@@ -1738,7 +1753,7 @@ cmd_review_init() {
   local branch max_iter rf
   branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch' "$STATE_FILE")
   local max_iter="$(config_read review_max_iterations)"
-  [ -z "$max_iter" ] || [ "$max_iter" = "null" ] && max_iter="2"
+  [ -z "$max_iter" ] || [ "$max_iter" = "null" ] && max_iter="0"
   mkdir -p "$REVIEW_DIR"
   rf="$(review_file_path "$repo_path")"
   jq -n \
@@ -1833,17 +1848,14 @@ cmd_review_iterate() {
   require_cmd jq
   refresh_goal_idx
   local repo_path="${1:-}"
-  local rf iterations max_iter
+  local rf iterations
   rf="$(review_require_file "$repo_path")"
   iterations=$(jq -r '.iterations // 0' "$rf")
-  max_iter=$(jq -r '.max_iterations // 5' "$rf")
   iterations=$((iterations + 1))
-  jq --argjson n "$iterations" '.iterations = $n' "$rf" > "$rf.tmp" && mv "$rf.tmp" "$rf"
-  log "Review iteration $iterations / $max_iter"
-  if [ "$iterations" -gt "$max_iter" ]; then
-    err "Review iteration cap exceeded ($max_iter)"
-    exit 1
-  fi
+  jq --argjson n "$iterations" \
+    '.iterations = $n | .max_iterations = 0' \
+    "$rf" > "$rf.tmp" && mv "$rf.tmp" "$rf"
+  log "Review iteration $iterations — continue until review pending is clean (no cap)"
 }
 
 models_vision_list() {
@@ -2246,6 +2258,47 @@ harness_phase_allowed() {
   esac
 }
 
+# A verification pass closes the implementation queue for this iteration.
+# Do not let a late task registration turn a successful verification into an
+# illegal VERIFYING -> BUILDING transition.
+harness_tasks_reconciled() {
+  local incomplete
+  incomplete="$(jq -r --argjson idx "$GOAL_IDX" '
+    .[$idx].harness.tasks
+    | map(select(.state != "DONE"))
+    | map("\(.id)=\(.state)")
+    | join(", ")
+  ' "$STATE_FILE")"
+  if [ -n "$incomplete" ]; then
+    err "VERIFYING rejected — task queue is not reconciled: $incomplete"
+    err "Finish or explicitly fail/block the tasks, then start a new REWORK -> BUILDING iteration before verification."
+    return 1
+  fi
+  return 0
+}
+
+harness_phase_allows_task_add() {
+  local role="$1" phase="$2"
+  case "$role:$phase" in
+    builder:BUILDING|builder-expert:BUILDING) return 0 ;;
+    *)
+      err "Task registration rejected — role '$role' may not be added during $phase. Create work only in BUILDING; VERIFYING is frozen."
+      return 1
+      ;;
+  esac
+}
+
+harness_phase_allows_spawn() {
+  local role="$1" phase="$2"
+  case "$role:$phase" in
+    planner:PLANNED|researcher:RESEARCHING|builder:BUILDING|builder-expert:BUILDING|reviewer:REVIEWING|qa:QA|visual-reviewer:VISUAL_REVIEW) return 0 ;;
+    *)
+      err "Spawn rejected — role '$role' may not be spawned during $phase. VERIFYING is a no-spawn barrier; use REWORK -> BUILDING for a new iteration."
+      return 1
+      ;;
+  esac
+}
+
 cmd_harness_init() {
   require_active_goal
   require_cmd jq
@@ -2417,6 +2470,7 @@ cmd_harness_init() {
       gates: {
         PLAN: {status: "NOT_RUN"},
         IMPLEMENTATION: {status: "NOT_RUN"},
+        ANALYSIS: {status: "NOT_RUN"},
         VERIFICATION: {status: "NOT_RUN"},
         REVIEW: {status: "NOT_RUN"},
         QA: {status: "NOT_RUN"},
@@ -2486,6 +2540,15 @@ cmd_harness_phase() {
     exit 1
   fi
 
+  if [ "$to" = "VERIFYING" ]; then
+    harness_tasks_reconciled || exit 1
+    if ! jq -e --argjson idx "$GOAL_IDX" \
+      '.[$idx].harness.gates.ANALYSIS.status == "PASS"' "$STATE_FILE" >/dev/null; then
+      err "VERIFYING rejected — ANALYSIS is not PASS. Run 'goal-git.sh analyze' once after the reconciled implementation batch."
+      exit 1
+    fi
+  fi
+
   state_mutate --argjson idx "$GOAL_IDX" --arg to "$to" \
     '.[$idx].harness.phase = $to'
   harness_event "harness" "phase" "$from -> $to"
@@ -2504,6 +2567,10 @@ cmd_harness_task_add() {
   done
 
   [ -z "$role" ] || [ -z "$title" ] && { err "harness task add requires <role> <title>"; exit 1; }
+
+  local phase
+  phase="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.phase' "$STATE_FILE")"
+  harness_phase_allows_task_add "$role" "$phase" || exit 1
 
   local id
   id="$(jq -r --argjson idx "$GOAL_IDX" '
@@ -2526,7 +2593,8 @@ cmd_harness_task_add() {
       title: $title,
       state: "PENDING",
       attempts: 0
-    }]'
+    }]
+    | .[$idx].harness.gates.ANALYSIS = {status:"NOT_RUN",reason:"new implementation task registered"}'
 
   harness_event "harness" "task_add" "$id role=$role"
   printf '%s\n' "$id"
@@ -2538,8 +2606,8 @@ cmd_harness_task_set() {
   [ -z "$id" ] || [ -z "$state" ] && { err "harness task set requires <id> <state>"; exit 1; }
 
   case "$state" in
-    PENDING|RUNNING|DONE|BLOCKED|FAILED) ;;
-    *) err "Task state must be: PENDING, RUNNING, DONE, BLOCKED, or FAILED"; exit 1 ;;
+    PENDING|SPAWNING|RUNNING|DONE|BLOCKED|FAILED) ;;
+    *) err "Task state must be: PENDING, SPAWNING, RUNNING, DONE, BLOCKED, or FAILED"; exit 1 ;;
   esac
 
   if ! jq -e --argjson idx "$GOAL_IDX" --arg id "$id" \
@@ -2697,7 +2765,7 @@ cmd_harness_gate() {
   [ -z "$name" ] || [ -z "$status" ] && { err "harness gate requires <NAME> <STATUS> [reason]"; exit 1; }
 
   case "$name" in
-    PLAN|IMPLEMENTATION|VERIFICATION|REVIEW|QA|VISUAL) ;;
+    PLAN|IMPLEMENTATION|ANALYSIS|VERIFICATION|REVIEW|QA|VISUAL) ;;
     *) err "Unknown gate: $name"; exit 1 ;;
   esac
 
@@ -2719,6 +2787,12 @@ cmd_harness_gate() {
       IMPLEMENTATION)
         harness_impl_tasks_ready || exit 1
         harness_discovery_context_ok || exit 1
+        ;;
+      ANALYSIS)
+        if [ "${HARNESS_GATE_SOURCE:-}" != "analyze" ]; then
+          err "ANALYSIS PASS may only be set by 'analyze' (gitnexus analyze + rtk gain), not manually"
+          exit 1
+        fi
         ;;
       VERIFICATION)
         if [ "${HARNESS_GATE_SOURCE:-}" != "verify" ]; then
@@ -2775,8 +2849,26 @@ cmd_harness_retry() {
   harness_event "harness" "retry" "$field=$next (limit=$limit)"
 
   if [ "$next" -gt "$limit" ]; then
-    err "Retry limit exceeded for $field: $next > $limit"
-    exit 1
+    local phase
+    phase="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.phase' "$STATE_FILE")"
+    if [ "$field" = "rework" ]; then
+      case "$phase" in
+        REVIEWING|REWORK|QA|VISUAL_REVIEW)
+          state_mutate --argjson idx "$GOAL_IDX" --argjson n "$next" \
+            '.[$idx].harness.limits.max_rework = $n'
+          harness_event "harness" "limit_set" "max_rework=$next (review loop until clean)"
+          log "Raised max_rework $limit -> $next (review continues until no unresolved findings)"
+          limit="$next"
+          ;;
+        *)
+          err "Retry limit exceeded for $field: $next > $limit"
+          exit 1
+          ;;
+      esac
+    else
+      err "Retry limit exceeded for $field: $next > $limit"
+      exit 1
+    fi
   fi
 
   log "Retry $field: $next / $limit"
@@ -3048,7 +3140,7 @@ cmd_harness_done() {
   required="$(jq -c --argjson idx "$GOAL_IDX" '
     .[$idx].harness.requirements as $r
     | (if ($r.planner == false) then [] else ["PLAN"] end)
-      + ["IMPLEMENTATION","VERIFICATION"]
+      + ["IMPLEMENTATION","ANALYSIS","VERIFICATION"]
       + (if ($r.reviewer == false) then [] else ["REVIEW"] end)
       + (if ($r.qa == true) then ["QA"] else [] end)
       + (if ($r.visual == true) then ["VISUAL"] else [] end)
@@ -3092,12 +3184,57 @@ cmd_harness_done() {
   harness_get
 }
 
+harness_budget_grow() {
+  local key="$1"
+  local min_val="$2"
+  local cur
+  cur="$(jq -r --argjson idx "$GOAL_IDX" --arg k "$key" '.[$idx].harness.budget[$k] // 0' "$STATE_FILE")"
+  if [ "$cur" -lt "$min_val" ]; then
+    state_mutate --argjson idx "$GOAL_IDX" --arg k "$key" --argjson v "$min_val" \
+      '.[$idx].harness.budget[$k] = $v'
+    harness_event "harness" "budget_set" "$key=$min_val (review loop until clean)"
+    log "Raised $key $cur -> $min_val (review continues until no unresolved findings)"
+  fi
+}
+
+# Reviewer must keep spawning until pending/threads are clean. Grow the
+# reviewer + total spawn caps instead of stopping with findings still open.
+harness_ensure_review_loop_spawn_room() {
+  local role="$1"
+  case "$role" in
+    reviewer|builder) ;;
+    *) return 0 ;;
+  esac
+
+  local total max_total reserved need
+  total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics.agent_spawns // 0' "$STATE_FILE")"
+  max_total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.budget.max_total_spawns // 10' "$STATE_FILE")"
+  reserved="$(harness_spawn_reserved_remaining "$role")"
+  need=$((total + 1 + reserved))
+  if [ "$need" -gt "$max_total" ]; then
+    harness_budget_grow "max_total_spawns" "$need"
+  fi
+
+  if [ "$role" = "reviewer" ]; then
+    local runs max_runs
+    runs="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics.reviewer_runs // 0' "$STATE_FILE")"
+    max_runs="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.budget.max_reviewer_runs // 0' "$STATE_FILE")"
+    if [ "$runs" -ge "$max_runs" ]; then
+      harness_budget_grow "max_reviewer_runs" "$((runs + 1))"
+    fi
+  fi
+}
+
 cmd_harness_spawn() {
   harness_require
   local role="${1:-}"
   local model="${2:-}"
   local effort="${3:-}"
   [ -z "$role" ] && { err "harness spawn requires <role> [model [effort]]"; exit 1; }
+
+  local phase
+  phase="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.phase' "$STATE_FILE")"
+  harness_phase_allows_spawn "$role" "$phase" || exit 1
 
   local metric_field budget_field
   case "$role" in
@@ -3118,6 +3255,8 @@ cmd_harness_spawn() {
     err "Example: harness spawn planner \"\$(models planner --complexity COMPLEX | cut -f1)\" high"
     exit 1
   fi
+
+  harness_ensure_review_loop_spawn_room "$role"
 
   local total max_total reserved
   total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics.agent_spawns // 0' "$STATE_FILE")"

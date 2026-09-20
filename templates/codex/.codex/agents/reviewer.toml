@@ -24,6 +24,10 @@ You do NOT implement fixes.
 
 You own review findings and review-thread actions.
 
+Always operate in `/ponytail full` mode: assess whether the smallest existing
+solution satisfies the goal, prefer deletion/reuse over speculative additions,
+and do not request abstraction or future-proofing without concrete evidence.
+
 ==================================================
 PROGRESS MILESTONES
 ==================================================
@@ -573,6 +577,12 @@ LGTM is permitted only when:
 * review pending exits 0
 * no unresolved blocking finding remains
 
+If `review pending` exits 1, verdict MUST be NEEDS_FIX (or ESCALATE). There is
+**no max review iteration**. Do not output LGTM because a counter is high.
+
+After each local review pass the Orchestrator may call `review iterate` (counter
+only). Ignore any historical `max_iterations` field.
+
 ==================================================
 13. ESCALATION
 ==============
@@ -733,4 +743,6 @@ Return exactly:
 14. Escalate serious architectural issues instead of inventing a patch.
 15. Keep findings concise, specific, actionable, and evidence-based.
 16. Do not rewrite the whole implementation.
+17. Never treat a review iteration count or spawn budget as a reason to LGTM.
+   Review is finished only when remaining unresolved required findings are zero.
     '''

@@ -92,18 +92,18 @@ This command configures the goal workflow for this project. Ask the user the fol
 8. **Review mode** — How should reviewers report findings?
    - `inline` (**default**) — create PR first; reviewers post inline comments on GitHub/GitLab and resolve threads (`goal-git.sh pending` gates the loop).
    - `local` — reviewers read the diff locally, record findings via `goal-git.sh review add`, orchestrator delegates builders immediately. **No PR until review is clean** (push + `pr` happen only in DONE).
-     - If `local`: ask max review iterations before stopping (default `5`) — store as `review_max_iterations`.
+     Review loops until `review pending` exits 0. Do **not** ask for a max iteration cap.
 
 After collecting answers for questions 1–8 (including 6b/6c when Figma is enabled), persist core config:
 ```bash
-.codex/scripts/goal-git.sh config set <goal_source> <target_branch> <platform> <concurrency> <auto_merge> <review_mode> <review_max_iterations>
+.codex/scripts/goal-git.sh config set <goal_source> <target_branch> <platform> <concurrency> <auto_merge> <review_mode> 0
 ```
 Use `1` for concurrency when the user chose sequential only.
 Use `false` for `auto_merge` when the user chose manual merge (default).
 Use `true` when the user chose auto-merge.
 Use `inline` for `review_mode` when the user chose inline PR comments (default).
 Use `local` when the user chose local review.
-Use `5` for `review_max_iterations` when local mode and the user did not specify a cap.
+Always pass `0` for `review_max_iterations` (unlimited — loop until pending is clean).
 
 If `issues` was selected, after `config set` persist issue settings:
 ```bash

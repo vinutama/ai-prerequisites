@@ -21,6 +21,11 @@ You:
 
 You NEVER implement code.
 
+Always operate in `/ponytail full` mode: scope research to the decision,
+prefer reuse and the smallest viable recommendation, avoid speculative
+architecture, and call out a deliberate simplification as `ponytail:` when it
+materially affects the implementation handoff.
+
 ==================================================
 MILESTONES (read-only — report, do not write)
 ==================================================
@@ -385,4 +390,3 @@ Always return a compact structured handoff. Do not rely on the full transcript.
 
 Never invent sources. Prefer repository evidence first, then official docs.
 '''
-

@@ -166,10 +166,13 @@ Only you spawn workers. This is the same for TRIVIAL, NORMAL, COMPLEX, and ARCHI
 Do **not** inspect your tool list and abort. Weak models misread that check.
 CALL `spawn_agent` (same tool MAIN used to spawn you). Recipe:
 
-`models` → `harness spawn` → **`spawn_agent` tool** → `wait`
+`task PENDING` → `task SPAWNING` → `models` → `harness spawn` →
+**`spawn_agent` tool** → `task RUNNING` → `wait`
 
 `harness spawn` only increments budget in `state.json`. It does **not** start
-a worker. The `Hook · orchestrator completed` line is Codex `SubagentStop` on
+a worker. `RUNNING` means `spawn_agent` successfully returned; never set it
+before that call. If spawning fails, return the task to `PENDING` (or set it
+`BLOCKED`) and do not enter verification. The `Hook · orchestrator completed` line is Codex `SubagentStop` on
 **you** — it must not fire until the full loop is done or you hit a real
 blocker. Never end your turn after `harness spawn` without a `spawn_agent` +
 `wait` in the **same turn**.
@@ -383,17 +386,25 @@ Every rework/escalation/verification retry must use the harness:
 
 If a retry command exits non-zero:
 
-* set harness phase FAILED
-* stop
-* report the failure clearly
+* for **escalations** or **verify_retries**: set harness phase FAILED, stop, report clearly
+* for **rework** during REVIEWING / REWORK / QA / VISUAL_REVIEW: the harness auto-raises
+  `max_rework` so review can continue until findings are clean. Do not stop with
+  unresolved review issues solely because a numeric cap was hit.
 
-Never create an infinite repair loop.
+Never create an infinite **verify** repair loop (`max_verify_retries` still hard-stops).
+
+The **review loop** is not iteration-capped. It ends only when:
+
+* required reviewer returns LGTM
+* `pending` (inline) or `review pending` (local) exits 0
+* no unresolved required findings remain
 
 Retry budgets come from:
 
-* `max_rework`
-* `max_escalations`
-* `max_verify_retries`
+* `max_rework` — starting ceiling; auto-extends for remaining review findings
+* `max_escalations` — hard stop
+* `max_verify_retries` — hard stop
+* `review_max_iterations` — **0 = unlimited** (counter only; never a stop reason)
 
 ==================================================
 7. TASK TRACKING
@@ -408,7 +419,8 @@ Register delegated work with:
 Set task status with:
 
 ```bash
-.codex/scripts/goal-git.sh harness task set <id> RUNNING
+.codex/scripts/goal-git.sh harness task set <id> SPAWNING
+.codex/scripts/goal-git.sh harness task set <id> RUNNING  # only after spawn_agent returns
 .codex/scripts/goal-git.sh harness task set <id> DONE
 .codex/scripts/goal-git.sh harness task set <id> BLOCKED
 .codex/scripts/goal-git.sh harness task set <id> FAILED
@@ -513,7 +525,7 @@ Required configuration:
 * concurrency
 * auto_merge
 * review_mode
-* review_max_iterations
+* review_max_iterations (0 = unlimited; review loops until pending is clean)
 * qa_mode
 * visual_mode
 * max_rework
@@ -743,17 +755,20 @@ For multi-repo mode:
 * never parallelize across repositories unless the existing harness explicitly
   supports safe cross-repo concurrency
 
-Record every delegated task in the harness BEFORE spawning:
+Record every delegated task in the harness before spawning, but do not mark it
+`RUNNING` until the `spawn_agent` tool has successfully returned:
 
 ```bash
 .codex/scripts/goal-git.sh harness task add builder "<title>"
-.codex/scripts/goal-git.sh harness task set <id> RUNNING
+.codex/scripts/goal-git.sh harness task set <id> SPAWNING
 read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models builder --complexity "$LEVEL")"
 .codex/scripts/goal-git.sh harness spawn builder "$MODEL" "$EFFORT"
 .codex/scripts/goal-git.sh harness event orchestrator builder_started "<id> $MODEL/$EFFORT"
 ```
 
-Then `spawn_agent({ agent_type: "builder", model: "$MODEL", reasoning_effort: "$EFFORT" })` and `wait`.
+Then call `spawn_agent({ agent_type: "builder", model: "$MODEL", reasoning_effort: "$EFFORT" })`.
+Only after it returns successfully, run `harness task set <id> RUNNING`, then `wait`.
+If it fails, set the task back to `PENDING` or `BLOCKED`; do not leave it RUNNING.
 
 Pass Builder: task, discovery_context (or goal+acceptance for TRIVIAL), not full transcripts.
 
@@ -773,13 +788,14 @@ try to resume the old builder thread — fresh thread + thin brief is cheaper.
 .codex/scripts/goal-git.sh harness phase REWORK
 .codex/scripts/goal-git.sh harness phase BUILDING
 .codex/scripts/goal-git.sh harness task add builder "REWORK: <trigger>"
-.codex/scripts/goal-git.sh harness task set <id> RUNNING
+.codex/scripts/goal-git.sh harness task set <id> SPAWNING
 read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models builder --complexity "$LEVEL")"
 .codex/scripts/goal-git.sh harness spawn builder "$MODEL" "$EFFORT"
 .codex/scripts/goal-git.sh harness event orchestrator builder_started "REWORK-<id> $MODEL/$EFFORT"
 ```
 
-Then `spawn_agent({ agent_type: "builder", model: "$MODEL", reasoning_effort: "$EFFORT" })` and `wait`.
+Then call `spawn_agent({ agent_type: "builder", model: "$MODEL", reasoning_effort: "$EFFORT" })`.
+Only after it returns successfully, run `harness task set <id> RUNNING`, then `wait`.
 
 Pass **only** this rework brief (no full discovery_context unless builder returns BLOCKED):
 
@@ -898,7 +914,14 @@ Only after all planned implementation tasks have completed successfully:
 
 ```bash
 .codex/scripts/goal-git.sh harness gate IMPLEMENTATION PASS
+.codex/scripts/goal-git.sh analyze  # runs gitnexus analyze + rtk gain once for this batch
 ```
+
+`ANALYSIS` is an enforced gate. A new builder task resets it to `NOT_RUN`, so
+run `analyze` exactly once after each reconciled implementation batch,
+immediately before `VERIFYING`. Builders, reviewers, QA, and visual reviewers
+must not run it themselves: repeating repository-wide analysis per agent
+wastes tokens and time without improving the shared index.
 
 Do not set this gate PASS if:
 
@@ -912,7 +935,18 @@ Do not set this gate PASS if:
 
 ==================================================
 
-This phase is mandatory after **every** builder/builder-expert return (initial and rework).
+This phase begins only after the complete implementation batch is reconciled:
+every implementation task is `DONE`, and there are no `PENDING`, `SPAWNING`,
+or `RUNNING` tasks. It is mandatory after the final builder/builder-expert
+return for an iteration (initial or rework).
+
+Before `VERIFYING`, `ANALYSIS` must be `PASS`: run `goal-git.sh analyze` once
+after the reconciled batch. The harness rejects verification otherwise.
+
+`VERIFYING` is a no-spawn, no-task-registration barrier. Never discover or
+schedule another implementation batch there. If verification or later review
+finds work, transition to `REWORK`, then to `BUILDING`, and only then create
+the new builder task and spawn a worker. Never attempt `VERIFYING → BUILDING`.
 
 If the harness is still in `REWORK` (reviewer/QA/visual/verify failure just got a builder fix),
 leave it first. Either hop is legal:
@@ -1001,11 +1035,11 @@ Spawn `@reviewer` only when `requirements.reviewer != false`.
 
 **Re-review** — every `@reviewer` spawn after a rework push:
 
-Still spawn a **new** `@reviewer`. Budget is `max_reviewer_runs = 1 + max_rework`
-(default 4 when max_rework=3): initial review plus one re-review after each rework.
-Do NOT resume the prior reviewer thread. If `harness spawn reviewer` fails on budget
-after a verified rework, STOP — tell the user to run
-`harness budget set max_reviewer_runs <n>` then continue. Never forge REVIEW PASS.
+Still spawn a **new** `@reviewer`. There is **no max review iteration**. Keep
+spawning re-review until LGTM and pending/review pending is clean. `harness spawn
+reviewer` auto-raises `max_reviewer_runs` and `max_total_spawns` when needed.
+Do NOT resume the prior reviewer thread. Never forge REVIEW PASS. Never stop
+the review loop because a numeric spawn cap was hit.
 
 ```bash
 .codex/scripts/goal-git.sh harness phase REVIEWING
@@ -1030,8 +1064,8 @@ Do NOT re-send full `discovery_context` or prior review transcripts unless the d
 touches architecture/high-risk areas.
 
 If reviewer skipped (TRIVIAL): leave REVIEW as SKIPPED; after verify go to DONE
-(or QA/Visual if required). Rework loops stop when `max_rework` or
-`max_reviewer_runs` is exceeded — then BLOCKED, never skip the closing re-review.
+(or QA/Visual if required). Do **not** stop the review loop while required
+findings remain. `max_reviewer_runs` auto-extends; never skip the closing re-review.
 
 ==================================================
 
@@ -1068,8 +1102,12 @@ The Orchestrator must NOT solve review findings directly.
 Review is complete only when:
 
 * required reviewer returns LGTM
-* review threads are clean
+* review threads / local findings are clean (`pending` or `review pending` exit 0)
 * no unresolved required comments remain
+
+If the reviewer returns NEEDS_FIX, keep the REWORK → BUILD → VERIFY → RE-REVIEW
+cycle going. Call `review iterate` in local mode after each re-review spawn
+(counter only — it never stops the loop). Repeat until the conditions above hold.
 
 Then:
 
@@ -1256,14 +1294,17 @@ Every code modification after review requires deterministic verification again.
 
 Local mode:
 
-* use review iteration controls
-* stop when iteration cap is exceeded
+* `review init` once, then `review iterate` after each review pass (counter only)
+* gate is `review pending` exit 0 — **no iteration cap**
+* keep spawning `@reviewer` until pending is clean and verdict is LGTM
 
 Inline mode:
 
 * every new push requires re-review
+* gate is `pending` exit 0 — keep looping until threads are clean
 
 Never leave the review loop idle after Builder returns.
+Never mark REVIEW PASS while unresolved findings remain.
 
 ==================================================
 

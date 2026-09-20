@@ -53,6 +53,11 @@ Without trust Codex ignores project config (default `max_depth = 1`): MAIN can
 spawn the orchestrator, then V1 hides `spawn_agent` on that child. MAIN never
 spawns `@planner` / `@builder` / `@reviewer` / `@qa`.
 
+**Session preflight:** before starting or resuming a delegated goal, run
+`/status`. If effective `agents.max_depth` is not `3`, trust the project and
+start a **new** session before `/goal`; changing `.codex/config.toml` cannot
+grant missing collaboration tools to a session that is already running.
+
 Continue parsing (no quotes): first token is checked against existing goals via
 `goal-git.sh list` — if it matches, that token is the goal id and the rest is
 the new instruction; if not, the whole remainder is the instruction for the
@@ -118,12 +123,12 @@ gates, budget, metrics, retries, findings). Orchestrator drives it via
 
 Models for each cell come from `.codex/goal-models.json` `$routing` — not this file.
 
-**Spawn budgets** (defaults): `max_reviewer_runs = 1 + max_rework` (4 when
-rework=3), `max_total_spawns` sized to match (~13). planner=1, researcher=1,
-expert=1, qa=1, visual=1. Use `harness spawn <role>` before each spawn.
-If a verified rework cannot start the closing re-review, raise the live cap:
-`harness budget set max_reviewer_runs 4`. Do not mark REVIEW PASS without a
-reviewer spawn. `review_max_iterations` defaults to **2** (local-mode finding cap).
+**Spawn budgets** (defaults): `max_reviewer_runs` starts at `1 + max_rework` and
+**auto-extends** while review findings remain. `max_total_spawns` grows with it.
+planner=1, researcher=1, expert=1, qa=1, visual=1. Use `harness spawn <role>`
+before each spawn. Do not mark REVIEW PASS without a reviewer spawn and a clean
+`pending` / `review pending`. `review_max_iterations` is **0 (unlimited)** —
+local `review iterate` only counts; the loop stops when findings are clean.
 
 Phases: `PLANNED` → `RESEARCHING?` → `BUILDING` → `ESCALATED?` → `VERIFYING` →
 `REVIEWING?` → `QA?` → `VISUAL_REVIEW?` → `REWORK?` → `BUILDING` | `VERIFYING` →
@@ -202,6 +207,12 @@ child thread — child reasoning is filtered from the parent stream by design.
 **analyze ≠ verify**
 - `analyze` — gitnexus + rtk gain (tooling/analysis)
 - `verify run` — application correctness only (build/test/lint/typecheck/…)
+
+The Orchestrator runs `analyze` **once after each reconciled implementation
+batch and before `VERIFYING`**. It is an `ANALYSIS` harness gate. Individual
+agents do not re-run repository-wide analysis after their own changes; they
+use the shared index/context and run only targeted local checks. This prevents
+duplicated tool output and token consumption.
 
 **Context handoffs** (compact structured artifacts, not full transcripts):
 `discovery_context`, `implementation_plan`, `research_report`, `staged_diff` /
@@ -356,9 +367,10 @@ Launch Codex with Figma secrets loaded:
   for the VERIFICATION gate (not an LLM claim).
 - After a builder returns `FIXES_COMPLETE`, the orchestrator **immediately** resumes —
   no user input — with VERIFY → commit → push → **mandatory re-delegate reviewers**.
-  Never idle in REVIEW LOOP. Never skip re-review because `pending` or `review pending` is already 0.
-- Rework / escalation / verify retries go through `harness retry`; exceeding limits
-  fails the harness cleanly (`FAILED`).
+  Never idle in REVIEW LOOP. Keep looping until `pending` / `review pending` is clean
+  and the reviewer returns LGTM. Never skip re-review because a numeric cap was hit.
+- Rework for remaining **review** findings auto-extends `max_rework`. Escalation and
+  verify-retry caps still fail the harness cleanly (`FAILED`) when exceeded.
 - **Only reviewers resolve threads** — the orchestrator must never run
   `goal-git.sh resolve` or `goal-git.sh comment`.
 - Conditional `@qa` and `@visual-reviewer` run only when harness

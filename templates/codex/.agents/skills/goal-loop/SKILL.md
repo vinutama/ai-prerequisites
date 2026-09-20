@@ -44,7 +44,8 @@ UI/UX/frontend design intelligence.
 11. **Builder handoff**: builders stage changes, emit **Handoff**; orchestrator runs verify.
 12. **Token efficiency**: Researcher / Builder Expert / QA / Visual are conditional.
     Builder Expert is escalation-only — never a default parallel worker.
-13. **Retry limits**: `harness retry` hard-stops loops when caps are exceeded.
+13. **Retry limits**: `harness retry` hard-stops **escalations** and **verify_retries**.
+    Review/rework continues until `pending` / `review pending` is clean (`review_max_iterations` is 0).
 14. **Auto-merge opt-in**: when `auto_merge` is true, orchestrator runs `merge` after
     clean review; default is manual merge.
 
@@ -141,7 +142,7 @@ Project-level only — set via `/init-goal`.
   "concurrency": 1,
   "auto_merge": false,
   "review_mode": "inline",
-  "review_max_iterations": 5,
+  "review_max_iterations": 0,
   "max_rework": 3,
   "max_escalations": 2,
   "max_verify_retries": 3,
@@ -153,6 +154,7 @@ Project-level only — set via `/init-goal`.
 ```
 `verify_commands` (optional array of `{name, cmd}`) overrides auto-detection entirely.
 `qa_mode` / `visual_mode`: `auto|always|never`.
+`review_max_iterations`: `0` = unlimited. Review loops until `pending` / `review pending` is clean.
 
 ## Model routing (`goal-models.json` + orchestrator)
 Catalog = `.codex/goal-models.json` only (edit per project). Resolved at spawn time:
