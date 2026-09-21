@@ -315,7 +315,11 @@ After inspecting each relevant viewport, record the observation in the harness:
 Example viewports: `375`, `768`, `1024`, `1440`.
 
 `VISUAL PASS` is rejected unless at least one observation is recorded and
-`harness visual pending` exits 0. Never claim Visual PASS from route alone.
+`harness visual pending` exits 0. Pending uses the **latest** result per
+viewport; a later PASS for the same viewport supersedes an earlier FAIL
+(the FAIL row stays in the log). Reuse the same viewport key on recheck.
+To close a historical FAIL whose viewport key differs, run
+`harness visual resolve <id>`. Never claim Visual PASS from route alone.
 
 ==================================================
 11. FIGMA / DESIGN REFERENCE

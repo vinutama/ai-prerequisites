@@ -1259,6 +1259,11 @@ On LGTM (and `harness visual pending` exits 0 with at least one observation):
 .codex/scripts/goal-git.sh harness gate VISUAL PASS
 ```
 
+Rechecks must reuse the **same viewport key** as the FAIL they close.
+`visual pending` counts only each viewport's latest unresolved result.
+Historical FAIL rows remain in the log. If a later PASS used a different
+key, run `harness visual resolve vN` then pending / VISUAL PASS.
+
 On NEEDS_FIX:
 
 * enter REWORK

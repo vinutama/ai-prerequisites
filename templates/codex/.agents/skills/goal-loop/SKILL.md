@@ -189,8 +189,10 @@ Do not document concrete model IDs here — read `$routing` / role defaults in J
 .codex/scripts/goal-git.sh harness retry <rework|escalations|verify_retries>
 .codex/scripts/goal-git.sh harness qa add <scenario> <PASS|FAIL> <note>
 .codex/scripts/goal-git.sh harness qa pending
+.codex/scripts/goal-git.sh harness qa resolve <id>
 .codex/scripts/goal-git.sh harness visual add <viewport> <PASS|FAIL> <note>
 .codex/scripts/goal-git.sh harness visual pending
+.codex/scripts/goal-git.sh harness visual resolve <id>
 .codex/scripts/goal-git.sh harness event <agent> <event> [detail]
 .codex/scripts/goal-git.sh harness progress [-n N] [--json]
 .codex/scripts/goal-git.sh harness spawn <role>

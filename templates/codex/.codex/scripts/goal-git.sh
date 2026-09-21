@@ -52,9 +52,13 @@ Commands:
                             Evidence-backed PASS for IMPLEMENTATION/VERIFICATION/REVIEW/QA/VISUAL
   harness retry <counter>   Increment retry counter (exit 1 if limit exceeded)
   harness qa add <scenario> <PASS|FAIL> <note>
-  harness qa pending        Exit 1 if any QA scenario failed
+  harness qa pending        Exit 1 if any scenario's latest result is an unresolved FAIL
+  harness qa resolve <id>
+                            Mark a historical QA FAIL superseded (keeps the audit row)
   harness visual add <viewport> <PASS|FAIL> <note>
-  harness visual pending    Exit 1 if any visual observation failed
+  harness visual pending    Exit 1 if any viewport's latest observation is an unresolved FAIL
+  harness visual resolve <id>
+                            Mark a historical visual FAIL superseded (keeps the audit row)
   harness event <agent> <event> [detail]
                             Append typed milestone to harness.events (best-effort)
   harness progress [-n N] [--json]
@@ -2709,13 +2713,14 @@ harness_qa_evidence_ok() {
   fi
   total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.qa_findings | length' "$STATE_FILE")"
   failed="$(jq -r --argjson idx "$GOAL_IDX" \
-    '[.[$idx].harness.qa_findings[] | select(.result == "FAIL")] | length' "$STATE_FILE")"
+    '(.[$idx].harness.qa_findings // []) | group_by(.scenario) | map(.[-1]) | map(select(.result == "FAIL" and .resolved != true)) | length' \
+    "$STATE_FILE")"
   if [ "${total:-0}" -eq 0 ]; then
     err "QA PASS rejected — no QA scenarios recorded (run harness qa add)"
     return 1
   fi
   if [ "${failed:-0}" -ne 0 ]; then
-    err "QA PASS rejected — $failed failing scenario(s) (harness qa pending)"
+    err "QA PASS rejected — $failed open failing scenario(s) (harness qa pending; latest result per scenario, unresolved FAILs only)"
     return 1
   fi
   return 0
@@ -2735,13 +2740,14 @@ harness_visual_evidence_ok() {
   fi
   total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.visual_findings // [] | length' "$STATE_FILE")"
   failed="$(jq -r --argjson idx "$GOAL_IDX" \
-    '[(.[$idx].harness.visual_findings // [])[] | select(.result == "FAIL")] | length' "$STATE_FILE")"
+    '((.[$idx].harness.visual_findings // []) | group_by(.viewport) | map(.[-1]) | map(select(.result == "FAIL" and .resolved != true)) | length)' \
+    "$STATE_FILE")"
   if [ "${total:-0}" -eq 0 ]; then
     err "VISUAL PASS rejected — no visual observations recorded (run harness visual add)"
     return 1
   fi
   if [ "${failed:-0}" -ne 0 ]; then
-    err "VISUAL PASS rejected — $failed failing observation(s) (harness visual pending)"
+    err "VISUAL PASS rejected — $failed open failing observation(s) (harness visual pending; latest result per viewport, unresolved FAILs only)"
     return 1
   fi
   return 0
@@ -2897,7 +2903,17 @@ cmd_harness_qa_add() {
     --arg scenario "$scenario" \
     --arg result "$result" \
     --arg note "$note" \
-    '.[$idx].harness.qa_findings += [{id: $id, scenario: $scenario, result: $result, note: $note}]'
+    '
+    .[$idx].harness.qa_findings = (
+      (.[$idx].harness.qa_findings // [])
+      | map(
+          if $result == "PASS" and .scenario == $scenario and .result == "FAIL" and .resolved != true
+          then . + {resolved: true, superseded_by: $id}
+          else .
+          end
+        )
+      + [{id: $id, scenario: $scenario, result: $result, note: $note}]
+    )'
 
   harness_event "harness" "qa" "$id $result $scenario"
   printf '%s\n' "$id"
@@ -2907,11 +2923,34 @@ cmd_harness_qa_pending() {
   harness_require
   local failed
   failed="$(jq -r --argjson idx "$GOAL_IDX" \
-    '[.[$idx].harness.qa_findings[] | select(.result == "FAIL")] | length' "$STATE_FILE")"
-  jq --argjson idx "$GOAL_IDX" \
-    '{total: (.[$idx].harness.qa_findings | length), failed: ([.[$idx].harness.qa_findings[] | select(.result == "FAIL")] | length)}' \
-    "$STATE_FILE"
+    '(.[$idx].harness.qa_findings // []) | group_by(.scenario) | map(.[-1]) | map(select(.result == "FAIL" and .resolved != true)) | length' \
+    "$STATE_FILE")"
+  jq --argjson idx "$GOAL_IDX" '
+    ((.[$idx].harness.qa_findings // []) | group_by(.scenario) | map(.[-1])) as $latest
+    | {
+        total: ((.[$idx].harness.qa_findings // []) | length),
+        failed: ($latest | map(select(.result == "FAIL" and .resolved != true)) | length),
+        latest: $latest
+      }
+  ' "$STATE_FILE"
   [ "$failed" -eq 0 ] || exit 1
+}
+
+cmd_harness_qa_resolve() {
+  harness_require
+  local id="${1:-}"
+  [ -z "$id" ] && { err "harness qa resolve requires <id>"; exit 1; }
+  local found
+  found="$(jq -r --argjson idx "$GOAL_IDX" --arg id "$id" \
+    '[.[$idx].harness.qa_findings[]? | select(.id == $id)] | length' "$STATE_FILE")"
+  if [ "${found:-0}" -eq 0 ]; then
+    err "QA finding not found: $id"
+    exit 1
+  fi
+  state_mutate --argjson idx "$GOAL_IDX" --arg id "$id" \
+    '.[$idx].harness.qa_findings = [.[$idx].harness.qa_findings[] | if .id == $id then . + {resolved: true} else . end]'
+  harness_event "harness" "qa_resolve" "$id"
+  log "Resolved QA finding $id (historical row kept)"
 }
 
 cmd_harness_visual_add() {
@@ -2935,7 +2974,17 @@ cmd_harness_visual_add() {
     --arg viewport "$viewport" \
     --arg result "$result" \
     --arg note "$note" \
-    '.[$idx].harness.visual_findings = ((.[$idx].harness.visual_findings // []) + [{id: $id, viewport: $viewport, result: $result, note: $note}])'
+    '
+    .[$idx].harness.visual_findings = (
+      (.[$idx].harness.visual_findings // [])
+      | map(
+          if $result == "PASS" and .viewport == $viewport and .result == "FAIL" and .resolved != true
+          then . + {resolved: true, superseded_by: $id}
+          else .
+          end
+        )
+      + [{id: $id, viewport: $viewport, result: $result, note: $note}]
+    )'
 
   harness_event "harness" "visual" "$id $result $viewport"
   printf '%s\n' "$id"
@@ -2945,11 +2994,34 @@ cmd_harness_visual_pending() {
   harness_require
   local failed
   failed="$(jq -r --argjson idx "$GOAL_IDX" \
-    '[(.[$idx].harness.visual_findings // [])[] | select(.result == "FAIL")] | length' "$STATE_FILE")"
-  jq --argjson idx "$GOAL_IDX" \
-    '{total: ((.[$idx].harness.visual_findings // []) | length), failed: ([(.[$idx].harness.visual_findings // [])[] | select(.result == "FAIL")] | length)}' \
-    "$STATE_FILE"
+    '((.[$idx].harness.visual_findings // []) | group_by(.viewport) | map(.[-1]) | map(select(.result == "FAIL" and .resolved != true)) | length)' \
+    "$STATE_FILE")"
+  jq --argjson idx "$GOAL_IDX" '
+    ((.[$idx].harness.visual_findings // []) | group_by(.viewport) | map(.[-1])) as $latest
+    | {
+        total: ((.[$idx].harness.visual_findings // []) | length),
+        failed: ($latest | map(select(.result == "FAIL" and .resolved != true)) | length),
+        latest: $latest
+      }
+  ' "$STATE_FILE"
   [ "$failed" -eq 0 ] || exit 1
+}
+
+cmd_harness_visual_resolve() {
+  harness_require
+  local id="${1:-}"
+  [ -z "$id" ] && { err "harness visual resolve requires <id>"; exit 1; }
+  local found
+  found="$(jq -r --argjson idx "$GOAL_IDX" --arg id "$id" \
+    '[(.[$idx].harness.visual_findings // [])[] | select(.id == $id)] | length' "$STATE_FILE")"
+  if [ "${found:-0}" -eq 0 ]; then
+    err "Visual finding not found: $id"
+    exit 1
+  fi
+  state_mutate --argjson idx "$GOAL_IDX" --arg id "$id" \
+    '.[$idx].harness.visual_findings = [((.[$idx].harness.visual_findings // [])[]) | if .id == $id then . + {resolved: true} else . end]'
+  harness_event "harness" "visual_resolve" "$id"
+  log "Resolved visual finding $id (historical row kept)"
 }
 
 cmd_harness_status() {
@@ -3173,7 +3245,7 @@ cmd_harness_done() {
   local phase
   phase="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.phase' "$STATE_FILE")"
   if [ "$phase" != "DONE" ]; then
-    if harness_phase_allowed "$phase" "DONE"; then
+    if harness_phase_allowed "$phase" "DONE" || [ "$phase" = "FAILED" ]; then
       state_mutate --argjson idx "$GOAL_IDX" '.[$idx].harness.phase = "DONE"'
       harness_event "harness" "phase" "$phase -> DONE (harness done)"
     else
@@ -3416,14 +3488,16 @@ cmd_harness() {
       case "${1:-}" in
         add) shift; cmd_harness_qa_add "$@" ;;
         pending) cmd_harness_qa_pending ;;
-        *) err "harness qa subcommand must be add or pending"; exit 1 ;;
+        resolve) shift; cmd_harness_qa_resolve "$@" ;;
+        *) err "harness qa subcommand must be add, pending, or resolve"; exit 1 ;;
       esac
       ;;
     visual)
       case "${1:-}" in
         add) shift; cmd_harness_visual_add "$@" ;;
         pending) cmd_harness_visual_pending ;;
-        *) err "harness visual subcommand must be add or pending"; exit 1 ;;
+        resolve) shift; cmd_harness_visual_resolve "$@" ;;
+        *) err "harness visual subcommand must be add, pending, or resolve"; exit 1 ;;
       esac
       ;;
     status) cmd_harness_status ;;

@@ -161,7 +161,7 @@ Conditional: `QA` / `VISUAL` from requirements.
 | VERIFICATION | Only via `verify run` (manual PASS rejected) |
 | REVIEW | `pending` (inline) or `review pending` (local) exit 0 |
 | QA | `requirements.qa` + `qa_runs>=1` (`harness spawn qa`) + scenarios + `harness qa pending` exit 0 |
-| VISUAL | `requirements.visual` + `visual_runs>=1` + observations + `harness visual pending` exit 0 |
+| VISUAL | `requirements.visual` + `visual_runs>=1` + observations + latest-per-viewport `harness visual pending` exit 0 |
 
 Gate status: `NOT_RUN | PASS | FAIL | SKIPPED | UNKNOWN`.
 `harness done` exits 0 only when every **required** gate is `PASS`
@@ -318,7 +318,7 @@ MUST go through `.codex/scripts/goal-git.sh`:
 .codex/scripts/goal-git.sh harness gate <NAME> <STATUS> [reason]
 .codex/scripts/goal-git.sh harness retry <rework|escalations|verify_retries>
 .codex/scripts/goal-git.sh harness qa add|pending
-.codex/scripts/goal-git.sh harness visual add|pending
+.codex/scripts/goal-git.sh harness visual add|pending|resolve
 .codex/scripts/goal-git.sh harness event <agent> <event> [detail]
 .codex/scripts/goal-git.sh harness progress [-n N] [--json]
 .codex/scripts/goal-git.sh harness spawn <role>    # budget gate
