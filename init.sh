@@ -115,7 +115,7 @@ agent_run_hint() {
     opencode) echo "opencode  then  /init-goal  then  /goal <objective>" ;;
     cursor)   echo "cursor-agent  then  /init-goal  then  /goal <objective>" ;;
     claude)   echo "claude  then  /init-goal  then  /goal <objective>" ;;
-    codex)    echo "codex  then  \$init-goal  then  \$goal <objective>  (CLI >= 0.138.0; trust the project)" ;;
+    codex)    echo "codex  then  \$init-goal  then  \$goal <objective>  (CLI >= 0.138.0; init writes ~/.codex project trust)" ;;
     qoder)    echo "qoder  then  /init-goal  then  /goal-arch <objective>" ;;
   esac
 }
@@ -469,6 +469,10 @@ sync_agent_models() {
       log "Synced $name agent $agent_name (model unpinned — spawn_agent supplies routing)"
     done
     sync_codex_config_defaults "$dest"
+    if [ -x "$dest/.codex/scripts/goal-git.sh" ]; then
+      "$dest/.codex/scripts/goal-git.sh" codex ensure-user-config \
+        || warn "Could not write ~/.codex trust / max_depth for $dest"
+    fi
   elif [ "$name" = "qoder" ]; then
     jq -r 'to_entries[] | select(.key | startswith("$") | not) | "\(.key)\t\(.value.model // "inherit")\t\(.value.effort // "")\t\(.value.readonly // "")"' "$models_file" | while IFS=$'\t' read -r agent_name model effort readonly; do
       [ -n "$agent_name" ] || continue

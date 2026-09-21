@@ -48,15 +48,13 @@ If a skill is absent, the agent proceeds normally. Re-run `/init-skills` with
 
 **Delegation:** `$goal` runs on MAIN (thin). After setup, MAIN spawns **one**
 `@orchestrator` and waits. `.codex/config.toml` `[agents] max_depth` must be **3**
-**and the project must be trusted** (`/status` shows effective `max_depth = 3`).
-Without trust Codex ignores project config (default `max_depth = 1`): MAIN can
-spawn the orchestrator, then V1 hides `spawn_agent` on that child. MAIN never
-spawns `@planner` / `@builder` / `@reviewer` / `@qa`.
-
-**Session preflight:** before starting or resuming a delegated goal, run
-`/status`. If effective `agents.max_depth` is not `3`, trust the project and
-start a **new** session before `/goal`; changing `.codex/config.toml` cannot
-grant missing collaboration tools to a session that is already running.
+**and the project must be trusted** so Codex loads that file. `$goal` writes
+trust + `max_depth = 3` into `~/.codex/config.toml` via
+`goal-git.sh codex ensure-user-config` (already-open sessions keep old depth).
+If the orchestrator still cannot spawn (effective `max_depth = 1`), MAIN
+**spawn-proxies** the next worker in this session — it does not tell you to
+`$goal --continue` again in the same thread. A **new** Codex session is only
+needed so later goals nest without the proxy.
 
 Continue parsing (no quotes): first token is checked against existing goals via
 `goal-git.sh list` — if it matches, that token is the goal id and the rest is

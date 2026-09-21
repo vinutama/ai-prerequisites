@@ -43,7 +43,7 @@ claude
 ```bash
 ./init.sh --codex /path/to/your/project
 cd /path/to/your/project
-codex                 # CLI >= 0.138.0; trust the project so .codex/config.toml loads
+codex                 # CLI >= 0.138.0; init/goal write trust + max_depth=3 to ~/.codex/config.toml
 $init-goal
 $goal Add a health-check endpoint
 ```
@@ -392,7 +392,7 @@ The loop is the same. These are the harness limits:
 
 - **Codex has no slash commands.** Custom prompts were removed in CLI 0.117.0. Use `$goal`.
 - **Codex CLI 0.138.0+** is required. 0.137.0 hid `agent_type` from `spawn_agent`, which blocks custom-agent delegation.
-- **Codex `.codex/config.toml` loads only for trusted projects.** Without trust, `max_depth`, network access, and the Figma MCP block are ignored. Confirm with `/status` after first launch.
+- **Codex `.codex/config.toml` loads only for trusted projects.** `goal-git.sh codex ensure-user-config` writes `trust_level = "trusted"` and `max_depth = 3` into `~/.codex/config.toml`. Already-open sessions keep the old depth; MAIN spawn-proxies workers instead of looping `$goal --continue`.
 - **Codex harness** (`harness` / `verify` / `route` / `complexity` on `goal-git.sh`) and the `researcher` / `qa` agents are Codex-only; other platforms keep the prior six-agent loop. Gates are evidence-backed; `analyze` is not part of `verify`. Models live only in `.codex/goal-models.json` (`$routing` by complexity). TRIVIAL skips Planner; single-issue queues bypass queue orchestration; spawn budgets cap runaway loops.
 - **Codex visual-reviewer** hard-fails rather than downgrading to a text-only model. Vision allowlist is `$capabilities.vision_models` in `goal-models.json` (edit per project).
 - **Codex and Cursor cannot machine-enforce `edit: deny`** on `orchestrator`, `reviewer`, or `visual-reviewer`. That rule is prompt-enforced. (Claude Code uses a `tools` allowlist; OpenCode uses `permission.edit: deny`.)

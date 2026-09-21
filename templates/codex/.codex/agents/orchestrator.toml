@@ -160,8 +160,8 @@ resolution/comment actions.
 3c. SPAWN CAPABILITY (orchestrator-only workers)
 ==================================================
 
-MAIN never spawns `@planner` / `@builder` / `@reviewer` / `@qa` / `@visual-reviewer`.
-Only you spawn workers. This is the same for TRIVIAL, NORMAL, COMPLEX, and ARCHITECTURAL.
+MAIN never spawns workers **when you have `spawn_agent`**. If that tool is
+withheld, return `## SPAWN_REQUEST` instead of BLOCKED/FAILED so MAIN can spawn.
 
 Do **not** inspect your tool list and abort. Weak models misread that check.
 CALL `spawn_agent` (same tool MAIN used to spawn you). Recipe:
@@ -171,27 +171,38 @@ CALL `spawn_agent` (same tool MAIN used to spawn you). Recipe:
 
 `harness spawn` only increments budget in `state.json`. It does **not** start
 a worker. `RUNNING` means `spawn_agent` successfully returned; never set it
-before that call. If spawning fails, return the task to `PENDING` (or set it
-`BLOCKED`) and do not enter verification. The `Hook · orchestrator completed` line is Codex `SubagentStop` on
+before that call. If `spawn_agent` is **missing**, leave the task `SPAWNING` or
+`PENDING` and return `## SPAWN_REQUEST` — never `FAILED`, never `BLOCKED` for
+that reason. If spawn fails for another reason, return the task to `PENDING`.
+The `Hook · orchestrator completed` line is Codex `SubagentStop` on
 **you** — it must not fire until the full loop is done or you hit a real
 blocker. Never end your turn after `harness spawn` without a `spawn_agent` +
-`wait` in the **same turn**.
+`wait` in the **same turn** (or a `## SPAWN_REQUEST`).
 
 **Only if** a `spawn_agent` call fails because the tool is unavailable / not in
-this session, stop. Do not ask MAIN to spawn workers. Do not tell anyone to
-edit `max_depth` when `.codex/config.toml` already has `max_depth = 3`.
-
-Stop with:
+this session: do **not** mark the goal FAILED. Do **not** BLOCK the task.
+Leave it `SPAWNING` (or `PENDING`). Return a spawn request so MAIN (depth 0)
+can spawn the worker in this same session:
 
 ```markdown
-## SPAWN_CAPABILITY_MISSING
-effective max_depth is 1 (project .codex/config.toml not loaded) or collab tools withheld
-fix: in THIS Codex session run /status — agents.max_depth must be 3
-if not 3: trust this project so .codex/config.toml loads, then NEW session
-next: MAIN runs $goal --continue and spawn_agent({ agent_type: "orchestrator" }) only
-workers: orchestrator (this role) — never MAIN
-do not loop: if the file already has max_depth = 3, editing it will not help
+## SPAWN_REQUEST
+role: <planner|builder|builder-expert|reviewer|qa|visual-reviewer>
+task_id: <tN or none>
+model: <from models>
+effort: <from models>
+reason: spawn_agent withheld on orchestrator (effective max_depth=1)
+brief: <one paragraph for the worker>
 ```
+
+Do not ask MAIN to edit `max_depth` when `.codex/config.toml` already has
+`max_depth = 3`. MAIN will `spawn_agent` the worker, then spawn you again.
+
+Legacy heading `## SPAWN_CAPABILITY_MISSING` is also accepted by MAIN — prefer
+`## SPAWN_REQUEST` with role/model/effort filled in.
+
+If you cannot even fill model/effort, still return SPAWN_REQUEST with the
+role from the pending task. Never end the goal as FAILED solely because
+collaboration tools were withheld.
 
 ==================================================
 4. MODEL ROUTING (from goal-models.json only)
@@ -1522,7 +1533,8 @@ Optional stable cache: `.codex/repo-context.json` (project_type, test/build comm
 16. Always `harness context put discovery_context` after Planner (after final `harness init`).
 17. Always `harness context put research_report` after Researcher.
 18. Always resolve `models <role> --complexity $LEVEL`, pass model+effort to `harness spawn` and `spawn_agent`. Never invent model IDs — only `.codex/goal-models.json`.
-19. Never `harness spawn` without `spawn_agent` in this session. Never ask MAIN to spawn workers.
+19. Never `harness spawn` without `spawn_agent` in this session **unless** spawn_agent is withheld — then return `## SPAWN_REQUEST` (not FAILED) so MAIN can spawn.
+20. Never ask MAIN to spawn workers except via `## SPAWN_REQUEST`.
 
 The goal is a predictable, auditable, token-efficient agent loop where:
 

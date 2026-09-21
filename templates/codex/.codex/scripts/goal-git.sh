@@ -71,6 +71,8 @@ Commands:
                             Print stored handoff artifact
   harness status            Print harness object
   harness done              Exit 0 only when required gates PASS (from requirements)
+  harness recover-spawn     Unstick FAILED/SPAWNING/BLOCKED after spawn_agent was withheld
+  codex ensure-user-config  Trust this project in ~/.codex/config.toml and set max_depth=3
   selfcheck                 Run platform detection self-check
   models                    Print full goal-models.json
   models <role>             Print model, effort, and fallbacks for a role (TAB-separated)
@@ -3184,6 +3186,34 @@ cmd_harness_done() {
   harness_get
 }
 
+cmd_harness_recover_spawn() {
+  harness_require
+  local from next_phase
+  from="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.phase' "$STATE_FILE")"
+
+  state_mutate --argjson idx "$GOAL_IDX" '
+    .[$idx].harness.tasks |= map(
+      if .state == "SPAWNING" or .state == "BLOCKED" then . + {state: "PENDING"} else . end
+    )
+  '
+
+  next_phase="$from"
+  if [ "$from" = "FAILED" ]; then
+    next_phase="BUILDING"
+    state_mutate --argjson idx "$GOAL_IDX" --arg to "$next_phase" \
+      '.[$idx].harness.phase = $to'
+  fi
+
+  harness_event "harness" "recover_spawn" "$from -> $next_phase (SPAWNING/BLOCKED -> PENDING)"
+  log "Recovered spawn-stuck harness: phase $from -> $next_phase"
+
+  jq --argjson idx "$GOAL_IDX" '
+    .[$idx].harness as $h
+    | ($h.tasks | map(select(.state != "DONE" and .state != "FAILED")) | .[0] // null) as $next
+    | {phase: $h.phase, next: $next}
+  ' "$STATE_FILE"
+}
+
 harness_budget_grow() {
   local key="$1"
   local min_val="$2"
@@ -3416,7 +3446,8 @@ cmd_harness() {
       esac
       ;;
     done) cmd_harness_done ;;
-    *) err "harness subcommand must be: init, phase, task, gate, retry, qa, visual, event, progress, hook, spawn, metrics, budget, context, status, done"; exit 1 ;;
+    recover-spawn) cmd_harness_recover_spawn ;;
+    *) err "harness subcommand must be: init, phase, task, gate, retry, qa, visual, event, progress, hook, spawn, metrics, budget, context, status, done, recover-spawn"; exit 1 ;;
   esac
 }
 
@@ -3738,6 +3769,69 @@ cmd_route() {
   esac
 }
 
+cmd_codex_ensure_user_config() {
+  local codex_home="${CODEX_HOME:-$HOME/.codex}"
+  local cfg="$codex_home/config.toml"
+  mkdir -p "$codex_home"
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    warn "python3 not found — appending Codex trust/max_depth to $cfg"
+    if [ ! -f "$cfg" ] || ! grep -qE '^max_depth\s*=' "$cfg"; then
+      printf '\n[agents]\nmax_depth = 3\n' >> "$cfg"
+    fi
+    if ! grep -qF "[projects.\"$PROJECT_ROOT\"]" "$cfg"; then
+      printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$PROJECT_ROOT" >> "$cfg"
+    fi
+    log "Wrote $cfg (fallback). Start a NEW Codex session so it loads."
+    return 0
+  fi
+
+  GOAL_PROJECT_ROOT="$PROJECT_ROOT" python3 - "$cfg" <<'PY'
+import os, pathlib, re, sys
+
+cfg_path = pathlib.Path(sys.argv[1])
+project = os.environ["GOAL_PROJECT_ROOT"]
+text = cfg_path.read_text() if cfg_path.exists() else ""
+
+def upsert_max_depth(s: str) -> str:
+    m = re.search(r"(?ms)^\[agents\][^\[]*", s)
+    if m:
+        block = m.group(0)
+        if re.search(r"(?m)^max_depth\s*=", block):
+            new_block = re.sub(r"(?m)^max_depth\s*=\s*.*$", "max_depth = 3", block, count=1)
+        else:
+            new_block = re.sub(r"(?m)^\[agents\]\s*$", "[agents]\nmax_depth = 3", block, count=1)
+        return s[: m.start()] + new_block + s[m.end() :]
+    if s and not s.endswith("\n"):
+        s += "\n"
+    return s + "\n[agents]\nmax_depth = 3\n"
+
+text = upsert_max_depth(text)
+
+escaped = project.replace("\\", "\\\\").replace('"', '\\"')
+header = f'[projects."{escaped}"]'
+block_re = re.compile(r"(?ms)^" + re.escape(header) + r"[^\[]*")
+m = block_re.search(text)
+if m:
+    block = m.group(0)
+    if re.search(r"(?m)^trust_level\s*=", block):
+        new_block = re.sub(r'(?m)^trust_level\s*=\s*.*$', 'trust_level = "trusted"', block, count=1)
+    else:
+        new_block = block.rstrip() + '\ntrust_level = "trusted"\n'
+    text = text[: m.start()] + new_block + text[m.end() :]
+else:
+    if text and not text.endswith("\n"):
+        text += "\n"
+    text += f'\n{header}\ntrust_level = "trusted"\n'
+
+cfg_path.write_text(text)
+print(str(cfg_path))
+PY
+
+  log "Ensured $cfg has [agents] max_depth=3 and trust_level=trusted for $PROJECT_ROOT"
+  log "Already-open Codex sessions keep their old max_depth. A NEW session is required for orchestrator spawn_agent."
+}
+
 
 case "${1:-}" in
   start)    cmd_start "${2:-}" "${3:-}" "${4:-}" ;;
@@ -3755,6 +3849,12 @@ case "${1:-}" in
   verify)   shift; cmd_verify "$@" ;;
   route)    shift; cmd_route "$@" ;;
   harness)  shift; cmd_harness "$@" ;;
+  codex)
+    case "${2:-}" in
+      ensure-user-config) cmd_codex_ensure_user_config ;;
+      *) err "codex subcommand must be ensure-user-config"; exit 1 ;;
+    esac
+    ;;
   config)
     case "${2:-}" in
       set) cmd_config_set "${3:-}" "${4:-}" "${5:-}" "${6:-1}" "${7:-false}" "${8:-inline}" "${9:-2}" "${10:-3}" "${11:-2}" "${12:-3}" "${13:-auto}" "${14:-auto}" ;;
