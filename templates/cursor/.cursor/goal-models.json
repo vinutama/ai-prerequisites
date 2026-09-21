@@ -1,16 +1,65 @@
 {
+  "$capabilities": {
+    "vision_models": []
+  },
+  "$routing": {
+    "orchestrator": {
+      "TRIVIAL": { "model": "inherit" },
+      "NORMAL": { "model": "inherit" },
+      "COMPLEX": { "model": "inherit" },
+      "ARCHITECTURAL": { "model": "inherit" }
+    },
+    "planner": {
+      "TRIVIAL": null,
+      "NORMAL": { "model": "inherit" },
+      "COMPLEX": { "model": "inherit" },
+      "ARCHITECTURAL": { "model": "inherit" }
+    },
+    "builder": {
+      "TRIVIAL": { "model": "inherit" },
+      "NORMAL": { "model": "inherit" },
+      "COMPLEX": { "model": "inherit" },
+      "ARCHITECTURAL": { "model": "inherit" }
+    },
+    "reviewer": {
+      "TRIVIAL": { "model": "inherit" },
+      "NORMAL": { "model": "inherit" },
+      "COMPLEX": { "model": "inherit" },
+      "ARCHITECTURAL": { "model": "inherit" }
+    },
+    "researcher": {
+      "TRIVIAL": { "model": "inherit" },
+      "NORMAL": { "model": "inherit" },
+      "COMPLEX": { "model": "inherit" },
+      "ARCHITECTURAL": { "model": "inherit" }
+    },
+    "builder-expert": {
+      "TRIVIAL": { "model": "inherit" },
+      "NORMAL": { "model": "inherit" },
+      "COMPLEX": { "model": "inherit" },
+      "ARCHITECTURAL": { "model": "inherit" }
+    },
+    "qa": {
+      "TRIVIAL": { "model": "inherit" },
+      "NORMAL": { "model": "inherit" },
+      "COMPLEX": { "model": "inherit" },
+      "ARCHITECTURAL": { "model": "inherit" }
+    },
+    "visual-reviewer": {
+      "TRIVIAL": { "model": "inherit" },
+      "NORMAL": { "model": "inherit" },
+      "COMPLEX": { "model": "inherit" },
+      "ARCHITECTURAL": { "model": "inherit" }
+    }
+  },
   "orchestrator": {
     "model": "inherit",
     "readonly": false,
     "capabilities": {
       "multimodal": false,
       "modalities": {
-        "input": [
-          "text"
-        ],
-        "output": [
-          "text"
-        ]
+        "input": ["text"],
+        "output": ["text"]
       }
     }
   },
@@ -20,12 +69,19 @@
     "capabilities": {
       "multimodal": false,
       "modalities": {
-        "input": [
-          "text"
-        ],
-        "output": [
-          "text"
-        ]
+        "input": ["text"],
+        "output": ["text"]
+      }
+    }
+  },
+  "researcher": {
+    "model": "inherit",
+    "readonly": true,
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": ["text"],
+        "output": ["text"]
       }
     }
   },
@@ -35,12 +91,8 @@
     "capabilities": {
       "multimodal": false,
       "modalities": {
-        "input": [
-          "text"
-        ],
-        "output": [
-          "text"
-        ]
+        "input": ["text"],
+        "output": ["text"]
       }
     }
   },
@@ -50,12 +102,8 @@
     "capabilities": {
       "multimodal": false,
       "modalities": {
-        "input": [
-          "text"
-        ],
-        "output": [
-          "text"
-        ]
+        "input": ["text"],
+        "output": ["text"]
       }
     }
   },
@@ -65,12 +113,19 @@
     "capabilities": {
       "multimodal": false,
       "modalities": {
-        "input": [
-          "text"
-        ],
-        "output": [
-          "text"
-        ]
+        "input": ["text"],
+        "output": ["text"]
+      }
+    }
+  },
+  "qa": {
+    "model": "inherit",
+    "readonly": false,
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": ["text"],
+        "output": ["text"]
       }
     }
   },
@@ -80,13 +135,8 @@
     "capabilities": {
       "multimodal": true,
       "modalities": {
-        "input": [
-          "text",
-          "image"
-        ],
-        "output": [
-          "text"
-        ]
+        "input": ["text", "image"],
+        "output": ["text"]
       }
     }
   }

@@ -889,12 +889,12 @@ print_tree() {
       echo "    └── goal-models.json"
       ;;
     cursor)
-      echo "├── state.json          (gitignored, created at runtime)"
+      echo "├── state.json          (gitignored, created at runtime; includes harness)"
       echo "├── AGENTS.md           (gitignored)"
       echo "└── .cursor/            (gitignored)"
-      echo "    ├── agents/         (6 specialized agents)"
-      echo "    ├── skills/         (/goal, /init-goal, /init-skills, goal-loop)"
-      echo "    ├── scripts/        (goal-git.sh, run-cursor.sh)"
+      echo "    ├── agents/         (8 specialized agents)"
+      echo "    ├── skills/         (/goal, /init-goal, /init-skills, /create-issues, goal-loop)"
+      echo "    ├── scripts/        (goal-git.sh harness/verify/groups, delivery-groups.sh, run-cursor.sh)"
       echo "    └── goal-models.json"
       ;;
     claude)

@@ -73,7 +73,7 @@ This command configures the goal workflow for this project. Ask the user the fol
 
    **6b (only if yes):** Figma Personal Access Token
    - Guide: Figma → Settings → Security → Personal access tokens
-   - Warn: token is stored in `.cursor/figma.env` (project-level, gitignored)
+   - Warn: token is stored in `.cursor/figma.env` (project-level, gitignored); MCP block is written to `.cursor/mcp.json`
    - Run: `.cursor/scripts/goal-git.sh figma setup "<token>"`
    - Optionally verify after sourcing env: `set -a && source .cursor/figma.env && set +a && cursor-agent mcp list`
    - If verification fails, warn but continue
@@ -93,18 +93,45 @@ This command configures the goal workflow for this project. Ask the user the fol
 8. **Review mode** — How should reviewers report findings?
    - `inline` (**default**) — create PR first; reviewers post inline comments on GitHub/GitLab and resolve threads (`goal-git.sh pending` gates the loop).
    - `local` — reviewers read the diff locally, record findings via `goal-git.sh review add`, orchestrator delegates builders immediately. **No PR until review is clean** (push + `pr` happen only in DONE).
-     - If `local`: ask max review iterations before stopping (default `5`) — store as `review_max_iterations`.
+     Review loops until `review pending` exits 0. Do **not** ask for a max iteration cap.
 
-After collecting answers for questions 1–8 (including 6b/6c when Figma is enabled), persist core config:
+9. **Markdown PR strategy** (only when goal source is `markdown`) — How should a Markdown goal be delivered?
+   - `auto` (**default for new Markdown goals**) — planner groups tasks into small independently testable PRs/MRs. Each group gets `<task-type>/<group-id>-<slug>`, an isolated worktree, and its own PR. No final `goal/` aggregation PR.
+   - `single` — preserve one branch + one PR (legacy).
+   - `task` — one PR per independently mergeable planner task.
+   After `config set`, persist:
+   ```bash
+   jq '.markdown_pr_strategy = "auto" | .max_tasks_per_pr = 3 | .max_files_per_pr = 25 | .max_parallel_prs = 2' \
+     .cursor/goal-config.json > .cursor/goal-config.json.tmp && mv .cursor/goal-config.json.tmp .cursor/goal-config.json
+   ```
+   Limits are planning signals; do not force unsafe splits. Existing in-progress Markdown goals keep their original one-PR schema until they complete.
+
+After collecting answers for questions 1–9 (including 6b/6c when Figma is enabled), persist core config with expanded keys:
 ```bash
-.cursor/scripts/goal-git.sh config set <goal_source> <target_branch> <platform> <concurrency> <auto_merge> <review_mode> <review_max_iterations>
+.cursor/scripts/goal-git.sh config set \
+  <goal_source> <target_branch> <platform> <concurrency> <auto_merge> <review_mode> \
+  <review_max_iterations> <max_rework> <max_escalations> <max_verify_retries> <qa_mode> <visual_mode>
 ```
+
+Defaults when the user did not override:
+- `review_max_iterations` → always `0` (unlimited — loop until pending is clean)
+- `max_rework` → `3`
+- `max_escalations` → `2`
+- `max_verify_retries` → `3`
+- `qa_mode` → `auto` (`auto|always|never`)
+- `visual_mode` → `auto` (`auto|always|never`)
+
 Use `1` for concurrency when the user chose sequential only.
 Use `false` for `auto_merge` when the user chose manual merge (default).
 Use `true` when the user chose auto-merge.
 Use `inline` for `review_mode` when the user chose inline PR comments (default).
 Use `local` when the user chose local review.
-Use `5` for `review_max_iterations` when local mode and the user did not specify a cap.
+Always pass `0` for `review_max_iterations`.
+
+Example (prompt, main, github, sequential, manual merge, inline review, defaults):
+```bash
+.cursor/scripts/goal-git.sh config set prompt main github 1 false inline 0 3 2 3 auto auto
+```
 
 If `issues` was selected, after `config set` persist issue settings:
 ```bash
@@ -113,7 +140,7 @@ jq --arg url "<issue_list_url>" --argjson limit <issue_limit> \
   .cursor/goal-config.json > .cursor/goal-config.json.tmp && mv .cursor/goal-config.json.tmp .cursor/goal-config.json
 ```
 
-If Figma was enabled (question 6 = yes), run `figma setup` and `figma design set` **after** `config set` (and after issue jq when applicable).
+If Figma was enabled (question 6 = yes), run `figma setup` and `figma design set` **after** `config set` (and after issue jq when applicable). Those helpers write `.cursor/figma.env` and update `.cursor/mcp.json`.
 
 Confirm the saved config:
 ```bash

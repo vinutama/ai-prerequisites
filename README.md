@@ -28,6 +28,7 @@ cd /path/to/your/project
 cursor-agent
 /init-goal
 /goal Add a health-check endpoint
+# optional: /create-issues plan.md
 ```
 
 ### Claude Code
@@ -138,16 +139,17 @@ Shared across every target: `state.json` (gitignored, project root),
 | Target | Paths | Invoke |
 |---|---|---|
 | OpenCode | `AGENTS.md`, `.opencode/` (agents, commands, skills, scripts), `opencode.json`, `create-issues.sh` | `/goal`, `/create-issues` |
-| Cursor | `AGENTS.md`, `.cursor/` (agents, skills, scripts) | `/goal` (skills with `disable-model-invocation`) |
+| Cursor | `AGENTS.md`, `.cursor/` (agents, skills, scripts, harness) | `/goal`, `/create-issues` (skills with `disable-model-invocation`) |
 | Claude Code | `CLAUDE.md`, `.claude/` (agents, commands, skills, scripts) | `/goal` |
 | Codex | `AGENTS.md`, `.codex/` (TOML agents, scripts, `config.toml`), `.agents/skills/` | `$goal`, `$create-issues` |
 | Qoder | `AGENTS.md`, `.qoder/` (agents, commands, skills, scripts), `.qoder/settings.json` (Figma MCP) | `/goal-arch` (not built-in `/goal`) |
 
-Each tree includes the same core 6 agents (`planner`, `builder`, `builder-expert`,
+Each tree includes the core agents (`planner`, `builder`, `builder-expert`,
 `reviewer`, `visual-reviewer`, `orchestrator`), `goal-git.sh`, `goal-models.json`,
-and the `goal-loop` skill. **Codex** also ships `researcher` and `qa`, plus
-`harness` / `verify` / `route` on its private `goal-git.sh`. The Codex harness
-(not the orchestrator's judgment) is the completion authority.
+and the `goal-loop` skill. **Codex** and **Cursor** also ship `researcher` and
+`qa`, plus `harness` / `verify` / `route` / `groups` on their `goal-git.sh`.
+The harness (not the orchestrator's judgment) is the completion authority for
+those targets.
 
 ## Commands
 
@@ -162,7 +164,7 @@ and the `goal-loop` skill. **Codex** also ships `researcher` and `qa`, plus
 | `/goal --issues [url] [count]` or `$goal --issues [url] [count]` | Fetch open issues from a list URL and drive each to its own PR |
 | `/goal --list` or `$goal --list` | List all goals |
 | `/goal --continue [id] [instruction]` | Resume a goal; optional new instruction for this pass |
-| `/create-issues <path.md>` or `$create-issues <path.md>` | Create GitHub/GitLab issues from a markdown epic (one task checkbox under `### Tasks` per issue). OpenCode: `/create-issues`. Codex: `$create-issues`. |
+| `/create-issues <path.md>` or `$create-issues <path.md>` | Create GitHub/GitLab issues from a markdown epic (one task checkbox under `### Tasks` per issue). OpenCode/Cursor: `/create-issues`. Codex: `$create-issues`. |
 
 ## Usage patterns
 
@@ -370,11 +372,11 @@ filter: `safe,none`.
 | Agent | Role | OpenCode | Claude | Cursor | Codex | Qoder |
 |---|---|---|---|---|---|---|
 | `planner` | Architecture & plans | `opencode-go/qwen3.7-max` | `opus` | inherit | see `.codex/goal-models.json` `$routing` (read-only) | performance |
-| `researcher` | On-demand research (Codex only) | — | — | — | see `goal-models.json` (read-only) | — |
+| `researcher` | On-demand research (Codex + Cursor) | — | — | inherit | see `goal-models.json` (read-only) | — |
 | `builder` | Routine execution (CRUD, UI, refactors, config, tests) | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | see `goal-models.json` `$routing` | efficient |
-| `builder-expert` | Complex execution (Codex: escalation-only) | `opencode-go/kimi-k2.7-code` | `opus` | inherit | see `goal-models.json` | performance |
+| `builder-expert` | Complex execution (escalation-only on Codex/Cursor) | `opencode-go/kimi-k2.7-code` | `opus` | inherit | see `goal-models.json` | performance |
 | `reviewer` | Code review + inline PR comments | `opencode-go/deepseek-v4-pro` | `opus` | inherit | see `goal-models.json` `$routing` | performance |
-| `qa` | Behavior/business QA (Codex only, conditional) | — | — | — | see `goal-models.json` | — |
+| `qa` | Behavior/business QA (Codex + Cursor, conditional) | — | — | inherit | see `goal-models.json` | — |
 | `orchestrator` | Workflow manager | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | see `goal-models.json` | efficient |
 | `visual-reviewer` | UI/multimodal review + inline PR comments | `opencode-go/mimo-v2.5-pro` | `sonnet` | inherit | see `goal-models.json` + vision allowlist | inherit |
 
@@ -382,15 +384,17 @@ Every agent operates in `/ponytail full` mode.
 
 ### Delegation
 On most platforms the planner tags every task `@builder` or `@builder-expert`.
-**Codex** tags implementation tasks `@builder` only; `@builder-expert` is an
-escalation path, and `@researcher` / `@qa` are conditional. Codex verification
+**Codex** and **Cursor** tag implementation tasks `@builder` only; `@builder-expert`
+is an escalation path, and `@researcher` / `@qa` are conditional. Verification
 is deterministic (`goal-git.sh verify run`). `route detect` is only a baseline
 classifier; after planning, the Planner's `### Routing` block (`route`,
 `qa_required`, `visual_required`) is authoritative — QA is not implied by
 "feature" and Visual is not implied by "frontend".
 
 The orchestrator delegates automatically (OpenCode `@mentions`, Cursor/Claude/Qoder
-subagent launch, Codex `spawn_agent` with `agent_type`).
+subagent launch, Codex `spawn_agent` with `agent_type`). Cursor models default to
+`inherit`; optional per-role pins live in `.cursor/goal-models.json` (no spawn-time
+model pick).
 
 ## Fidelity gaps
 
@@ -399,15 +403,14 @@ The loop is the same. These are the harness limits:
 - **Codex has no slash commands.** Custom prompts were removed in CLI 0.117.0. Use `$goal`.
 - **Codex CLI 0.138.0+** is required. 0.137.0 hid `agent_type` from `spawn_agent`, which blocks custom-agent delegation.
 - **Codex `.codex/config.toml` loads only for trusted projects.** `goal-git.sh codex ensure-user-config` writes `trust_level = "trusted"` and `max_depth = 3` into `~/.codex/config.toml`. Already-open sessions keep the old depth; MAIN spawn-proxies workers instead of looping `$goal --continue`.
-- **Codex harness** (`harness` / `verify` / `route` / `complexity` on `goal-git.sh`) and the `researcher` / `qa` agents are Codex-only; other platforms keep the prior six-agent loop. Gates are evidence-backed; `analyze` is not part of `verify`. Models live only in `.codex/goal-models.json` (`$routing` by complexity). TRIVIAL skips Planner; single-issue queues bypass queue orchestration; spawn budgets cap runaway loops.
+- **Codex and Cursor harness** (`harness` / `verify` / `route` / `complexity` / `groups` on `goal-git.sh`) plus `researcher` / `qa` ship on those targets; Claude/OpenCode/Qoder keep the prior six-agent loop. Gates are evidence-backed; `analyze` is not part of `verify`. Models: Codex uses `.codex/goal-models.json` `$routing` at spawn; Cursor defaults to `inherit` with optional per-role frontmatter pins (no spawn-time model override). TRIVIAL skips Planner; spawn budgets cap runaway loops.
+- **Cursor nesting is two levels.** `/goal` (main) → `orchestrator` → worker fits; builders must never spawn subagents. If nesting is blocked, `/goal` spawn-proxies workers when `@orchestrator` returns `## SPAWN_REQUEST`.
 - **Codex visual-reviewer** hard-fails rather than downgrading to a text-only model. Vision allowlist is `$capabilities.vision_models` in `goal-models.json` (edit per project).
 - **Codex and Cursor cannot machine-enforce `edit: deny`** on `orchestrator`, `reviewer`, or `visual-reviewer`. That rule is prompt-enforced. (Claude Code uses a `tools` allowlist; OpenCode uses `permission.edit: deny`.)
 - **Goal-loop installs auto-approve tool prompts** (paths, bash, MCP) on all five targets so agents are not interrupted for permission dialogs. Orchestrator/planner/reviewer still cannot edit application source via role tool limits.
-- **Cursor allows two levels of subagent nesting.** `/goal` (main) → `orchestrator` → `builder` fits; builders must never spawn subagents.
 - **Model fallback is OpenCode-only** for automatic plugin fallbacks; Codex uses `goal-git.sh models <role> --next` at spawn time (vision-filtered for multimodal roles via `$capabilities.vision_models`).
 - **Cursor and Codex have no `$ARGUMENTS` expansion.** Command skills read the text typed after `/goal` or `$goal` from the user message.
-- **Installing `--cursor` and `--codex` together** surfaces the four goal skills twice in Cursor, because Cursor also scans `.agents/skills/`.
-
+- **Installing `--cursor` and `--codex` together** surfaces the goal skills twice in Cursor, because Cursor also scans `.agents/skills/`.
 ## Requirements
 
 Shared:

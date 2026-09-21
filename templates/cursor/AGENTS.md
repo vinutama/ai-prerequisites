@@ -14,23 +14,27 @@ Figma PAT is stored in `.cursor/figma.env` (gitignored as part of `.cursor/`).
 
 Optionally run `/init-skills` to inject curated skills from
 [agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills)
-into `.cursor/skills/` (project-level, filtered by category and risk), and
-optionally install [ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
+into `.cursor/skills/` (project-level, **exact list per agent** — not whole
+categories), and optionally install
+[ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
 for UI/UX/frontend design intelligence.
-Use the **recommended** preset to install skills that goal-loop agents look for.
-Each agent loads related skills via OpenCode's native `skill` tool
-(`skill({ name: "<skill-name>" })`) when they appear in `available_skills`.
+Use the **recommended** preset to install only the skills each goal-loop agent
+lists under Related skills (deduplicated union). Custom mode installs skills for
+selected agents only.
+Each agent loads related skills via `/skill-name` when installed.
 Do not use `@mentions` or manually read `.cursor/skills/*/SKILL.md`.
 If a skill is absent, the agent proceeds normally. Re-run `/init-skills` with
-**recommended** (includes `development`) to install skills like `api-endpoint-builder`.
+**recommended** after updating agent Related skills lists.
 
 | Agent | Related skills (when installed) |
 |---|---|
 | `orchestrator` | `parallel-agents`, `multi-agent-patterns`, `verification-before-completion` |
 | `planner` | `brainstorming`, `concise-planning`, `writing-plans`, `architecture`, `ui-ux-pro-max` |
+| `researcher` | `deep-research`, `research-prompt`, `documentation`, `documentation-templates`, `architecture`, `api-security-best-practices` |
 | `builder` | `test-driven-development`, `lint-and-validate`, `error-handling-patterns`, `api-endpoint-builder`, `ui-ux-pro-max` |
 | `builder-expert` | `systematic-debugging`, `test-driven-development`, `lint-and-validate`, `architecture`, `error-handling-patterns`, `api-endpoint-builder`, `ui-ux-pro-max` |
 | `reviewer` | `code-review-excellence`, `verification-before-completion`, `api-security-best-practices`, `systematic-debugging` |
+| `qa` | `e2e-testing-patterns`, `webapp-testing`, `browser-automation`, `test-driven-development`, `verification-before-completion`, `systematic-debugging`, `api-security-testing` |
 | `visual-reviewer` | `wcag-audit-patterns`, `frontend-design`, `webapp-testing`, `ui-ux-pro-max` |
 
 ### How to use
@@ -40,7 +44,14 @@ If a skill is absent, the agent proceeds normally. Re-run `/init-skills` with
 /goal <your objective>                  # start a new goal
 /goal --list                            # list all goals
 /goal --continue [id] [new instruction]  # resume a goal; optional new instruction
+/create-issues <path.md>                # standalone: publish ### Tasks as forge issues
 ```
+
+**Delegation:** `/goal` runs on MAIN (thin). After setup, MAIN spawns **one**
+`@orchestrator` and waits. Cursor allows **two levels** of subagent nesting
+(`/goal` → orchestrator → worker). If the orchestrator cannot nest further, it
+returns `## SPAWN_REQUEST` and MAIN **spawn-proxies** the next worker in this
+session — it does not tell you to `/goal --continue` again as the only next step.
 
 Continue parsing (no quotes): first token is checked against existing goals via
 `goal-git.sh list` — if it matches, that token is the goal id and the rest is
@@ -49,48 +60,186 @@ active goal.
 
 Goal source (configured via `/init-goal`):
 - `prompt` — free-text objective (e.g. `/goal Add health check endpoint`); branch `goal/<slug>`
-- `markdown` — reads a `.md` file as the goal (`/goal` uses `markdown_path` from config; `/goal docs/other.md` overrides); branch `goal/<slug>`
+- `markdown` — reads a `.md` file as the **goal draft** (`/goal` uses `markdown_path` from config; `/goal docs/other.md` overrides). `@planner` still runs unless classify is TRIVIAL. New Markdown goals default to `markdown_pr_strategy=auto`: the planner emits `delivery_groups`, and each group gets its own `<task-type>/<group-id>-<slug>` branch, isolated worktree, harness, and PR/MR. There is **no** final `goal/` aggregation PR. Set `single` to keep one PR, or `task` for one PR per independently mergeable planner task. Existing in-progress Markdown goals without `delivery_mode=multi-pr` keep the old one-PR behavior.
 - `jira` — fetches a Jira ticket as the goal (`/goal` uses `jira_ticket` from config; `/goal OTHER-123` or `/goal bugfix DEL-4123` overrides) — requires Atlassian MCP; branch `{task_type}/{TICKET}-{slug}` (e.g. `feat/DEL-4123-add-health-check`)
 - `issues` — fetches open issues from a GitHub/GitLab issue list URL (`/goal --issues [url] [count]` or bare `/goal` when configured); **one branch + one PR per issue**; branch `{task_type}/{number}-{slug}`; planner orders by dependency and batches concurrent work (single-repo only; multi-repo processes one issue at a time)
 
 ### Agent roles
-| Agent | Role | Model |
-|---|---|---|
-| `orchestrator` | Manages the full loop | opencode-go/deepseek-v4-flash |
-| `planner` | Architecture & plans — tags tasks @builder or @builder-expert | opencode-go/qwen3.7-max |
-| `builder` | Routine execution (CRUD, UI, refactors, config, tests) | opencode-go/deepseek-v4-flash |
-| `builder-expert` | Complex execution (algorithms, concurrency, security, perf) | opencode-go/kimi-k2.7-code |
-| `reviewer` | Code review + inline PR comments | opencode-go/deepseek-v4-pro |
-| `visual-reviewer` | UI/multimodal review + inline PR comments | opencode-go/mimo-v2.5-pro |
+| Agent | Role |
+|---|---|
+| `orchestrator` | Thin state machine + harness; owns all worker spawns |
+| `planner` | Plans — skipped on TRIVIAL |
+| `researcher` | On-demand research (conditional) |
+| `builder` | Routine execution |
+| `builder-expert` | Escalation-only complex execution |
+| `reviewer` | Diff-first code review (skippable TRIVIAL) |
+| `qa` | Behavior QA (conditional) |
+| `visual-reviewer` | UI/multimodal review (conditional) |
 
-`goal-models.json` is the single source of truth for models and capabilities.
-`init.sh` syncs `model` into each agent `.md` and generates `.cursor/mcp.json`.
+**Model catalog:** `.cursor/goal-models.json` holds role defaults + `$routing`
+(all `inherit` by default) + optional per-role pins synced into agent frontmatter
+by `init.sh`. Cursor has no spawn-time model override. Edit the catalog (or
+agent YAML) to pin planner / other roles; do not hardcode model IDs in skills.
 
 | Agent | Multimodal | Input modalities |
 |---|---|---|
 | `orchestrator` | no | text |
 | `planner` | no | text |
+| `researcher` | no | text |
 | `builder` | no | text |
 | `builder-expert` | no | text |
 | `reviewer` | no | text |
+| `qa` | no | text |
 | `visual-reviewer` | **yes** | text, image |
 
 Only `visual-reviewer` handles screenshots and image attachments. The
 orchestrator routes UI/visual review exclusively to that agent.
 
-Model fallbacks are configured in project-level `.cursor/mcp.json` (plugin +
-per-agent `fallback_models`, generated from `.cursor/goal-models.json` by
-`init.sh`) and `.cursor/opencode-model-fallback.json`. On rate limit or API
-error, the `@razroo/opencode-model-fallback` plugin tries `fallback_models`
-in order.
+### Harness, routes, and Definition of DONE
+Active goals carry a `harness` object on `state.json` (phase, route,
+`complexity`, `requirements` `{qa, visual, planner, reviewer, source}`, tasks,
+gates, budget, metrics, retries, findings). Orchestrator drives it via
+`goal-git.sh harness …`.
+
+**Complexity (cheap, deterministic):**
+
+```bash
+.cursor/scripts/goal-git.sh complexity classify "<goal text>"
+# TRIVIAL | NORMAL | COMPLEX | ARCHITECTURAL
+```
+
+| Level | Planner | Flow |
+|---|---|---|
+| TRIVIAL | skipped | Builder → Verify → optional Review |
+| NORMAL | yes | Plan → Build → Verify → Review |
+| COMPLEX | yes | Plan → Research? → Build → Verify → Review |
+| ARCHITECTURAL | yes | Plan → Research? → Build → Expert? → Verify → Review |
+
+Complexity chooses **roles and flow**, not spawn-time models. Agent models come
+from `.cursor/goal-models.json` role entries (default `inherit`) synced into
+frontmatter — optional per-role pin, project-wide.
+
+**Spawn budgets** (defaults): `max_reviewer_runs` starts at `1 + max_rework` and
+**auto-extends** while review findings remain. `max_total_spawns` grows with it.
+planner=1, researcher=1, expert=1, qa=1, visual=1. Use `harness spawn <role>`
+before each spawn. Do not mark REVIEW PASS without a reviewer spawn and a clean
+`pending` / `review pending`. `review_max_iterations` is **0 (unlimited)** —
+local `review iterate` only counts; the loop stops when findings are clean.
+
+Phases: `PLANNED` → `RESEARCHING?` → `BUILDING` → `ESCALATED?` → `VERIFYING` →
+`REVIEWING?` → `QA?` → `VISUAL_REVIEW?` → `REWORK?` → `BUILDING` | `VERIFYING` →
+`DONE` | `FAILED`.
+
+`REWORK` may go to `BUILDING` (spawn the fix) or `VERIFYING` (fix builder already
+done). Never `REWORK` → `REVIEWING` / `QA` / `DONE`.
+
+Task states: `PENDING | RUNNING | DONE | BLOCKED | FAILED`.
+
+**Routing**
+- Classify first, then optionally `route detect` (baseline only).
+- Planner `### Routing` is authoritative when Planner runs.
+- Initialize:
+
+```bash
+.cursor/scripts/goal-git.sh harness init \
+  --route <route> --qa <bool> --visual <bool> \
+  --complexity <LEVEL> --planner-required <bool> --reviewer-required <bool>
+```
+
+**Gates & evidence**
+Always required: `IMPLEMENTATION`, `VERIFICATION`.
+`PLAN` required unless `requirements.planner=false` (SKIPPED clears it).
+`REVIEW` required unless `requirements.reviewer=false` (SKIPPED clears it).
+Conditional: `QA` / `VISUAL` from requirements.
+
+| Gate | PASS evidence |
+|---|---|
+| PLAN | Planner accepted + `discovery_context` persisted (`harness context put`) when planner required |
+| IMPLEMENTATION | All `builder`/`builder-expert` tasks `DONE` (at least one); `discovery_context` when planner required |
+| VERIFICATION | Only via `verify run` (manual PASS rejected) |
+| REVIEW | `pending` (inline) or `review pending` (local) exit 0 |
+| QA | `requirements.qa` + `qa_runs>=1` (`harness spawn qa`) + scenarios + `harness qa pending` exit 0 |
+| VISUAL | `requirements.visual` + `visual_runs>=1` + observations + latest-per-viewport `harness visual pending` exit 0 |
+
+Gate status: `NOT_RUN | PASS | FAIL | SKIPPED | UNKNOWN`.
+`harness done` exits 0 only when every **required** gate is `PASS`
+(SKIPPED does not clear a required gate). Retries hard-stop at limits.
+
+**Progress timeline**
+Agents emit typed milestones into `harness.events`:
+
+```json
+{"at":"2026-09-13T20:12:00+07:00","agent":"orchestrator","event":"planner_started","issue":25,"detail":""}
+```
+
+```bash
+.cursor/scripts/goal-git.sh harness event <agent> <event> [detail]   # append (best-effort)
+.cursor/scripts/goal-git.sh harness progress [-n 20] [--json]        # human timeline
+```
+
+Example `harness progress` output:
+
+```
+Issue #25
+Phase: BUILDING
+
+20:12:00  Orchestrator  Planner started
+20:12:18  Planner       Completed
+20:12:20  Builder       Started
+20:14:03  Builder       Running targeted tests
+```
+
+Write-capable agents (`builder`, `builder-expert`, `reviewer`, `qa`,
+`visual-reviewer`, `orchestrator`) call `harness event` themselves.
+`planner` / `researcher` are read-only — they emit a `## Milestones` block
+that the Orchestrator replays. A plain-text progress mirror lives at `.cursor/goal-progress.log` for `tail -f`.
+Agents also append typed milestones via `harness event`.
+
+**analyze ≠ verify**
+- `analyze` — gitnexus + rtk gain (tooling/analysis)
+- `verify run` — application correctness only (build/test/lint/typecheck/…)
+
+The Orchestrator runs `analyze` **once after each reconciled implementation
+batch and before `VERIFYING`**. It is an `ANALYSIS` harness gate. Individual
+agents do not re-run repository-wide analysis after their own changes; they
+use the shared index/context and run only targeted local checks. This prevents
+duplicated tool output and token consumption.
+
+**Context handoffs** (compact structured artifacts, not full transcripts):
+`discovery_context`, `implementation_plan`, `research_report`, `staged_diff` /
+builder `handoff`, `escalation_solution`, `review_report`, `qa_findings`,
+`visual_review_report`.
+
+**Visual reviewer**
+Prefer a vision-capable model for `visual-reviewer` (pin via
+`goal-models.json` / frontmatter when needed). Prefer Playwright screenshots at
+375 / 768 / 1024 / 1440 when the app can start.
+
+### Model routing (inherit-plus-optional)
+Cursor cannot pick a model per spawn the way Codex `$routing` + `spawn_agent` does.
+Custom agents use a **static** YAML `model:` in `.cursor/agents/*.md`.
+
+1. **Default** — every role is `"model": "inherit"` in `.cursor/goal-models.json`
+   and agent frontmatter. `$routing` cells are also `inherit` (roles/complexity
+   still choose *which* agents run, not which model).
+2. **Optional pin** — set a role’s top-level `model` in `.cursor/goal-models.json`
+   to a Cursor-valid slug (e.g. a stronger planner). `init.sh` syncs that into
+   the agent `.md` frontmatter. The pin is **project-wide**, not per-goal.
+3. Complexity still drives planner skip / research / expert escalation policy.
+
+Do not invent a spawn-time model override Cursor cannot honor. Do not paste
+Codex model IDs into this catalog unless you intentionally pin them for Cursor.
 
 ### Delegation
-The planner tags every task:
-- `@builder` — routine frontend/backend tasks.
-- `@builder-expert` — novel algorithms, concurrency, auth/security,
-  performance hot paths, complex state machines, distributed coordination.
+The planner tags every implementation task `@builder` and emits routing signals
+(`route`, `research_required`, `qa_required`, `visual_required`, `high_risk_areas`).
+`@builder-expert` is escalation-only — **after** `@builder` has attempted the
+task **and** `verify run` FAILs (or reviewer records a serious architectural
+defect). Do not wait for Builder to say BLOCKED. Domain labels and
+`high_risk_areas` are not enough. Never a default or first implementer.
 
-The orchestrator delegates tasks to the tagged agent automatically.
+`@researcher` and `@qa` are on-demand / conditional. Verification is deterministic
+via `goal-git.sh verify run` (not an LLM claim).
 
 When `concurrency` > 1 (set via `/init-goal`), the planner groups independent
 tasks into concurrency batches. The orchestrator spawns parallel builders in
@@ -110,10 +259,10 @@ Fallback: auto-detect from origin remote URL. Override with
 `GOAL_PLATFORM=github|gitlab`.
 
 ### State and config (project-level only)
-- `.cursor/` — entire directory (agents, commands, skills, scripts, config, secrets). Gitignored — generated by `init.sh`, never committed.
+- `.cursor/` — entire directory (agents, skills, scripts, config, secrets). Gitignored — generated by `init.sh`, never committed.
 - `AGENTS.md` — project conventions. Gitignored — generated by `init.sh`, never committed.
 - `state.json` — goal history, branch, PR number. Gitignored, project root only.
-- `.cursor/mcp.json` — model fallback config + Figma MCP block. Project-level, generated by init.sh / init-goal.
+- `.cursor/mcp.json` — Figma MCP (`mcpServers.figma`) when enabled via `/init-goal`.
 - `.worktrees/` — isolated git worktrees for concurrent tasks (gitignored).
 - `.goal-review/` — local review findings per goal branch (gitignored; `review_mode: local`).
 - `design-system/` — durable UI design reference from `ui-ux-pro-max` (`MASTER.md` + optional page overrides). **Not** gitignored — commit it with the project.
@@ -145,15 +294,45 @@ MUST go through `.cursor/scripts/goal-git.sh`:
 .cursor/scripts/goal-git.sh review iterate [repo_path]
 .cursor/scripts/goal-git.sh merge              # merge PR/MR (when auto_merge enabled)
 .cursor/scripts/goal-git.sh state complete     # mark goal completed
-.cursor/scripts/goal-git.sh analyze            # npx gitnexus analyze && rtk gain
+.cursor/scripts/goal-git.sh analyze            # npx gitnexus analyze && rtk gain (NOT a verify check)
+.cursor/scripts/goal-git.sh verify detect      # detect application verification commands
+.cursor/scripts/goal-git.sh verify run [--only a,b]  # deterministic verification (only writer of VERIFICATION PASS)
+.cursor/scripts/goal-git.sh route detect       # baseline classify backend|feature|frontend
+.cursor/scripts/goal-git.sh complexity classify "<text>" [--files a,b]
+.cursor/scripts/goal-git.sh harness init --route <r> [--qa true|false] [--visual true|false] \
+  [--complexity LEVEL] [--planner-required bool] [--reviewer-required bool]
+.cursor/scripts/goal-git.sh harness phase <STATE>
+.cursor/scripts/goal-git.sh harness task add|set …   # states: PENDING|RUNNING|DONE|BLOCKED|FAILED
+.cursor/scripts/goal-git.sh harness gate <NAME> <STATUS> [reason]
+.cursor/scripts/goal-git.sh harness retry <rework|escalations|verify_retries>
+.cursor/scripts/goal-git.sh harness qa add|pending
+.cursor/scripts/goal-git.sh harness visual add|pending|resolve
+.cursor/scripts/goal-git.sh harness event <agent> <event> [detail]
+.cursor/scripts/goal-git.sh harness progress [-n N] [--json]
+.cursor/scripts/goal-git.sh harness spawn <role>    # budget gate
+.cursor/scripts/goal-git.sh harness metrics
+.cursor/scripts/goal-git.sh harness context put|get <name>
+.cursor/scripts/goal-git.sh harness status|done
+.cursor/scripts/goal-git.sh models                # print goal-models.json
+.cursor/scripts/goal-git.sh models <role>         # model + effort + fallbacks
+.cursor/scripts/goal-git.sh models <role> --complexity <LEVEL>
+.cursor/scripts/goal-git.sh models <role> --next <m>  # next fallback after <m>
+.cursor/scripts/goal-git.sh models <role> --require-multimodal [m]  # vision-capable resolve
 .cursor/scripts/goal-git.sh status             # working tree status
 .cursor/scripts/goal-git.sh restore <file>...  # restore files to HEAD
 .cursor/scripts/goal-git.sh diff               # diff against base branch
 .cursor/scripts/goal-git.sh config get         # print goal config
-.cursor/scripts/goal-git.sh worktree add <slug>    # create isolated worktree
+.cursor/scripts/goal-git.sh worktree add <slug>    # create isolated worktree (single-PR goals only)
 .cursor/scripts/goal-git.sh worktree merge <slug>  # merge worktree into goal branch
 .cursor/scripts/goal-git.sh worktree list          # list worktrees
 .cursor/scripts/goal-git.sh worktree remove <slug> # discard worktree
+.cursor/scripts/goal-git.sh groups list            # Markdown multi-PR delivery groups
+.cursor/scripts/goal-git.sh groups init [file|-]   # persist planner delivery_groups JSON
+.cursor/scripts/goal-git.sh groups start <id>      # typed branch + isolated worktree
+.cursor/scripts/goal-git.sh groups continue <id>   # resume a group (idempotent)
+.cursor/scripts/goal-git.sh groups pr <id>         # create/reuse this group's PR/MR
+.cursor/scripts/goal-git.sh groups merge <id>      # merge group PR and remove worktree
+.cursor/scripts/goal-git.sh groups cancel <id>     # cancel group and remove worktree
 .cursor/scripts/goal-git.sh issues list [url] [limit]  # list open issues from forge URL
 .cursor/scripts/goal-git.sh issues start <n> [--worktree]  # start issue goal (branch off base)
 .cursor/scripts/goal-git.sh issues queue  # current run's issue entries
@@ -164,47 +343,49 @@ MUST go through `.cursor/scripts/goal-git.sh`:
 .cursor/scripts/goal-git.sh figma disable         # disable Figma integration
 ```
 
-Launch OpenCode with Figma secrets loaded:
+Launch Cursor with Figma secrets loaded:
 ```bash
-.cursor/scripts/run-opencode.sh
+.cursor/scripts/run-cursor.sh
 ```
 
 ### Review loop
 - The **orchestrator never edits application source** — it only delegates `@builder` /
-  `@builder-expert` to fix review findings.
-- Builders must finish with a structured **Handoff** (`status`, `files_staged`, `analyze`, `notes`)
-  after staging changes and passing `goal-git.sh analyze`. They do not commit or push.
+  `@builder-expert` (escalation) to fix review findings.
+- **Rework still spawns new agents** — each builder/reviewer leg is a fresh
+  `harness spawn` (new worker turn). Token savings come from **thin briefs**:
+  `INITIAL` passes get discovery context; `REWORK` / `RE-REVIEW` passes get
+  findings + diff + verify summary only.
+- Builders must finish with a structured **Handoff** after staging changes.
+  They do not commit or push. Orchestrator runs `verify run` as the authority
+  for the VERIFICATION gate (not an LLM claim).
 - After a builder returns `FIXES_COMPLETE`, the orchestrator **immediately** resumes —
-  no user input — with ANALYZE → commit → push → **mandatory re-delegate reviewers**.
-  Never idle in REVIEW LOOP. Never skip re-review because `pending` or `review pending` is already 0.
+  no user input — with VERIFY → commit → push → **mandatory re-delegate reviewers**.
+  Never idle in REVIEW LOOP. Keep looping until `pending` / `review pending` is clean
+  and the reviewer returns LGTM. Never skip re-review because a numeric cap was hit.
+- Rework for remaining **review** findings auto-extends `max_rework`. Escalation and
+  verify-retry caps still fail the harness cleanly (`FAILED`) when exceeded.
 - **Only reviewers resolve threads** — the orchestrator must never run
-  `goal-git.sh resolve` or `goal-git.sh comment`. Reviewers resolve after confirming fixes.
-- After code changes, run `.cursor/scripts/goal-git.sh analyze` (gitnexus + rtk gain).
-  If it fails, STOP.
-- Reviewers post inline comments on the PR/MR and **must** resolve fixed threads via
-  `goal-git.sh resolve <thread-id>` (GraphQL id from `threads`, e.g. `PRRT_...`) with
-  **exit 0** before claiming LGTM. **`outdated: true` is not resolved** — only `resolved: true`
-  after a successful `resolve` call counts as clean. `goal-git.sh resolve` fails loudly on GraphQL/API errors.
-  Each pass ends with a structured **Review report** (`threads_resolved`, `comments_posted`, `remaining_unresolved`, `verdict`).
-- For UI/visual goals, the planner requires `@visual-reviewer`; the orchestrator always
-  delegates visual review when the plan says so, Figma is enabled, or UI files changed.
-- Run `.cursor/scripts/goal-git.sh pending` (inline) or `review pending` (local) to check review status.
-- Loop until exit 0 (zero unresolved threads).
+  `goal-git.sh resolve` or `goal-git.sh comment`.
+- Conditional `@qa` and `@visual-reviewer` run only when harness
+  `requirements.qa` / `requirements.visual` are true (Planner signals), not
+  merely because the baseline route is `feature`/`frontend`.
+- DONE requires `harness done` exit 0 before `state complete`.
 - When `auto_merge` is `false` (default), report "Ready for manual merge" — never claim merged.
-- When `auto_merge` is `true`, orchestrator runs `.cursor/scripts/goal-git.sh merge` after
-  `pending` exit 0; on conflict, stop and report (do not auto-resolve conflicts).
+- When `auto_merge` is `true`, orchestrator runs `.cursor/scripts/goal-git.sh merge` (or `groups merge <id>` for Markdown multi-PR) after
+  clean review; on conflict, stop and report (do not auto-resolve conflicts).
+- Markdown multi-PR: `/goal --continue` resumes every delivery group from persisted phase, starts newly unblocked groups, and does not recreate existing worktrees or PRs. `harness progress` shows root and per-group status. Root `state complete` requires every group to be merged/completed/cancelled.
 
 ### Jira goal source
 When `goal_source` is `jira`, the Atlassian MCP must be connected in `.cursor/mcp.json`.
 `/init-goal` verifies connectivity before saving. `/goal` re-checks before fetching tickets.
 Jira branches use `{task_type}/{TICKET}-{slug}` (task_type from issue type or
-`/goal bugfix DEL-4123` override — `bugfix` aliases to `bug`). Prompt/markdown branches use `goal/<slug>`.
+`/goal bugfix DEL-4123` override — `bugfix` aliases to `bug`). Prompt branches use `goal/<slug>`. Markdown multi-PR delivery branches use `<task-type>/<group-id>-<slug>` (`bugfix` → `fix`); they never use `goal/`. `markdown_pr_strategy=single` keeps the legacy one-PR `goal/<slug>` branch.
 
 ### Figma design lookup (optional)
 When enabled via `/init-goal`, agents use Figma MCP (`figma-developer-mcp`) with a PAT in
 `.cursor/figma.env` and a default design link in `goal-config.json`:
 `figma_design_url`, `figma_file_key`, `figma_node_id`. Planner, builder, and
-visual-reviewer consult Figma for UI work. Use `run-opencode.sh` to load secrets.
+visual-reviewer consult Figma for UI work. Use `run-cursor.sh` to load secrets.
 
 ### UI/UX Pro Max (optional)
 Install via `/init-skills` question **UI/UX Pro Max**
@@ -219,3 +400,23 @@ For UI/frontend goals when the skill is installed:
   Builders implement against that file (page overrides under `design-system/pages/` win).
 - **visual-reviewer** always checks the skill's pre-delivery checklist / anti-patterns,
   and compares to Figma or `design-system/MASTER.md` as appropriate.
+
+## `/create-issues` (standalone)
+
+Create GitHub or GitLab issues from a Markdown file — **outside** the `/goal`
+workflow. Does not use `goal-git.sh`, `state.json`, branches, or PRs/MRs.
+
+One `##` epic with one issue per `- [ ]` / `- [x]` under `### Tasks`. Epic
+metadata (`Labels:`, `Assignee:` / `Assignees:`, `Milestone:`) applies to every
+task. `### Acceptance` is context only.
+
+See `.cursor/skills/create-issues/SKILL.md` for the full contract.
+
+```
+/create-issues plan.md --dry-run
+/create-issues plan.md --platform github --repo owner/repo
+```
+
+All forge calls go through `.cursor/skills/create-issues/scripts/create-issues.sh`.
+Never invoke `git`, `gh`, or `glab` directly. Preview, parse, and dry-run do
+not authorize issue creation — confirm first.

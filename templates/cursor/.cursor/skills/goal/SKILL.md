@@ -1,7 +1,7 @@
 ---
 name: goal
 description: >-
-  Set, list, continue, or run issue queue. Usage: /goal <objective> | /goal --list | /goal --issues [url] [count] | /goal --continue [id] [new instruction]
+  Set, list, continue, status, or run issue queue. Usage: /goal <objective> | /goal --list | /goal --status | /goal --issues [url] [count] | /goal --continue [id] [new instruction]
 disable-model-invocation: true
 ---
 
@@ -9,125 +9,171 @@ Read the project README and AGENTS.md to understand conventions first.
 
 Arguments are the text the user typed after `/goal` in this message. Read them from the surrounding user message — there is no placeholder expansion.
 
+## Role split (non-negotiable)
+
+You are the **MAIN** agent loading `/goal`. Stay thin.
+
+| You (MAIN) | `@orchestrator` |
+|---|---|
+| Parse `/goal` args | Own the full goal loop |
+| `list` / `status` / resolve goal text | `harness *`, `models *`, `verify` |
+| `start` / `continue` / `issues list` + `issues start` (setup only) | Spawn workers when nested Task is available |
+| Spawn `@orchestrator`; **spawn-proxy workers** if orchestrator nesting is withheld | Phases, gates, QA/Visual, PR, `harness done` |
+
+**Never** from MAIN: drive harness gates yourself; edit application source; run
+verify/review as if you were the orchestrator.
+
+**Exception — spawn proxy:** if `@orchestrator` cannot nest Task / `@role`
+(Cursor two-level nesting), YOU spawn the requested worker, wait, then spawn
+`@orchestrator` again. Do **not** tell the user `/goal --continue` in this same
+session as the only next step. That is the stuck loop.
+
+```
+User → MAIN (/goal) → @orchestrator → workers
+                 ↘ spawn proxy (only when orchestrator nesting is withheld)
+```
+
+### Handoff (after setup)
+
+On `/goal --continue`, if harness phase is `FAILED` or a task is `SPAWNING`/`BLOCKED`:
+
+```bash
+.cursor/scripts/goal-git.sh harness recover-spawn
+```
+
+Then resolve orchestrator routing (for role/effort display and harness spawn audit;
+Cursor agent `.md` files already pin `model` in frontmatter — do not invent or
+hardcode model IDs here):
+
+```bash
+LEVEL=$(.cursor/scripts/goal-git.sh complexity classify "<goal or issue text>" | jq -r .complexity)
+if ! read -r MODEL EFFORT _ <<< "$(.cursor/scripts/goal-git.sh models orchestrator --complexity "$LEVEL")"; then
+  # Failed lookup is a catalog/script problem — NOT nesting / spawn capability.
+  STOP. Show the command error. Tell the user to copy the latest
+  `.cursor/scripts/goal-git.sh` (or re-run `./init.sh --cursor`) so `models`
+  accepts `$routing.orchestrator`. Do **not** ask for a new session for this error.
+fi
+# TAB from models: model · reasoning_effort · fallbacks (from .cursor/goal-models.json)
+```
+
+Spawn `@orchestrator` via Cursor Task / `@orchestrator` (do not invent a
+`spawn_agent` API). Prefer the project's orchestrator agent; pass routing
+`MODEL`/`EFFORT` in the brief for harness audit when useful. Brief contents:
+
+* mode: `single` | `continue` | `issue` | `issue-queue`
+* `goal_source` (`prompt` | `markdown` | `jira` | `issues`)
+* active goal text (and continuation instruction if any)
+* when `markdown`: the `.md` **path** — orchestrator must still spawn `@planner`
+  unless classify printed `planner_required=false`. The file is draft input,
+  not a skip. After planning, expect multiple delivery groups (typed branches +
+  isolated worktrees + one PR/MR each) unless `markdown_pr_strategy=single`.
+  Report **one PR URL per delivery group**, never a final aggregation PR.
+* multi-repo: yes/no (from `state.json` `repos`)
+* for issues: `GOAL_RUN_ID`, issue number(s), queue vs single
+* complexity: `$LEVEL`
+* reminder: orchestrator owns harness + worker Task/`@role` spawns; if nesting
+  is withheld, return `## SPAWN_REQUEST`
+
+If `models orchestrator --complexity` prints `Unknown role`:
+the project's `goal-git.sh` is stale (it only treats **top-level** JSON keys as
+roles, and ignores `$routing.orchestrator`). Copy
+`templates/cursor/.cursor/scripts/goal-git.sh` into the project (or
+`./init.sh --cursor`), then `/goal --continue`. **Do not** treat this as a
+nesting-depth failure.
+
+### Spawn proxy (mandatory when nesting is withheld)
+
+If `@orchestrator` returns `## SPAWN_REQUEST` or `## SPAWN_CAPABILITY_MISSING`:
+
+1. `.cursor/scripts/goal-git.sh harness recover-spawn` (if phase FAILED / task BLOCKED).
+2. Take `role`, `model`, `effort` from the SPAWN_REQUEST. If missing, use
+   `recover-spawn` JSON `.next.role` and
+   `models <role> --complexity "$LEVEL"`.
+3. `.cursor/scripts/goal-git.sh harness task set <id> SPAWNING` (when task_id present).
+4. `.cursor/scripts/goal-git.sh harness spawn <role> "$MODEL" "$EFFORT"`
+5. **You** spawn the worker via Task / `@<role>` (wait until it finishes).
+6. Spawn `@orchestrator` again with: worker finished; continue the loop; if
+   nesting is still withheld, return the next SPAWN_REQUEST (do not FAILED).
+7. Repeat until orchestrator reaches DONE / a real (non-spawn) blocker.
+
+Do **not** STOP with “run `/goal --continue`”. That repeats forever in this
+session. Spawn-proxy is the correct recovery path while nesting is limited.
+
+Model IDs come only from `.cursor/goal-models.json` via `models …` — never
+hardcode them in this skill. Cursor role agents already declare `model` in
+frontmatter; `models` routing is still useful for harness spawn audit and
+effort/role display.
+
+Wait until `@orchestrator` finishes (or the spawn-proxy loop finishes). Then
+report PR URL(s) / blockers from its result (or `harness status` / `harness done`).
+For Markdown multi-PR goals, report each delivery group's PR/MR — there is no
+aggregation PR. Do **not** call `harness spawn orchestrator` (worker budget is for child agents only).
+
+Only use `.cursor/scripts/goal-git.sh` for git/state — never raw `git` / `gh` / `glab`.
+
 ## Dispatch
 
-Inspect `the arguments from the user message` and follow the matching path:
+Inspect the arguments from the user message and follow the matching path:
 
 ### `/goal --list`
 Run `.cursor/scripts/goal-git.sh list` and display the output.
-If the state has `repos` with more than one entry, also show each repo path and its active branch from `state.json` (run `.cursor/scripts/goal-git.sh state | jq '.repos'`). Stop.
+If `repos` has more than one entry, also show each repo path and branch
+(`.cursor/scripts/goal-git.sh state | jq '.repos'`). **Stop** (no orchestrator).
+
+### `/goal --status`
+```bash
+.cursor/scripts/goal-git.sh harness progress
+.cursor/scripts/goal-git.sh harness status | jq '{phase, route, requirements, gates, tasks}'
+```
+Mention `.cursor/goal-progress.log` for the plain-text timeline. **Stop**.
 
 ### `/goal --issues [url] [count]`
-Fetch open issues from a GitHub/GitLab issue list URL and drive each to its own branch and PR.
+1. Parse remainder: optional `url`, optional `count`.
+   - Missing `url` → `issue_list_url` from config.
+   - Missing `count` → `issue_limit` from config (default `3`).
+   - Still no URL → STOP; tell user to run `/init-goal` or pass a URL.
+2. `export GOAL_RUN_ID="run-$(date +%s)-$$"`
+3. `.cursor/scripts/goal-git.sh issues list "<url>" <count>`
+4. Dispatch:
+   - **Exactly 1 issue:** `issues start <number>`, then **Handoff** with mode `issue`.
+   - **2+ issues:** **Handoff** with mode `issue-queue` (orchestrator: queue plan, batches, one PR per issue; multi-repo = one issue at a time).
+5. When orchestrator returns, report **one PR URL per issue**.
 
-1. Parse remainder after `--issues`: optional `url`, optional `count` (integer).
-   - If `url` omitted → read `issue_list_url` from config.
-   - If `count` omitted → read `issue_limit` from config (default `3`).
-   - If `url` still missing, STOP and tell the user to run `/init-goal` or pass a URL.
-2. Export a run id for this invocation:
-   ```bash
-   export GOAL_RUN_ID="run-$(date +%s)-$$"
-   ```
-3. Fetch issues:
-   ```bash
-   .cursor/scripts/goal-git.sh issues list "<url>" <count>
-   ```
-4. Delegate `@orchestrator` in **ISSUE QUEUE** mode (see orchestrator agent): planner queue pass → per-issue batches → one PR per issue.
-   - Multi-repo: process **one issue at a time** (no concurrent issue worktrees).
-   - Single-repo with `concurrency` > 1: planner may batch independent issues; orchestrator uses `issues start <n> --worktree` per issue in a batch.
-5. Report **one PR URL per issue** when the run completes.
-
-Also run this path when `goal_source` is `issues` and the user invokes bare `/goal` with no args (use configured `issue_list_url` and `issue_limit`), or `/goal <count>` where `<count>` is only a number.
+Also use this path when `goal_source` is `issues` and the user runs bare `/goal` / `/goal <count>`.
 
 ### `/goal --continue [id] [new instruction]`
-This continues an existing goal. No quotes required.
-
-**Examples:**
+Examples:
 ```
-/goal --continue                                    # resume active goal, no new instruction
-/goal --continue add-health                         # switch to goal "add-health", no new instruction
-/goal --continue add-health fix the healthcheck API # switch to "add-health" AND apply new instruction
-/goal --continue fix the healthcheck API            # active goal + new instruction
+/goal --continue
+/goal --continue add-health
+/goal --continue add-health fix the healthcheck API
+/goal --continue fix the healthcheck API
 ```
 
-**Parse the remainder** (after stripping `--continue`):
-1. If remainder is empty → identifier = active goal, instruction = none.
-2. Otherwise take the first token as a candidate identifier. Check it against
-   existing goals via `.cursor/scripts/goal-git.sh list` (branch or goal text match).
-   - If it matches an existing goal → identifier = first token, instruction = remaining words (may be empty).
-   - If it does NOT match → identifier = empty (active goal), instruction = whole remainder.
-3. Run `.cursor/scripts/goal-git.sh continue "<identifier>"` (empty identifier = active goal).
-4. **Issue run resume:** If `.cursor/scripts/goal-git.sh issues queue` returns a non-empty array with any entry where `status` is not `completed`, resume the **issue queue** for that `run_id`:
-   - Set `export GOAL_RUN_ID=<run_id from queue entries>`.
-   - For each incomplete entry in the queue (in batch order), set `GOAL_ISSUE=<issue.number>` on every `goal-git.sh` call and run PLAN → BUILD → ANALYZE → COMMIT → PR → REVIEW LOOP until `issues finish <n>`.
-   - Skip branch creation for entries that already have a branch in state.
-5. Otherwise skip branch creation — you are on the goal's branch.
-6. If an instruction was parsed, pass it to `@planner` as the primary objective for
-   this pass (does NOT overwrite the stored goal in `state.json`).
-7. **Plan → Build → Analyze → Review → Loop until done**:
-   - Check if state.json has `repos` with more than one entry.
-   - **Multi-repo mode (repos > 1)**:
-     - For each repo in `state.json` repos: cd into the repo and checkout the branch listed in state.
-     - Read full `state.json` (`.cursor/scripts/goal-git.sh state`).
-     - Delegate `@planner` ONCE with the full state (all repos, active goal) — planner produces repo-tagged tasks in dependency batches.
-     - For each batch: for each task with a `[repo-name]` tag, `cd <repo-path> && delegate @builder` (or `@builder-expert`) scoped to that repo. Builders in same batch can run in parallel.
-     - After batch: for each repo that had changes, cd into repo, commit, push, create/update PR, delegate `@reviewer` scoped to that repo, run review loop.
-   - **Single-repo mode (repos ≤ 1 or no repos field)**: follow existing Plan → Build → Analyze → Review → Loop flow unchanged.
-8. Report ALL PR URLs across all repos (multi-repo) or the single PR URL.
+Parse remainder after `--continue`:
+1. Empty → active goal, no instruction.
+2. Else first token vs `.cursor/scripts/goal-git.sh list` (branch/goal match).
+   - Match → identifier = token, instruction = rest.
+   - No match → identifier empty (active), instruction = whole remainder.
+3. `.cursor/scripts/goal-git.sh continue "<identifier>"`
+4. If harness phase is `FAILED` or a task is `SPAWNING`/`BLOCKED`, run
+   `harness recover-spawn` before handoff.
+5. If `issues queue` has incomplete entries → `export GOAL_RUN_ID=<run_id>`, **Handoff** mode `issue-queue` (resume). Do not run the loop yourself.
+6. Else **Handoff** mode `continue`, include any continuation instruction for Planner.
+7. Report PR URL(s) when orchestrator finishes.
 
 ### `/goal <objective>` (new goal)
-1. Determine `goal_source`: check if `the arguments from the user message` begins with `--source <type>`. If so, pop both tokens and validate `<type>` is one of `jira|markdown|prompt|issues`. Use it as the effective `goal_source` for this invocation (overrides config). Otherwise read from `.cursor/scripts/goal-git.sh config get` (field `goal_source`). If no config exists, treat as `prompt`.
-   If `effective_source` is `issues` and `the arguments from the user message` is empty or a single integer, follow **`/goal --issues`** above (optional count token only).
-   Prefix all `goal-git.sh start` calls with `GOAL_SOURCE_OVERRIDE=<effective_source>` (e.g. `GOAL_SOURCE_OVERRIDE=prompt .cursor/scripts/goal-git.sh start ...`).
-2. Resolve the goal text based on source:
-   - `prompt` — use `the arguments from the user message` directly as the goal. If empty, STOP and ask the user for an objective.
-   - `markdown` — resolve the file path:
-     - If `the arguments from the user message` is non-empty → use it as the path.
-     - If `the arguments from the user message` is empty → read `markdown_path` from config; if missing, STOP and tell the user to run `/init-goal` or pass a path (e.g. `/goal docs/feature.md`).
-     - Read the file contents as the goal. If the file does not exist, STOP and report the path.
-   - `jira` — resolve ticket + task_type, then fetch the issue:
-     1. Parse `the arguments from the user message` tokens:
-        - Optional leading `task_type` override if the first token is one of:
-          `feat`, `bug`, `chore`, `refactor`, `docs`, `test`, `perf`
-          (`bugfix` and `fix` alias to `bug`; e.g. `/goal bugfix DEL-4123`).
-        - Next token (or first token if no type override) is the ticket key.
-        - If no ticket token → read `jira_ticket` from config.
-        - If still missing, STOP and tell the user to run `/init-goal` or pass a ticket (e.g. `/goal PROJ-123`).
-     2. Verify Atlassian MCP is available (attempt `jira_get_issue` or check MCP tools).
-        - If unavailable, STOP and guide the user to connect the Atlassian MCP server in `.cursor/mcp.json`, then retry.
-     3. Fetch via `jira_get_issue` and use summary + description as the goal text.
-     4. If `task_type` was not overridden from args, map Jira issue type (case-insensitive):
-        - Bug, Defect → `bug`
-        - Story, Task, Feature, New Feature, Epic, Improvement, Enhancement → `feat`
-        - Documentation → `docs`
-        - Test → `test`
-        - Spike, Tech Debt, Chore → `chore`
-        - Performance → `perf`
-        - anything else / missing → `feat`
-     5. Call start with ticket and type:
-        ```bash
-        GOAL_SOURCE_OVERRIDE=<effective_source> .cursor/scripts/goal-git.sh start "<resolved goal>" "<ticket-key>" "<task_type>"
-        ```
-        Branch becomes `{task_type}/{TICKET}-{slug}` (e.g. `feat/DEL-4123-add-health-check`).
-3. For `prompt` and `markdown` only: run `GOAL_SOURCE_OVERRIDE=<effective_source> .cursor/scripts/goal-git.sh start "<resolved goal>"` (branch `goal/<slug>`).
-   For `jira`, start was already called in step 2.
-4. **Multi-repo orchestration (when repos > 1 in config)**:
-   - Read repos from `state.json` (`.cursor/scripts/goal-git.sh state | jq '.repos'`).
-   - Delegate `@planner` ONCE (planner sees ALL repos, produces repo-tagged tasks in dependency batches).
-     - Pass the full `state.json` active goal and all repo paths to the planner.
-     - Tell planner to suffix each task with the target repo path, e.g. `[tije-smpob-api]`.
-   - For each batch in the plan:
-     - For each task in the batch:
-       - If the task has a repo tag `[repo-name]`, cd into that repo before delegating builder.
-       - Run: `cd <repo-path> && delegate @builder` (or `@builder-expert`) scoped to that repo.
-       - Builders in the same batch can run in parallel across repos (if concurrency allows).
-     - After the batch completes:
-       - For each repo that had changes in this batch:
-         - cd into repo, commit, push, create/update PR.
-         - Delegate `@reviewer` scoped to that repo (pass repo_path).
-         - Run review loop on that repo until clean.
-   - DONE: report ALL PR URLs across all repos.
-5. **Single-repo mode**: If state.json has `repos` with 1 entry or no `repos` field, follow existing single-repo flow (Plan → Build → Analyze → Review → Loop) unchanged.
-6. Report the final PR URL.
-
-Only use `.cursor/scripts/goal-git.sh` for all git and state operations — never run `git`, `gh`, or `glab` directly.
+1. `goal_source`: optional leading `--source <jira|markdown|prompt|issues>`; else config; else `prompt`.
+   If source is `issues` and remainder empty/integer → **`/goal --issues`**.
+   Prefix starts with `GOAL_SOURCE_OVERRIDE=<effective_source>`.
+2. Resolve goal text:
+   - `prompt` — remainder (empty → ask user and STOP).
+   - `markdown` — path from remainder or `markdown_path`; read file (missing → STOP).
+   - `jira` — optional task_type token, then ticket (or `jira_ticket`); require Atlassian MCP; `jira_get_issue`; map type; then:
+     ```bash
+     GOAL_SOURCE_OVERRIDE=<effective_source> .cursor/scripts/goal-git.sh start "<goal>" "<ticket>" "<task_type>"
+     ```
+3. For `prompt` / `markdown`: `GOAL_SOURCE_OVERRIDE=… .cursor/scripts/goal-git.sh start "<resolved goal>"`.
+   Optional markdown task-type token (`bugfix` → `fix`) may be passed as the third `start` argument; it overrides planner inference only when the plan yields a single delivery group.
+4. **Handoff** mode `single` (orchestrator classifies, **plans**, builds, verifies, reviews, QA/Visual, DONE). Markdown does **not** skip `@planner`. For `markdown` + `auto`/`task`, orchestrator runs the **per-group** loop (`groups init` → `groups start` → verify/review → `groups pr` → merge in dependency order). Do not expect one `goal/` PR.
+5. Report the final PR URL(s). Markdown multi-PR: one URL per delivery group.

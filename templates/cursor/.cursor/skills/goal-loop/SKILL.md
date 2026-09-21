@@ -2,8 +2,9 @@
 name: goal-loop
 description: >-
   Goal Architecture Loop Engineering — a persistent workflow pattern where an
-  orchestrator agent drives a task through plan → build → analyze → review
-  cycles, looping until the resulting PR has zero unresolved review threads.
+  orchestrator agent drives a task through plan → research? → build → verify →
+  review → qa? → visual? cycles under a deterministic harness, looping until
+  applicable gates pass and the PR has zero unresolved review threads.
   Uses ponytail full mode for all agents.
 ---
 
@@ -11,67 +12,95 @@ description: >-
 
 ## Core Pattern
 ```
-/GOAL → PLAN → BUILD → ANALYZE → REVIEW → LOOP (until PR clean)
+/GOAL → PLAN → RESEARCH? → BUILD → ESCALATE? → VERIFY → REVIEW → QA? → VISUAL? → LOOP → DONE
 ```
 
 Extra domain skills can be injected project-level via `/init-skills` (from
 [agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills)).
 Optionally also install
 [ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) for
-UI/UX/frontend design intelligence (`uipro init --ai opencode`).
+UI/UX/frontend design intelligence.
 
 ## Rules
-1. **Single source of truth**: `state.json` in the project root (project-level only).
+1. **Single source of truth**: `state.json` in the project root (includes `harness`).
 2. **One tool for git**: all agents route git and state operations through
    `.cursor/scripts/goal-git.sh`. NEVER invoke `git`, `gh`, or `glab` directly.
 3. **Orchestrator never fixes code**: review findings are delegated to `@builder` /
-   `@builder-expert` only; orchestrator has `edit: deny`.
-4. **Analyze before review**: after every code change, run
-   `npx gitnexus analyze && rtk gain`. If either fails, STOP.
-5. **Consensus gate**: PR must have zero unresolved review threads before
+   `@builder-expert` (escalation only); orchestrator has `edit: deny`.
+4. **Verify before review**: after implementation, run `goal-git.sh verify run`.
+   Actual tooling is the authority for the VERIFICATION gate — never an LLM claim.
+   `analyze` (gitnexus + rtk) is separate and is **not** a verify check.
+5. **Harness gates Definition of DONE**: `harness done` must exit 0 before success.
+   Required gates come from `requirements` (not hardcoded route). Always:
+   PLAN, IMPLEMENTATION, VERIFICATION, REVIEW. Plus QA/VISUAL only when
+   `requirements.qa` / `requirements.visual` are true. Required gates clear
+   only on `PASS`.
+6. **Consensus gate**: PR must have zero unresolved review threads before
    the loop exits. Reviewers must run `goal-git.sh resolve` (exit 0) for fixed threads before LGTM.
-6. **Skills via OpenCode tool**: agents load installed skills with
-   `skill({ name: "<skill-name>" })` from the native `skill` tool — not `@mentions` or Read on SKILL.md paths.
-7. **Ponytail full**: every agent operates in ponytail full mode — YAGNI
-   first, reuse over rewrite, shortest working diff wins.
-8. **Conventional commits**: all commits use the Conventional Commits format.
-9. **Inline review** (`review_mode: inline`, default): reviewers post comments on the PR/MR and resolve threads
-   when issues are fixed (use GraphQL thread `id` from `threads`; require resolve exit 0);
-   each pass outputs a structured **Review report**.
-9b. **Local review** (`review_mode: local`): no PR during review — reviewers read `diff`, record findings in
-   gitignored `.goal-review/`, orchestrator loops on `review pending`; PR is created only after review is clean.
-   Iteration cap (`review_max_iterations`, default 5) stops runaway loops via `review iterate`.
-10. **Builder handoff**: builders stage changes, pass `analyze`, then emit **Handoff**
-   (`FIXES_COMPLETE` or `BLOCKED`). Orchestrator resumes immediately — no idle wait.
-11. **Visual review for UI**: planner marks `@visual-reviewer` required for UI goals;
-   orchestrator always delegates when plan, Figma, or UI file changes require it.
-12. **UI/UX Pro Max (optional)**: when installed, UI/frontend goals use Figma as visual
-    source of truth if enabled; otherwise persist/reuse `design-system/MASTER.md` via the
-    skill's design-system generator. Builders and visual-reviewer apply the pre-delivery checklist.
-13. **Auto-merge opt-in**: when `auto_merge` is true, orchestrator runs `merge` after
+7. **Skills via native tool**: agents load installed skills with `/skill-name`.
+8. **Ponytail full**: every agent operates in ponytail full mode.
+9. **Conventional commits**: all commits use the Conventional Commits format.
+10. **Inline / local review**: same as before (`review_mode` + `.goal-review/`).
+11. **Builder handoff**: builders stage changes, emit **Handoff**; orchestrator runs verify.
+12. **Token efficiency**: Researcher / Builder Expert / QA / Visual are conditional.
+    Builder Expert is escalation-only — **after** `@builder` has attempted the
+    task **and** `verify run` FAILs (or reviewer records a serious architectural
+    defect). Never a default or first implementer.
+13. **Retry limits**: `harness retry` hard-stops **escalations** and **verify_retries**.
+    Review/rework continues until `pending` / `review pending` is clean (`review_max_iterations` is 0).
+14. **Auto-merge opt-in**: when `auto_merge` is true, orchestrator runs `merge` (or `groups merge` per Markdown delivery group) after
     clean review; default is manual merge.
+15. **Markdown multi-PR**: new Markdown goals default to multiple typed branches and PRs (`feat/` `fix/` `docs/` …), never a `goal/` aggregation PR. Each group has its own worktree, harness, and gates. Root completion requires every group.
 
 ## Agent Roles
 | Agent | Role | Access |
 |---|---|---|
-| `orchestrator` | Manages workflow, delegates, runs scripts | Full + task |
-| `planner` | Architecture and implementation plans — tags tasks @builder or @builder-expert | Read-only |
-| `builder` | Routine execution (CRUD, UI, refactors, config, tests) across frontend and backend | Full |
-| `builder-expert` | Complex execution (algorithms, concurrency, security, perf, state machines, distributed coordination) | Full |
-| `reviewer` | Code correctness, security, tests — inline PR comments or local findings | Bash (goal-git.sh only) |
-| `visual-reviewer` | UI quality, accessibility, visuals — inline PR comments or local findings | Bash (goal-git.sh only) |
+| MAIN (`/goal`) | Thin: parse args, start/continue/list/status, spawn one `@orchestrator` | Setup only |
+| `orchestrator` | Owns workflow, harness, all worker spawns | Full + task |
+| `planner` | Architecture plans — route/research/risk signals | Read-only |
+| `researcher` | On-demand research (docs, APIs, unfamiliar tech) | Read-only |
+| `builder` | Routine execution across frontend and backend | Full |
+| `builder-expert` | Escalation-only complex execution | Full |
+| `reviewer` | Code correctness, security, tests | Bash (goal-git.sh only) |
+| `qa` | Behavior/business acceptance (conditional) | Bash (goal-git.sh only) |
+| `visual-reviewer` | UI quality, accessibility, visuals (conditional) | Bash (goal-git.sh only) |
 
 ## Delegation logic
-The planner analyzes task complexity and tags each planned item:
-- `@builder` — standard CRUD, UI, refactors, config, glue code, routine tests.
-- `@builder-expert` — novel algorithms, concurrency, auth/security, perf
-  hot paths, complex state machines, distributed coordination, DB migrations.
+```
+User → MAIN (/goal) → @orchestrator → @planner / @builder / …
+```
+MAIN never spawns workers except as spawn-proxy when orchestrator nesting is withheld.
+Orchestrator owns the loop.
 
-The orchestrator reads these tags and delegates to the correct agent.
+Planner tags every implementation task `@builder` and emits:
+- `route`: backend | feature | frontend
+- `research_required`, `qa_required`, `visual_required`
+- `high_risk_areas` (orchestrator may escalate to `@builder-expert` **after** builder + verify FAIL)
+- `delivery_groups` when the goal is Markdown `auto`/`task` (typed branches, deps, file ownership)
 
-When `concurrency` > 1, the planner groups independent tasks into concurrency
-batches. The orchestrator creates git worktrees per task, runs builders in
-parallel (capped at `concurrency`), then merges back sequentially.
+Orchestrator:
+- Initializes harness with Planner signals:
+  `harness init --route <r> --qa <bool> --visual <bool>`
+- For Markdown multi-PR: `groups init` then per-group `groups start`, builder(s) in that worktree only, verify/review/QA/visual, `groups pr`, merge in dependency order. No aggregation PR.
+- Spawns `@researcher` only when research is required
+- Spawns `@builder-expert` only on escalation triggers (never parallel default; only after builder + `verify run` FAIL)
+- Runs `@qa` / `@visual-reviewer` only when harness `requirements` say so
+- Always runs deterministic `verify run` before treating VERIFICATION as PASS
+- Resolves visual model via `models visual-reviewer --require-multimodal`
+
+## Routes and gates
+`route detect` is a **baseline** only. Planner `route` / `qa_required` /
+`visual_required` override it via `harness init --qa/--visual`.
+
+Always required: PLAN, IMPLEMENTATION, VERIFICATION, REVIEW.
+Conditional: QA iff `requirements.qa`; VISUAL iff `requirements.visual`.
+
+PASS evidence: IMPLEMENTATION ← builder tasks DONE; VERIFICATION ← `verify run`
+only; REVIEW ← pending/review pending; QA ← qa pending; VISUAL ← visual pending.
+
+**analyze ≠ verify**
+- `analyze` — gitnexus + rtk gain (tooling/analysis); ANALYSIS gate after implementation batches
+- `verify run` — application correctness only (build/test/lint/typecheck/…)
 
 ## State (`state.json`)
 Project-level only — pinned to the project root, never global.
@@ -79,15 +108,48 @@ Project-level only — pinned to the project root, never global.
 [
   {
     "goal": "the task objective",
-    "branch": "goal/<slug> | feat/DEL-4123-<slug>",
+    "branch": "goal/<slug> | feat/DEL-4123-<slug> | feat/g1-<slug>",
+    "delivery_mode": "single | multi-pr",
+    "markdown_pr_strategy": "auto | single | task",
+    "delivery_groups": [
+      {
+        "id": "g1",
+        "task_type": "fix",
+        "title": "Correct schema and permission alignment",
+        "branch": "fix/g1-correct-schema-permissions",
+        "worktree": ".worktrees/g1-correct-schema-permissions",
+        "depends_on": [],
+        "status": "in_progress",
+        "pr_number": null,
+        "pr_url": "",
+        "harness": {}
+      }
+    ],
     "base_branch": "main",
     "pr_number": null,
     "pr_url": "",
     "status": "in_progress|completed|failed",
-    "run_id": "run-1700000000-12345",
-    "batch": 1,
-    "worktree": ".worktrees/issue-42",
-    "issue": {"number": 42, "url": "https://...", "title": "..."},
+    "harness": {
+      "phase": "BUILDING",
+      "route": "feature",
+      "requirements": {"qa": true, "visual": false, "source": "explicit"},
+      "tasks": [],
+      "gates": {
+        "PLAN": {"status": "PASS"},
+        "IMPLEMENTATION": {"status": "PASS"},
+        "VERIFICATION": {"status": "NOT_RUN"},
+        "REVIEW": {"status": "NOT_RUN"},
+        "QA": {"status": "NOT_RUN"},
+        "VISUAL": {"status": "SKIPPED", "reason": "requirements.visual=false"}
+      },
+      "qa_findings": [],
+      "visual_findings": [],
+      "counters": {"rework": 0, "escalations": 0, "verify_retries": 0},
+      "limits": {"max_rework": 3, "max_escalations": 2, "max_verify_retries": 3},
+      "events": [
+        {"at": "2026-09-13T20:12:00+07:00", "agent": "orchestrator", "event": "planner_started", "issue": 25, "detail": ""}
+      ]
+    },
     "repos": [
       {"path": "repo-name", "pr_number": null, "pr_url": ""}
     ]
@@ -95,12 +157,6 @@ Project-level only — pinned to the project root, never global.
 ]
 ```
 The last entry is the active goal. Read via `goal-git.sh state`.
-Branch format: `goal/<slug>` for prompt/markdown; `{task_type}/{ticket}-{slug}` for jira
-(e.g. `feat/DEL-4123-add-health-check`).
-
-**Single-repo:** `repos` field absent or `[{path: ".", ...}]`. Top-level `pr_number`/`pr_url` still present for backward compat.
-
-**Multi-repo:** `repos` array contains {path, pr_number, pr_url} per repo. Top-level `pr_number`/`pr_url` may be absent.
 
 ## Config (`.cursor/goal-config.json`)
 Project-level only — set via `/init-goal`.
@@ -112,93 +168,78 @@ Project-level only — set via `/init-goal`.
   "concurrency": 1,
   "auto_merge": false,
   "review_mode": "inline",
-  "review_max_iterations": 5,
-  "issue_list_url": "https://github.com/org/repo/issues",
-  "issue_limit": 3,
-  "repos": ["repo1", "repo2"],
-  "figma_enabled": false,
-  "figma_design_url": "https://www.figma.com/design/...",
-  "figma_file_key": "AbCdEf",
-  "figma_node_id": "1:2"
+  "review_max_iterations": 0,
+  "max_rework": 3,
+  "max_escalations": 2,
+  "max_verify_retries": 3,
+  "qa_mode": "auto",
+  "visual_mode": "auto",
+  "markdown_pr_strategy": "auto",
+  "max_tasks_per_pr": 3,
+  "max_files_per_pr": 25,
+  "max_parallel_prs": 2,
+  "verify_commands": [],
+  "figma_enabled": false
 }
 ```
-`concurrency` = 1 means sequential only. Values > 1 enable parallel builders
-via git worktrees.
+`verify_commands` (optional array of `{name, cmd}`) overrides auto-detection entirely.
+`qa_mode` / `visual_mode`: `auto|always|never`.
+`review_max_iterations`: `0` = unlimited. Review loops until `pending` / `review pending` is clean.
+`markdown_pr_strategy`: `auto` (default for new Markdown goals) groups planner tasks into cohesive PRs; `single` keeps one PR; `task` is one PR per independently mergeable task. Limits are planning signals — never force unsafe splits. Existing in-progress Markdown goals without `delivery_mode=multi-pr` keep one-PR behavior.
 
-`repos` — array of repository paths (relative to PROJECT_ROOT). Absent in single-repo mode (defaults to `["."]`). Set by `/init-goal` repo selection step. Used by `goal-git.sh` to create branches/PRs in all selected repos.
+## Model routing (`goal-models.json` + orchestrator)
+Catalog = `.cursor/goal-models.json` only (edit per project). Cursor role agents pin
+`model` in frontmatter (synced by `init.sh`); `models <role> --complexity` still
+drives harness spawn audit and effort/role display:
 
-`.worktrees/` — isolated git worktrees for concurrent tasks (gitignored).
-`.goal-review/` — local review findings JSON per goal branch (gitignored; used when `review_mode` is `local`).
+1. Orchestrator runs `.cursor/scripts/goal-git.sh models <role> --complexity <LEVEL>`
+   before each worker spawn.
+2. On failure, `models <role> --next <model>` picks the next
+   `fallback_models` entry (vision-filtered for multimodal roles).
+   Exhausted fallbacks → STOP and report.
+3. Before spawning `visual-reviewer`, run
+   `models visual-reviewer --require-multimodal`. Never downgrade to text-only.
+   Allowlist: `$capabilities.vision_models` in `goal-models.json`.
 
-Figma PAT is stored separately in `.cursor/figma.env` (gitignored). MCP config
-is in project `.cursor/mcp.json`. Commands:
-```bash
-.cursor/scripts/goal-git.sh figma setup <token>
-.cursor/scripts/goal-git.sh figma design set <url>
-.cursor/scripts/goal-git.sh figma status
-.cursor/scripts/run-opencode.sh   # launch opencode with FIGMA_API_KEY loaded
-```
-
-## Model fallback (`.cursor/mcp.json`)
-Project-level — generated by `init.sh` from `goal-models.json`.
-Loads `@razroo/opencode-model-fallback` with per-agent `model` +
-`fallback_models` in `.cursor/mcp.json`. Plugin settings in
-`.cursor/opencode-model-fallback.json`. On rate limit or API error, the
-plugin tries fallbacks in order.
-
-## Model capabilities (`goal-models.json`)
-Single source of truth for per-agent models and input modalities:
-
-```json
-{
-  "visual-reviewer": {
-    "preferred_models": ["opencode-go/mimo-v2.5-pro"],
-    "fallback_models": ["opencode/mimo-v2.5-free"],
-    "capabilities": {
-      "multimodal": true,
-      "modalities": { "input": ["text", "image"], "output": ["text"] }
-    }
-  }
-}
-```
-
-Text-only agents set `"multimodal": false` and `"input": ["text"]`.
-`init.sh` syncs `preferred_models[0]` into agent `.md` frontmatter and
-regenerates `.cursor/mcp.json`. Only `visual-reviewer` handles image input.
+Do not document concrete model IDs here — read `$routing` / role defaults in JSON.
 
 ## Git Helper (`.cursor/scripts/goal-git.sh`)
 ```bash
-.cursor/scripts/goal-git.sh start <goal> [ticket] [task_type]  # create branch (jira: task_type/TICKET-slug)
-.cursor/scripts/goal-git.sh continue [id]    # resume active or switch goal (/goal --continue [id] [instruction])
-.cursor/scripts/goal-git.sh list             # list all goals
-.cursor/scripts/goal-git.sh state            # print active goal JSON
-.cursor/scripts/goal-git.sh stage <file>...   # stage specific files
-.cursor/scripts/goal-git.sh commit [msg]     # commit staged changes
-.cursor/scripts/goal-git.sh push             # push branch to origin
-.cursor/scripts/goal-git.sh pr               # create or update PR
-.cursor/scripts/goal-git.sh pending          # exit 0 if no unresolved threads
-.cursor/scripts/goal-git.sh threads          # list review threads as JSON
-.cursor/scripts/goal-git.sh comment <path> <line> <body>  # post inline comment
-.cursor/scripts/goal-git.sh resolve <thread-id>  # resolve thread
-.cursor/scripts/goal-git.sh review init [repo_path]  # init local findings file
-.cursor/scripts/goal-git.sh review add <path> <line> <severity> <body> [repo_path]
-.cursor/scripts/goal-git.sh review list [repo_path]  # list local findings JSON
-.cursor/scripts/goal-git.sh review resolve <id> [repo_path]
-.cursor/scripts/goal-git.sh review pending [repo_path]  # exit 0 if no unresolved findings
-.cursor/scripts/goal-git.sh review iterate [repo_path]  # increment iteration (exit 1 if cap exceeded)
-.cursor/scripts/goal-git.sh merge            # merge PR/MR (when auto_merge enabled)
-.cursor/scripts/goal-git.sh state complete   # mark goal completed
-.cursor/scripts/goal-git.sh analyze          # npx gitnexus analyze && rtk gain
-.cursor/scripts/goal-git.sh status           # working tree status
-.cursor/scripts/goal-git.sh restore <file>   # restore files to HEAD
-.cursor/scripts/goal-git.sh diff             # diff against base branch
-.cursor/scripts/goal-git.sh config get       # print goal config
-.cursor/scripts/goal-git.sh worktree add <slug>    # create isolated worktree
-.cursor/scripts/goal-git.sh worktree merge <slug>  # merge into goal branch
-.cursor/scripts/goal-git.sh worktree list          # list worktrees
-.cursor/scripts/goal-git.sh worktree remove <slug>  # discard worktree
-.cursor/scripts/goal-git.sh issues list [url] [limit]  # list open issues from forge URL
-.cursor/scripts/goal-git.sh issues start <n> [--worktree]  # start issue goal (branch off base)
-.cursor/scripts/goal-git.sh issues queue  # current run's issue entries
-.cursor/scripts/goal-git.sh issues finish <n>  # complete issue + remove worktree
+.cursor/scripts/goal-git.sh start <goal> [ticket] [task_type]
+.cursor/scripts/goal-git.sh continue [id]
+.cursor/scripts/goal-git.sh list
+.cursor/scripts/goal-git.sh state
+.cursor/scripts/goal-git.sh complexity classify "<text>" [--files a,b]
+.cursor/scripts/goal-git.sh harness init --route <r> [--qa true|false] [--visual true|false] [--complexity LEVEL] [--planner-required bool] [--reviewer-required bool]
+.cursor/scripts/goal-git.sh harness phase <STATE>
+.cursor/scripts/goal-git.sh harness task add <role> <title> [--parent tN]
+.cursor/scripts/goal-git.sh harness task set <id> <PENDING|RUNNING|DONE|BLOCKED|FAILED>
+.cursor/scripts/goal-git.sh harness gate <NAME> <STATUS> [reason]
+.cursor/scripts/goal-git.sh harness retry <rework|escalations|verify_retries>
+.cursor/scripts/goal-git.sh harness qa add <scenario> <PASS|FAIL> <note>
+.cursor/scripts/goal-git.sh harness qa pending
+.cursor/scripts/goal-git.sh harness qa resolve <id>
+.cursor/scripts/goal-git.sh harness visual add <viewport> <PASS|FAIL> <note>
+.cursor/scripts/goal-git.sh harness visual pending
+.cursor/scripts/goal-git.sh harness visual resolve <id>
+.cursor/scripts/goal-git.sh harness event <agent> <event> [detail]
+.cursor/scripts/goal-git.sh harness progress [-n N] [--json]
+.cursor/scripts/goal-git.sh harness spawn <role>
+.cursor/scripts/goal-git.sh harness metrics
+.cursor/scripts/goal-git.sh harness context put|get <name>
+.cursor/scripts/goal-git.sh harness status
+.cursor/scripts/goal-git.sh harness done
+.cursor/scripts/goal-git.sh groups list
+.cursor/scripts/goal-git.sh groups init [file|-]
+.cursor/scripts/goal-git.sh groups start <group-id>
+.cursor/scripts/goal-git.sh groups continue <group-id>
+.cursor/scripts/goal-git.sh groups pr <group-id>
+.cursor/scripts/goal-git.sh groups merge <group-id>
+.cursor/scripts/goal-git.sh groups cancel <group-id>
+.cursor/scripts/goal-git.sh verify detect
+.cursor/scripts/goal-git.sh verify run [--only a,b]
+.cursor/scripts/goal-git.sh route detect
+.cursor/scripts/goal-git.sh analyze
+.cursor/scripts/goal-git.sh models [<role>] [--complexity LEVEL] [--next <m>] [--require-multimodal [m]]
+# … plus existing stage/commit/push/pr/pending/threads/review/worktree/issues/figma …
 ```

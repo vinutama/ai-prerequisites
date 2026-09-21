@@ -1,12 +1,28 @@
 #!/usr/bin/env bash
 # Deterministic tests for Markdown multi-PR delivery groups.
+# Usage: AGENT=codex|cursor bash tests/codex/test-delivery-groups.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SRC_SCRIPTS="$ROOT/templates/codex/.codex/scripts"
+AGENT="${AGENT:-codex}"
+case "$AGENT" in
+  codex)
+    SRC_SCRIPTS="$ROOT/templates/codex/.codex/scripts"
+    AGENT_DIR=".codex"
+    ;;
+  cursor)
+    SRC_SCRIPTS="$ROOT/templates/cursor/.cursor/scripts"
+    AGENT_DIR=".cursor"
+    ;;
+  *)
+    echo "Unknown AGENT=$AGENT (expected codex|cursor)" >&2
+    exit 1
+    ;;
+esac
 PASS=0
 FAIL=0
 
+echo "=== delivery-groups tests (AGENT=$AGENT) ==="
 ok() { PASS=$((PASS + 1)); echo "  PASS  $*"; }
 fail() { FAIL=$((FAIL + 1)); echo "  FAIL  $*"; }
 
@@ -138,11 +154,11 @@ BUGFIX_JSON='{
 setup_proj() {
   local dir="$1" strategy="${2:-auto}"
   rm -rf "$dir"
-  mkdir -p "$dir/.codex/scripts" "$dir/bin"
-  cp "$SRC_SCRIPTS/goal-git.sh" "$SRC_SCRIPTS/delivery-groups.sh" "$dir/.codex/scripts/"
-  chmod +x "$dir/.codex/scripts/goal-git.sh"
+  mkdir -p "$dir/$AGENT_DIR/scripts" "$dir/bin"
+  cp "$SRC_SCRIPTS/goal-git.sh" "$SRC_SCRIPTS/delivery-groups.sh" "$dir/$AGENT_DIR/scripts/"
+  chmod +x "$dir/$AGENT_DIR/scripts/goal-git.sh"
 
-  cat > "$dir/.codex/goal-config.json" <<EOF
+  cat > "$dir/$AGENT_DIR/goal-config.json" <<EOF
 {
   "goal_source": "markdown",
   "target_branch": "main",
@@ -203,12 +219,12 @@ EOF
 G() {
   # Run goal-git.sh inside $PROJ with stubs.
   env GOAL_PLATFORM=github PATH="$PROJ/bin:$PATH" \
-    "$PROJ/.codex/scripts/goal-git.sh" "$@"
+    "$PROJ/$AGENT_DIR/scripts/goal-git.sh" "$@"
 }
 
 start_markdown() {
   env GOAL_SOURCE_OVERRIDE=markdown GOAL_PLATFORM=github PATH="$PROJ/bin:$PATH" \
-    "$PROJ/.codex/scripts/goal-git.sh" start "$@"
+    "$PROJ/$AGENT_DIR/scripts/goal-git.sh" start "$@"
 }
 
 echo "== bash syntax"

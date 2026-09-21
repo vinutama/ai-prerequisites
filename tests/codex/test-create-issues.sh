@@ -1,12 +1,26 @@
 #!/usr/bin/env bash
-# Deterministic tests for Codex create-issues helper (no real forge calls).
+# Deterministic tests for create-issues helper (no real forge calls).
+# Usage: AGENT=codex|cursor bash tests/codex/test-create-issues.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SCRIPT="$ROOT/templates/codex/.agents/skills/create-issues/scripts/create-issues.sh"
+AGENT="${AGENT:-codex}"
+case "$AGENT" in
+  codex)
+    SCRIPT="$ROOT/templates/codex/.agents/skills/create-issues/scripts/create-issues.sh"
+    ;;
+  cursor)
+    SCRIPT="$ROOT/templates/cursor/.cursor/skills/create-issues/scripts/create-issues.sh"
+    ;;
+  *)
+    echo "Unknown AGENT=$AGENT (expected codex|cursor)" >&2
+    exit 1
+    ;;
+esac
 PASS=0
 FAIL=0
 
+echo "=== create-issues tests (AGENT=$AGENT) ==="
 ok() { PASS=$((PASS + 1)); echo "  PASS  $*"; }
 fail() { FAIL=$((FAIL + 1)); echo "  FAIL  $*"; }
 
