@@ -911,7 +911,7 @@ print_tree() {
     codex)
       echo "├── state.json          (gitignored, created at runtime; includes harness)"
       echo "├── AGENTS.md           (gitignored)"
-      echo "├── .agents/skills/     (\$goal, \$init-goal, \$init-skills, goal-loop)"
+      echo "├── .agents/skills/     (\$goal, \$init-goal, \$init-skills, \$create-issues, goal-loop)"
       echo "└── .codex/             (gitignored)"
       echo "    ├── agents/         (8 specialized agents, TOML)"
       echo "    ├── scripts/        (goal-git.sh harness/verify/route, run-codex.sh)"

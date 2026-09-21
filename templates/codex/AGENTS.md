@@ -44,6 +44,7 @@ If a skill is absent, the agent proceeds normally. Re-run `/init-skills` with
 /goal <your objective>                  # start a new goal
 /goal --list                            # list all goals
 /goal --continue [id] [new instruction]  # resume a goal; optional new instruction
+$create-issues <path.md>                # standalone: publish ### Tasks as forge issues
 ```
 
 **Delegation:** `$goal` runs on MAIN (thin). After setup, MAIN spawns **one**
@@ -412,3 +413,23 @@ For UI/frontend goals when the skill is installed:
   Builders implement against that file (page overrides under `design-system/pages/` win).
 - **visual-reviewer** always checks the skill's pre-delivery checklist / anti-patterns,
   and compares to Figma or `design-system/MASTER.md` as appropriate.
+
+## `$create-issues` (standalone)
+
+Create GitHub or GitLab issues from a Markdown file — **outside** the `$goal`
+workflow. Does not use `goal-git.sh`, `state.json`, branches, or PRs/MRs.
+
+One `##` epic with one issue per `- [ ]` / `- [x]` under `### Tasks`. Epic
+metadata (`Labels:`, `Assignee:` / `Assignees:`, `Milestone:`) applies to every
+task. `### Acceptance` is context only.
+
+See `.agents/skills/create-issues/SKILL.md` for the full contract.
+
+```
+$create-issues plan.md --dry-run
+$create-issues plan.md --platform github --repo owner/repo
+```
+
+All forge calls go through `.agents/skills/create-issues/scripts/create-issues.sh`.
+Never invoke `git`, `gh`, or `glab` directly. Preview, parse, and dry-run do
+not authorize issue creation — confirm first.

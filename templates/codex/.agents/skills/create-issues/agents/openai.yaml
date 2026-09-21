@@ -1,0 +1,6 @@
+interface:
+  display_name: "Create Issues"
+  short_description: "Publish Markdown tasks as GitHub or GitLab issues"
+  default_prompt: "Use $create-issues to preview and publish tasks from plan.md."
+policy:
+  allow_implicit_invocation: false

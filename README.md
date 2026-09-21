@@ -140,7 +140,7 @@ Shared across every target: `state.json` (gitignored, project root),
 | OpenCode | `AGENTS.md`, `.opencode/` (agents, commands, skills, scripts), `opencode.json`, `create-issues.sh` | `/goal`, `/create-issues` |
 | Cursor | `AGENTS.md`, `.cursor/` (agents, skills, scripts) | `/goal` (skills with `disable-model-invocation`) |
 | Claude Code | `CLAUDE.md`, `.claude/` (agents, commands, skills, scripts) | `/goal` |
-| Codex | `AGENTS.md`, `.codex/` (TOML agents, scripts, `config.toml`), `.agents/skills/` | `$goal` |
+| Codex | `AGENTS.md`, `.codex/` (TOML agents, scripts, `config.toml`), `.agents/skills/` | `$goal`, `$create-issues` |
 | Qoder | `AGENTS.md`, `.qoder/` (agents, commands, skills, scripts), `.qoder/settings.json` (Figma MCP) | `/goal-arch` (not built-in `/goal`) |
 
 Each tree includes the same core 6 agents (`planner`, `builder`, `builder-expert`,
@@ -162,7 +162,7 @@ and the `goal-loop` skill. **Codex** also ships `researcher` and `qa`, plus
 | `/goal --issues [url] [count]` or `$goal --issues [url] [count]` | Fetch open issues from a list URL and drive each to its own PR |
 | `/goal --list` or `$goal --list` | List all goals |
 | `/goal --continue [id] [instruction]` | Resume a goal; optional new instruction for this pass |
-| `/create-issues <path.md>` | **OpenCode only** — create GitHub/GitLab issues from a markdown epic (one task checkbox under `### Tasks` per issue) |
+| `/create-issues <path.md>` or `$create-issues <path.md>` | Create GitHub/GitLab issues from a markdown epic (one task checkbox under `### Tasks` per issue). OpenCode: `/create-issues`. Codex: `$create-issues`. |
 
 ## Usage patterns
 
