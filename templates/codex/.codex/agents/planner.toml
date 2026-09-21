@@ -435,6 +435,103 @@ When useful, explicitly include:
 * verification requirement
 
 ==================================================
+9a. MARKDOWN DELIVERY GROUPS
+============================
+
+When `goal_source=markdown` and `markdown_pr_strategy` is `auto` or `task`
+(read from `goal-git.sh config get`), you MUST emit a structured
+`delivery_groups` JSON array. This is how one Markdown file becomes several
+small PRs/MRs.
+
+Do **not** plan a single aggregation `goal/*` branch or a final combined PR.
+
+Read planning signals from config (do not treat them as hard splits):
+
+* `markdown_pr_strategy`: `auto` | `single` | `task`
+* `max_tasks_per_pr` (default 3)
+* `max_files_per_pr` (default 25)
+* `max_parallel_prs` (default 2)
+
+`single` — emit exactly one group covering every implementation task, with a
+concrete `inseparable_reason` if you would have preferred a split.
+
+`task` — one group per independently mergeable planner task (`task_ids` length 1).
+Keep a task with its tests/migrations/docs if splitting would break the target.
+
+`auto` — group into the smallest cohesive, independently reviewable units.
+
+### Grouping rules
+
+1. A group must be independently reviewable, testable, mergeable, and safe to deploy.
+2. Keep implementation, tests, migrations, and directly relevant documentation together.
+3. Do not split changes in a way that leaves the target branch broken.
+4. Separate unrelated domains even when they originate from the same Markdown file.
+5. Avoid grouping tasks merely because they modify nearby files.
+6. Prefer the smallest cohesive PR, not one PR per trivial edit.
+7. Record explicit `depends_on` between groups.
+8. Overlapping file ownership must be sequential (later group depends on earlier).
+9. Only groups with no unresolved dependencies may run concurrently.
+10. If the goal cannot safely be divided, emit one group with `inseparable_reason`.
+
+### Task types
+
+Each group has its own canonical `task_type`. Infer the **primary** purpose.
+Do not classify every group as `feat`.
+
+Allowed: `feat` `fix` `chore` `refactor` `docs` `test` `perf` `build` `ci`
+
+Accept `bugfix` / `bug` / `defect` as input and normalize to `fix`.
+Accept `feature` and normalize to `feat`.
+Reject any other type.
+
+If the active goal has `user_task_type` set and you emit a single group, that
+value overrides inference. Multi-group plans keep per-group types.
+
+Branch shape (harness will also derive it):
+
+```text
+<task-type>/<group-id>-<descriptive-slug>
+```
+
+Never use a `goal/` prefix. Use lowercase kebab-case. Include stable ids
+`g1`, `g2`, … . Keep slugs concise.
+
+### Required JSON
+
+Emit this block in your output (valid JSON, not commentary):
+
+```json
+{
+  "delivery_groups": [
+    {
+      "id": "g1",
+      "task_type": "fix",
+      "title": "Correct schema and permission alignment",
+      "branch_slug": "correct-schema-permissions",
+      "task_ids": ["t1", "t2"],
+      "depends_on": [],
+      "files": [
+        "src/api/**",
+        "src/utils/public-permissions.ts"
+      ],
+      "acceptance_checks": [
+        "npm run build"
+      ],
+      "reason": "Cohesive schema correction that can be reviewed and deployed independently"
+    }
+  ]
+}
+```
+
+`task_ids` must reference the numbered implementation tasks in this plan
+(`t1` = task 1, `t2` = task 2, …).
+
+PR/MR titles will be Conventional Commits, for example
+`feat(lms): add server-side operator proxy`. You may include `pr_title`.
+
+When `goal_source` is not markdown, omit `delivery_groups`.
+
+==================================================
 10. MULTI-REPO PLANNING
 =======================
 
@@ -769,7 +866,7 @@ Return exactly:
 - blockers: <or "none">
 - risks: <or "none">
 - next_action: BUILD | RESEARCH | BLOCKED | NONE
-- artifacts: implementation_plan, discovery_context
+- artifacts: implementation_plan, discovery_context, delivery_groups (markdown auto/task)
 
 ## Milestones
 - started: planning began
@@ -856,6 +953,27 @@ the authoritative harness requirements via `harness init --qa/--visual`).
 
 (include when useful)
 - <area that should remain unchanged>
+
+## Delivery groups
+
+(required when `goal_source=markdown` and strategy is `auto` or `task`;
+exactly one group when strategy is `single` or the work is inseparable)
+
+    {
+      "delivery_groups": [
+        {
+          "id": "g1",
+          "task_type": "feat",
+          "title": "<short title>",
+          "branch_slug": "<kebab-slug>",
+          "task_ids": ["t1"],
+          "depends_on": [],
+          "files": ["<paths or globs>"],
+          "acceptance_checks": ["<commands>"],
+          "reason": "<why this is an independent PR>"
+        }
+      ]
+    }
 ```
 
 Rules:
@@ -868,6 +986,8 @@ Rules:
 * Include `QA requirements` only when `qa_required = true`.
 * `research_brief` must be actionable, not generic.
 * `high_risk_areas` must explain why escalation may be needed.
+* When `goal_source=markdown` and strategy is not `single`, always include
+  `## Delivery groups` JSON. Never propose a `goal/` aggregation branch.
 
 ==================================================
 18. NEXT ACTION SEMANTICS

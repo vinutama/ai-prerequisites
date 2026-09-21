@@ -65,7 +65,9 @@ Spawn `@orchestrator` with that `model` + `reasoning_effort`. Pass a short brief
 * active goal text (and continuation instruction if any)
 * when `markdown`: the `.md` **path** — orchestrator must still spawn `@planner`
   unless classify printed `planner_required=false`. The file is draft input,
-  not a skip.
+  not a skip. After planning, expect multiple delivery groups (typed branches +
+  isolated worktrees + one PR/MR each) unless `markdown_pr_strategy=single`.
+  Report **one PR URL per delivery group**, never a final aggregation PR.
 * multi-repo: yes/no (from `state.json` `repos`)
 * for issues: `GOAL_RUN_ID`, issue number(s), queue vs single
 * complexity: `$LEVEL`
@@ -115,7 +117,8 @@ Model IDs come only from `.codex/goal-models.json` — never hardcode them in th
 
 Wait until `@orchestrator` finishes (or the spawn-proxy loop finishes). Then
 report PR URL(s) / blockers from its result (or `harness status` / `harness done`).
-Do **not** call `harness spawn orchestrator` (worker budget is for child agents only).
+For Markdown multi-PR goals, report each delivery group's PR/MR — there is no
+aggregation PR. Do **not** call `harness spawn orchestrator` (worker budget is for child agents only).
 
 Only use `.codex/scripts/goal-git.sh` for git/state — never raw `git` / `gh` / `glab`.
 
@@ -180,5 +183,6 @@ Parse remainder after `--continue`:
      GOAL_SOURCE_OVERRIDE=<effective_source> .codex/scripts/goal-git.sh start "<goal>" "<ticket>" "<task_type>"
      ```
 3. For `prompt` / `markdown`: `GOAL_SOURCE_OVERRIDE=… .codex/scripts/goal-git.sh start "<resolved goal>"`.
-4. **Handoff** mode `single` (orchestrator classifies, **plans**, builds, verifies, reviews, QA/Visual, DONE). Markdown does **not** skip `@planner`.
-5. Report the final PR URL(s).
+   Optional markdown task-type token (`bugfix` → `fix`) may be passed as the third `start` argument; it overrides planner inference only when the plan yields a single delivery group.
+4. **Handoff** mode `single` (orchestrator classifies, **plans**, builds, verifies, reviews, QA/Visual, DONE). Markdown does **not** skip `@planner`. For `markdown` + `auto`/`task`, orchestrator runs the **per-group** loop (`groups init` → `groups start` → verify/review → `groups pr` → merge in dependency order). Do not expect one `goal/` PR.
+5. Report the final PR URL(s). Markdown multi-PR: one URL per delivery group.

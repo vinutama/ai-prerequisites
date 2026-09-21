@@ -77,6 +77,22 @@ Commands:
   harness done              Exit 0 only when required gates PASS (from requirements)
   harness recover-spawn     Unstick FAILED/SPAWNING/BLOCKED after spawn_agent was withheld
   codex ensure-user-config  Trust this project in ~/.codex/config.toml and set max_depth=3
+  groups persist            Save active group harness/PR overlay back into delivery_groups
+  groups list               List delivery groups on the active Markdown goal
+  groups init [file|-]      Persist planner delivery_groups JSON (stdin or file)
+  groups validate [file|-]  Validate delivery_groups JSON without writing state
+  groups status [group-id]  Show one group or all groups
+  groups activate <group-id>
+                            Overlay group branch/worktree/harness onto the root goal
+  groups start <group-id>   Create typed branch + isolated worktree; activate group
+  groups continue <group-id>
+                            Resume an existing group (idempotent)
+  groups ready              Print groups whose dependencies are merged
+  groups pr <group-id>      Create/reuse this group's PR/MR
+  groups merge <group-id>   Merge the group PR and remove its worktree
+  groups complete <group-id>
+                            Mark a group completed without merge
+  groups cancel <group-id>  Cancel a group and remove its worktree
   selfcheck                 Run platform detection self-check
   models                    Print full goal-models.json
   models <role>             Print model, effort, and fallbacks for a role (TAB-separated)
@@ -448,9 +464,11 @@ cmd_start() {
     fi
   fi
 
-  local base branch goal_source ticket_key type_slug
+  local base branch goal_source ticket_key type_slug delivery_mode strategy
   base=$(detect_base)
   goal_source="${GOAL_SOURCE_OVERRIDE:-$(config_read goal_source)}"
+  strategy="$(markdown_pr_strategy_effective)"
+  delivery_mode="single"
 
   if [ "$goal_source" = "jira" ]; then
     if [ -z "$ticket" ]; then
@@ -463,44 +481,74 @@ cmd_start() {
     ticket_key="$(normalize_ticket "$ticket")"
     type_slug="$(normalize_task_type "$task_type")"
     branch="${type_slug}/${ticket_key}-$(slugify "$goal")"
+  elif [ "$goal_source" = "markdown" ] && { [ "$strategy" = "auto" ] || [ "$strategy" = "task" ]; }; then
+    delivery_mode="multi-pr"
+    branch=""
   else
     branch="goal/$(slugify "$goal")"
   fi
 
   log "Platform: $platform"
   log "Base: $base"
-  log "Branch: $branch"
+  if [ "$delivery_mode" = "multi-pr" ]; then
+    log "Markdown multi-PR: no aggregation branch (strategy=$strategy)"
+  else
+    log "Branch: $branch"
+  fi
 
   local repos_json="[]"
   while IFS= read -r repo; do
     [ -z "$repo" ] && continue
     local rd
     rd=$(repo_dir "$repo")
-    log "Creating branch in: $repo"
+    log "Preparing repo: $repo"
     (cd "$rd" && git fetch origin "$base" 2>/dev/null || true)
-    (cd "$rd" && git checkout -b "$branch" "origin/$base" 2>/dev/null || git checkout "$branch" 2>/dev/null || true)
+    if [ "$delivery_mode" != "multi-pr" ]; then
+      (cd "$rd" && git checkout -b "$branch" "origin/$base" 2>/dev/null || git checkout "$branch" 2>/dev/null || true)
+    fi
     repos_json=$(echo "$repos_json" | jq --arg path "$repo" '. + [{"path": $path, "pr_number": null, "pr_url": ""}]')
   done < <(get_repos)
+
+  local user_task_type=""
+  if [ -n "$task_type" ] && [ "$goal_source" = "markdown" ]; then
+    user_task_type="$(canonical_delivery_task_type "$task_type")" || exit 1
+  fi
 
   local new_goal
   local repo_count
   repo_count=$(echo "$repos_json" | jq 'length')
 
-  if [ "$repo_count" -eq 1 ]; then
-    new_goal=$(jq -n --arg goal "$goal" --arg branch "$branch" --arg base "$base" \
-      '{goal: $goal, branch: $branch, base_branch: $base, pr_number: null, pr_url: "", status: "in_progress", repos: []}')
-    new_goal=$(echo "$new_goal" | jq --argjson r "$repos_json" '.repos = $r')
-  else
-    new_goal=$(jq -n --arg goal "$goal" --arg branch "$branch" --arg base "$base" --argjson repos "$repos_json" \
-      '{goal: $goal, branch: $branch, base_branch: $base, status: "in_progress", repos: $repos}')
-  fi
+  new_goal=$(jq -n \
+    --arg goal "$goal" \
+    --arg branch "$branch" \
+    --arg base "$base" \
+    --arg source "$goal_source" \
+    --arg mode "$delivery_mode" \
+    --arg strategy "$strategy" \
+    --arg user_tt "$user_task_type" \
+    --argjson repos "$repos_json" \
+    '{
+      goal: $goal,
+      branch: $branch,
+      base_branch: $base,
+      pr_number: null,
+      pr_url: "",
+      status: "in_progress",
+      goal_source: $source,
+      delivery_mode: $mode,
+      markdown_pr_strategy: $strategy,
+      user_task_type: (if $user_tt == "" then null else $user_tt end),
+      delivery_groups: [],
+      active_group_id: null,
+      repos: $repos
+    }')
 
   if [ -f "$STATE_FILE" ]; then
     state_mutate --argjson entry "$new_goal" '. + [$entry]'
   else
     echo "[$new_goal]" > "$STATE_FILE"
   fi
-  log "Goal #$(jq 'length' "$STATE_FILE") started ($repo_count repos)"
+  log "Goal #$(jq 'length' "$STATE_FILE") started ($repo_count repos, delivery_mode=$delivery_mode)"
 }
 
 cmd_commit() {
@@ -517,22 +565,31 @@ cmd_push() {
   require_cmd git jq
   refresh_goal_idx
   state_ensure_array
-  local branch
+  groups_persist_active 2>/dev/null || true
+  local branch wd
   branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch' "$STATE_FILE")
-  while IFS= read -r repo; do
-    [ -z "$repo" ] && continue
-    local rd
-    rd=$(repo_dir "$repo")
-    (cd "$rd" && git push -u origin "$branch" --force-with-lease 2>/dev/null) || (cd "$rd" && git push -u origin "$branch")
-    log "Pushed: $repo/$branch"
-  done < <(get_repos)
+  wd="$(goal_workdir)"
+  (cd "$wd" && git push -u origin "$branch" --force-with-lease 2>/dev/null) || (cd "$wd" && git push -u origin "$branch")
+  log "Pushed: $branch from $wd"
+  groups_persist_active 2>/dev/null || true
 }
 
 cmd_pr() {
   require_cmd jq
-  require_vcs_cli
   refresh_goal_idx
   state_ensure_array
+  local delivery_mode active_gid
+  delivery_mode="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].delivery_mode // "single"' "$STATE_FILE")"
+  active_gid="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].active_group_id // empty' "$STATE_FILE")"
+  if [ "$delivery_mode" = "multi-pr" ]; then
+    if [ -z "$active_gid" ] || [ "$active_gid" = "null" ]; then
+      err "Refusing aggregation PR/MR for a Markdown multi-PR goal. Use: goal-git.sh groups pr <group-id>"
+      exit 1
+    fi
+    cmd_groups_pr "$active_gid"
+    return
+  fi
+  require_vcs_cli
   local branch base goal title
   branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch' "$STATE_FILE")
   base=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].base_branch' "$STATE_FILE")
@@ -554,6 +611,7 @@ cmd_pr() {
     local result_pr_url="${PR_RESULT_URL:-}"
     state_mutate --argjson idx "$GOAL_IDX" --argjson pn "$result_pr_number" --arg url "$result_pr_url" \
       '.[$idx].pr_number = $pn | .[$idx].pr_url = $url'
+    groups_persist_active 2>/dev/null || true
     log "Created: $result_pr_url"
     return
   fi
@@ -585,6 +643,7 @@ cmd_pr() {
   done
 
   state_mutate --argjson idx "$GOAL_IDX" --argjson repos "$updated_repos" '.[$idx].repos = $repos'
+  groups_persist_active 2>/dev/null || true
 }
 
 create_pr() {
@@ -868,13 +927,20 @@ cmd_continue() {
 
   state_mutate --argjson idx "$GOAL_IDX" '.[$idx].status = "in_progress"'
 
-  local branch
-  branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch' "$STATE_FILE")
+  local branch delivery_mode
+  delivery_mode="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].delivery_mode // "single"' "$STATE_FILE")"
+  branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch // empty' "$STATE_FILE")
+  if [ "$delivery_mode" = "multi-pr" ]; then
+    log "Continuing Markdown multi-PR goal (no aggregation checkout)"
+    log "Goal: $(jq -r --argjson idx "$GOAL_IDX" '.[$idx].goal' "$STATE_FILE")"
+    cmd_groups_list
+    return 0
+  fi
   while IFS= read -r repo; do
     [ -z "$repo" ] && continue
     local rd
     rd=$(repo_dir "$repo")
-    (cd "$rd" && git checkout "$branch" 2>/dev/null || true)
+    [ -n "$branch" ] && (cd "$rd" && git checkout "$branch" 2>/dev/null || true)
   done < <(get_repos)
   log "Continuing on branch: $branch"
   log "Goal: $(jq -r --argjson idx "$GOAL_IDX" '.[$idx].goal' "$STATE_FILE")"
@@ -1234,6 +1300,12 @@ cmd_config_set() {
   fi
 
   log "Config written to $CONFIG_FILE"
+  jq '
+    .markdown_pr_strategy = (.markdown_pr_strategy // (if .goal_source == "markdown" then "auto" else "single" end))
+    | .max_tasks_per_pr = (.max_tasks_per_pr // 3)
+    | .max_files_per_pr = (.max_files_per_pr // 25)
+    | .max_parallel_prs = (.max_parallel_prs // 2)
+  ' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
   jq . "$CONFIG_FILE"
 }
 
@@ -1255,14 +1327,39 @@ cmd_state() {
 
 cmd_state_complete() {
   require_active_goal
+  refresh_goal_idx
+  groups_persist_active 2>/dev/null || true
+  local mode incomplete
+  mode="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].delivery_mode // "single"' "$STATE_FILE")"
+  if [ "$mode" = "multi-pr" ]; then
+    incomplete="$(jq -r --argjson idx "$GOAL_IDX" '
+      [.[$idx].delivery_groups[]? | select(.status != "merged" and .status != "completed" and .status != "cancelled") | .id] | join(",")
+    ' "$STATE_FILE")"
+    if [ -n "$incomplete" ]; then
+      err "Root Markdown goal is not complete — unfinished groups: $incomplete"
+      exit 1
+    fi
+    harness_event "orchestrator" "root_goal_completed" "all delivery groups merged/completed"
+  fi
   state_update status completed
   log "Goal marked completed"
 }
 
 cmd_merge() {
-  require_vcs_cli
   require_cmd jq
   refresh_goal_idx
+  local delivery_mode active_gid
+  delivery_mode="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].delivery_mode // "single"' "$STATE_FILE")"
+  active_gid="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].active_group_id // empty' "$STATE_FILE")"
+  if [ "$delivery_mode" = "multi-pr" ]; then
+    if [ -z "$active_gid" ] || [ "$active_gid" = "null" ]; then
+      err "Refusing aggregation merge for a Markdown multi-PR goal. Use: goal-git.sh groups merge <group-id>"
+      exit 1
+    fi
+    cmd_groups_merge "$active_gid"
+    return
+  fi
+  require_vcs_cli
 
   local repos
   repos=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].repos // []' "$STATE_FILE")
@@ -1365,6 +1462,14 @@ cmd_worktree_add() {
   require_active_goal
   refresh_goal_idx
 
+  local delivery_mode
+  delivery_mode="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].delivery_mode // "single"' "$STATE_FILE")"
+  if [ "$delivery_mode" = "multi-pr" ]; then
+    err "Markdown multi-PR goals use isolated group worktrees via: goal-git.sh groups start <group-id>"
+    err "Do not create nested task worktrees or a goal/ aggregation branch."
+    exit 1
+  fi
+
   local goal_branch task_branch wt_path
   goal_branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch' "$STATE_FILE")
   task_branch="$(task_branch_name "$goal_branch" "$slug")"
@@ -1442,6 +1547,14 @@ cmd_worktree_remove() {
   slug="$(slugify "$slug")"
   require_active_goal
   refresh_goal_idx
+
+  local delivery_mode
+  delivery_mode="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].delivery_mode // "single"' "$STATE_FILE")"
+  if [ "$delivery_mode" = "multi-pr" ]; then
+    err "Markdown multi-PR worktrees are removed only after merge or explicit cancellation."
+    err "Use: goal-git.sh groups merge <group-id>  or  goal-git.sh groups cancel <group-id>"
+    exit 1
+  fi
 
   local goal_branch task_branch wt_path
   goal_branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch' "$STATE_FILE")
@@ -2161,6 +2274,7 @@ harness_put() {
   local harness_json="$1"
   state_mutate --argjson idx "$GOAL_IDX" --argjson h "$harness_json" \
     '.[$idx].harness = $h'
+  groups_persist_active 2>/dev/null || true
 }
 
 harness_now() {
@@ -2558,6 +2672,7 @@ cmd_harness_phase() {
   state_mutate --argjson idx "$GOAL_IDX" --arg to "$to" \
     '.[$idx].harness.phase = $to'
   harness_event "harness" "phase" "$from -> $to"
+  groups_persist_active 2>/dev/null || true
   log "Harness phase: $from -> $to"
 }
 
@@ -2603,6 +2718,7 @@ cmd_harness_task_add() {
     | .[$idx].harness.gates.ANALYSIS = {status:"NOT_RUN",reason:"new implementation task registered"}'
 
   harness_event "harness" "task_add" "$id role=$role"
+  groups_persist_active 2>/dev/null || true
   printf '%s\n' "$id"
 }
 
@@ -2632,6 +2748,7 @@ cmd_harness_task_set() {
   '
 
   harness_event "harness" "task_set" "$id=$state"
+  groups_persist_active 2>/dev/null || true
   log "Task $id -> $state"
 }
 
@@ -3122,6 +3239,17 @@ cmd_harness_progress() {
   echo "Phase: $phase"
   echo ""
 
+  local mode
+  mode="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].delivery_mode // empty' "$STATE_FILE")"
+  if [ "$mode" = "multi-pr" ]; then
+    echo "Delivery groups:"
+    jq -r --argjson idx "$GOAL_IDX" '
+      .[$idx].delivery_groups // [] | .[] |
+      "  \(.id) [\(.status // "planned")] \(.task_type // "?") \(.branch // "")  deps=[\((.depends_on // []) | join(","))]  phase=\(.harness.phase // "—")"
+    ' "$STATE_FILE"
+    echo ""
+  fi
+
   # Normalize legacy {ts,event} and typed {at,agent,event,issue,detail}
   local events
   events="$(jq -c --argjson idx "$GOAL_IDX" --argjson n "$limit" '
@@ -3358,6 +3486,24 @@ cmd_harness_spawn() {
     exit 1
   fi
 
+  if [ "$role" = "builder" ] || [ "$role" = "builder-expert" ]; then
+    local delivery_mode wt running spawning
+    delivery_mode="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].delivery_mode // "single"' "$STATE_FILE")"
+    if [ "$delivery_mode" = "multi-pr" ]; then
+      wt="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].worktree // empty' "$STATE_FILE")"
+      running="$(jq -r --argjson idx "$GOAL_IDX" '
+        [.[$idx].harness.tasks[]? | select((.role == "builder" or .role == "builder-expert") and .state == "RUNNING")] | length
+      ' "$STATE_FILE")"
+      spawning="$(jq -r --argjson idx "$GOAL_IDX" '
+        [.[$idx].harness.tasks[]? | select((.role == "builder" or .role == "builder-expert") and .state == "SPAWNING")] | length
+      ' "$STATE_FILE")"
+      if [ "${running:-0}" -gt 0 ] || [ "${spawning:-0}" -gt 1 ]; then
+        err "Parallel builders cannot share worktree ${wt:-(project root)}. Finish or persist the running builder first."
+        exit 1
+      fi
+    fi
+  fi
+
   harness_ensure_review_loop_spawn_room "$role"
 
   local total max_total reserved
@@ -3402,6 +3548,7 @@ cmd_harness_spawn() {
     [ -n "$effort" ] && detail="$detail effort=$effort"
   fi
   harness_event "harness" "spawn" "$detail"
+  groups_persist_active 2>/dev/null || true
   jq --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics' "$STATE_FILE"
 }
 
@@ -3906,6 +4053,9 @@ PY
   log "Already-open Codex sessions keep their old max_depth. A NEW session is required for orchestrator spawn_agent."
 }
 
+# shellcheck source=delivery-groups.sh
+. "$SCRIPTS_DIR/delivery-groups.sh"
+
 
 case "${1:-}" in
   start)    cmd_start "${2:-}" "${3:-}" "${4:-}" ;;
@@ -3923,6 +4073,7 @@ case "${1:-}" in
   verify)   shift; cmd_verify "$@" ;;
   route)    shift; cmd_route "$@" ;;
   harness)  shift; cmd_harness "$@" ;;
+  groups)   shift; cmd_groups "$@" ;;
   codex)
     case "${2:-}" in
       ensure-user-config) cmd_codex_ensure_user_config ;;

@@ -94,7 +94,18 @@ This command configures the goal workflow for this project. Ask the user the fol
    - `local` — reviewers read the diff locally, record findings via `goal-git.sh review add`, orchestrator delegates builders immediately. **No PR until review is clean** (push + `pr` happen only in DONE).
      Review loops until `review pending` exits 0. Do **not** ask for a max iteration cap.
 
-After collecting answers for questions 1–8 (including 6b/6c when Figma is enabled), persist core config:
+9. **Markdown PR strategy** (only when goal source is `markdown`) — How should a Markdown goal be delivered?
+   - `auto` (**default for new Markdown goals**) — planner groups tasks into small independently testable PRs/MRs. Each group gets `<task-type>/<group-id>-<slug>`, an isolated worktree, and its own PR. No final `goal/` aggregation PR.
+   - `single` — preserve one branch + one PR (legacy).
+   - `task` — one PR per independently mergeable planner task.
+   After `config set`, persist:
+   ```bash
+   jq '.markdown_pr_strategy = "auto" | .max_tasks_per_pr = 3 | .max_files_per_pr = 25 | .max_parallel_prs = 2' \
+     .codex/goal-config.json > .codex/goal-config.json.tmp && mv .codex/goal-config.json.tmp .codex/goal-config.json
+   ```
+   Limits are planning signals; do not force unsafe splits. Existing in-progress Markdown goals keep their original one-PR schema until they complete.
+
+After collecting answers for questions 1–9 (including 6b/6c when Figma is enabled), persist core config:
 ```bash
 .codex/scripts/goal-git.sh config set <goal_source> <target_branch> <platform> <concurrency> <auto_merge> <review_mode> 0
 ```

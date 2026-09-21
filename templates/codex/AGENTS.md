@@ -63,7 +63,7 @@ active goal.
 
 Goal source (configured via `/init-goal`):
 - `prompt` — free-text objective (e.g. `/goal Add health check endpoint`); branch `goal/<slug>`
-- `markdown` — reads a `.md` file as the **goal draft** (`/goal` uses `markdown_path` from config; `/goal docs/other.md` overrides); branch `goal/<slug>`. `@planner` still runs unless classify is TRIVIAL.
+- `markdown` — reads a `.md` file as the **goal draft** (`/goal` uses `markdown_path` from config; `/goal docs/other.md` overrides). `@planner` still runs unless classify is TRIVIAL. New Markdown goals default to `markdown_pr_strategy=auto`: the planner emits `delivery_groups`, and each group gets its own `<task-type>/<group-id>-<slug>` branch, isolated worktree, harness, and PR/MR. There is **no** final `goal/` aggregation PR. Set `single` to keep one PR, or `task` for one PR per independently mergeable planner task. Existing in-progress Markdown goals without `delivery_mode=multi-pr` keep the old one-PR behavior.
 - `jira` — fetches a Jira ticket as the goal (`/goal` uses `jira_ticket` from config; `/goal OTHER-123` or `/goal bugfix DEL-4123` overrides) — requires Atlassian MCP; branch `{task_type}/{TICKET}-{slug}` (e.g. `feat/DEL-4123-add-health-check`)
 - `issues` — fetches open issues from a GitHub/GitLab issue list URL (`/goal --issues [url] [count]` or bare `/goal` when configured); **one branch + one PR per issue**; branch `{task_type}/{number}-{slug}`; planner orders by dependency and batches concurrent work (single-repo only; multi-repo processes one issue at a time)
 
@@ -334,10 +334,17 @@ MUST go through `.codex/scripts/goal-git.sh`:
 .codex/scripts/goal-git.sh restore <file>...  # restore files to HEAD
 .codex/scripts/goal-git.sh diff               # diff against base branch
 .codex/scripts/goal-git.sh config get         # print goal config
-.codex/scripts/goal-git.sh worktree add <slug>    # create isolated worktree
+.codex/scripts/goal-git.sh worktree add <slug>    # create isolated worktree (single-PR goals only)
 .codex/scripts/goal-git.sh worktree merge <slug>  # merge worktree into goal branch
 .codex/scripts/goal-git.sh worktree list          # list worktrees
 .codex/scripts/goal-git.sh worktree remove <slug> # discard worktree
+.codex/scripts/goal-git.sh groups list            # Markdown multi-PR delivery groups
+.codex/scripts/goal-git.sh groups init [file|-]   # persist planner delivery_groups JSON
+.codex/scripts/goal-git.sh groups start <id>      # typed branch + isolated worktree
+.codex/scripts/goal-git.sh groups continue <id>   # resume a group (idempotent)
+.codex/scripts/goal-git.sh groups pr <id>         # create/reuse this group's PR/MR
+.codex/scripts/goal-git.sh groups merge <id>      # merge group PR and remove worktree
+.codex/scripts/goal-git.sh groups cancel <id>     # cancel group and remove worktree
 .codex/scripts/goal-git.sh issues list [url] [limit]  # list open issues from forge URL
 .codex/scripts/goal-git.sh issues start <n> [--worktree]  # start issue goal (branch off base)
 .codex/scripts/goal-git.sh issues queue  # current run's issue entries
@@ -376,14 +383,15 @@ Launch Codex with Figma secrets loaded:
   merely because the baseline route is `feature`/`frontend`.
 - DONE requires `harness done` exit 0 before `state complete`.
 - When `auto_merge` is `false` (default), report "Ready for manual merge" — never claim merged.
-- When `auto_merge` is `true`, orchestrator runs `.codex/scripts/goal-git.sh merge` after
+- When `auto_merge` is `true`, orchestrator runs `.codex/scripts/goal-git.sh merge` (or `groups merge <id>` for Markdown multi-PR) after
   clean review; on conflict, stop and report (do not auto-resolve conflicts).
+- Markdown multi-PR: `$goal --continue` resumes every delivery group from persisted phase, starts newly unblocked groups, and does not recreate existing worktrees or PRs. `harness progress` shows root and per-group status. Root `state complete` requires every group to be merged/completed/cancelled.
 
 ### Jira goal source
 When `goal_source` is `jira`, the Atlassian MCP must be connected in `.codex/mcp.json`.
 `/init-goal` verifies connectivity before saving. `/goal` re-checks before fetching tickets.
 Jira branches use `{task_type}/{TICKET}-{slug}` (task_type from issue type or
-`/goal bugfix DEL-4123` override — `bugfix` aliases to `bug`). Prompt/markdown branches use `goal/<slug>`.
+`/goal bugfix DEL-4123` override — `bugfix` aliases to `bug`). Prompt branches use `goal/<slug>`. Markdown multi-PR delivery branches use `<task-type>/<group-id>-<slug>` (`bugfix` → `fix`); they never use `goal/`. `markdown_pr_strategy=single` keeps the legacy one-PR `goal/<slug>` branch.
 
 ### Figma design lookup (optional)
 When enabled via `/init-goal`, agents use Figma MCP (`figma-developer-mcp`) with a PAT in

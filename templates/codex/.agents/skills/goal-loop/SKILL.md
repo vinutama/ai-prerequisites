@@ -46,8 +46,9 @@ UI/UX/frontend design intelligence.
     Builder Expert is escalation-only — never a default parallel worker.
 13. **Retry limits**: `harness retry` hard-stops **escalations** and **verify_retries**.
     Review/rework continues until `pending` / `review pending` is clean (`review_max_iterations` is 0).
-14. **Auto-merge opt-in**: when `auto_merge` is true, orchestrator runs `merge` after
+14. **Auto-merge opt-in**: when `auto_merge` is true, orchestrator runs `merge` (or `groups merge` per Markdown delivery group) after
     clean review; default is manual merge.
+15. **Markdown multi-PR**: new Markdown goals default to multiple typed branches and PRs (`feat/` `fix/` `docs/` …), never a `goal/` aggregation PR. Each group has its own worktree, harness, and gates. Root completion requires every group.
 
 ## Agent Roles
 | Agent | Role | Access |
@@ -72,10 +73,12 @@ Planner tags every implementation task `@builder` and emits:
 - `route`: backend | feature | frontend
 - `research_required`, `qa_required`, `visual_required`
 - `high_risk_areas` (orchestrator may escalate to `@builder-expert`)
+- `delivery_groups` when the goal is Markdown `auto`/`task` (typed branches, deps, file ownership)
 
 Orchestrator:
 - Initializes harness with Planner signals:
   `harness init --route <r> --qa <bool> --visual <bool>`
+- For Markdown multi-PR: `groups init` then per-group `groups start`, builder(s) in that worktree only, verify/review/QA/visual, `groups pr`, merge in dependency order. No aggregation PR.
 - Spawns `@researcher` only when research is required
 - Spawns `@builder-expert` only on escalation triggers (never parallel default)
 - Runs `@qa` / `@visual-reviewer` only when harness `requirements` say so
@@ -98,7 +101,23 @@ Project-level only — pinned to the project root, never global.
 [
   {
     "goal": "the task objective",
-    "branch": "goal/<slug> | feat/DEL-4123-<slug>",
+    "branch": "goal/<slug> | feat/DEL-4123-<slug> | feat/g1-<slug>",
+    "delivery_mode": "single | multi-pr",
+    "markdown_pr_strategy": "auto | single | task",
+    "delivery_groups": [
+      {
+        "id": "g1",
+        "task_type": "fix",
+        "title": "Correct schema and permission alignment",
+        "branch": "fix/g1-correct-schema-permissions",
+        "worktree": ".worktrees/g1-correct-schema-permissions",
+        "depends_on": [],
+        "status": "in_progress",
+        "pr_number": null,
+        "pr_url": "",
+        "harness": {}
+      }
+    ],
     "base_branch": "main",
     "pr_number": null,
     "pr_url": "",
@@ -148,6 +167,10 @@ Project-level only — set via `/init-goal`.
   "max_verify_retries": 3,
   "qa_mode": "auto",
   "visual_mode": "auto",
+  "markdown_pr_strategy": "auto",
+  "max_tasks_per_pr": 3,
+  "max_files_per_pr": 25,
+  "max_parallel_prs": 2,
   "verify_commands": [],
   "figma_enabled": false
 }
@@ -155,6 +178,7 @@ Project-level only — set via `/init-goal`.
 `verify_commands` (optional array of `{name, cmd}`) overrides auto-detection entirely.
 `qa_mode` / `visual_mode`: `auto|always|never`.
 `review_max_iterations`: `0` = unlimited. Review loops until `pending` / `review pending` is clean.
+`markdown_pr_strategy`: `auto` (default for new Markdown goals) groups planner tasks into cohesive PRs; `single` keeps one PR; `task` is one PR per independently mergeable task. Limits are planning signals — never force unsafe splits. Existing in-progress Markdown goals without `delivery_mode=multi-pr` keep one-PR behavior.
 
 ## Model routing (`goal-models.json` + orchestrator)
 Catalog = `.codex/goal-models.json` only (edit per project). Resolved at spawn time:
@@ -200,6 +224,13 @@ Do not document concrete model IDs here — read `$routing` / role defaults in J
 .codex/scripts/goal-git.sh harness context put|get <name>
 .codex/scripts/goal-git.sh harness status
 .codex/scripts/goal-git.sh harness done
+.codex/scripts/goal-git.sh groups list
+.codex/scripts/goal-git.sh groups init [file|-]
+.codex/scripts/goal-git.sh groups start <group-id>
+.codex/scripts/goal-git.sh groups continue <group-id>
+.codex/scripts/goal-git.sh groups pr <group-id>
+.codex/scripts/goal-git.sh groups merge <group-id>
+.codex/scripts/goal-git.sh groups cancel <group-id>
 .codex/scripts/goal-git.sh verify detect
 .codex/scripts/goal-git.sh verify run [--only a,b]
 .codex/scripts/goal-git.sh route detect

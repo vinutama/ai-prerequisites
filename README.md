@@ -276,6 +276,12 @@ When `concurrency` > 1 (set via `/init-goal`), independent tasks run in
 parallel using isolated git worktrees. The planner groups tasks into
 concurrency batches; the orchestrator merges results back into the goal branch.
 
+Markdown goals default to **multi-PR delivery** (`markdown_pr_strategy=auto`):
+the planner emits `delivery_groups`, and each group gets its own
+`<task-type>/<group-id>-<slug>` branch, isolated worktree, harness, and PR/MR.
+There is no final `goal/` aggregation PR. Use `single` to keep the legacy
+one-PR Markdown behavior. Jira, issue-queue, and prompt goals are unchanged.
+
 ### Issue-driven goals (GitHub/GitLab)
 When `goal_source` is `issues` (set via `/init-goal`), `/goal --issues` fetches
 open issues from a configured or passed issue list URL, takes the first N

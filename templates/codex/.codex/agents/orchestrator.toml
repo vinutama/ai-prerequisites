@@ -510,6 +510,10 @@ command, display, and stop. Normally MAIN handles these without spawning you.
 If MAIN already ran `continue`, skip re-continue. Carry any continuation
 instruction into Planner context. Do not create a new branch or PR for continue.
 
+If `delivery_mode=multi-pr`, run `groups list`, resume incomplete groups with
+`groups continue <id>` (idempotent), and start newly unblocked dependency
+groups. Never create a `goal/` aggregation branch on resume.
+
 ### New goal / issue
 
 If MAIN already ran `start` or `issues start`, skip re-start. Otherwise resolve
@@ -634,6 +638,7 @@ Planner must return compact:
 
 * route, research_required, research_brief, qa_required, visual_required
 * high_risk_areas, discovery_context, implementation_plan, acceptance_criteria
+* `delivery_groups` JSON when `goal_source=markdown` and strategy is auto/task
 * `## Milestones` block
 
 After planner returns:
@@ -670,6 +675,109 @@ Then:
 unless research is required.
 
 Do NOT rediscover architecture in the Orchestrator. Consume structured outputs.
+
+==================================================
+
+# PHASE B2 — MARKDOWN MULTI-PR DELIVERY
+
+==================================================
+
+Read `delivery_mode` and `markdown_pr_strategy` from `goal-git.sh state` /
+`config get`.
+
+Applies **only** when `goal_source=markdown` **and** `delivery_mode=multi-pr`
+(new Markdown goals with strategy `auto` or `task`). Do **not** change Jira,
+issues, prompt (unless configured), or existing Markdown goals that still have
+`delivery_mode=single` / missing `delivery_groups`.
+
+### After Planner (or TRIVIAL skip)
+
+1. Extract Planner `delivery_groups` JSON. If classify skipped Planner
+   (TRIVIAL), synthesize **one** group covering the whole goal with
+   `inseparable_reason` explaining the skip.
+2. Validate and persist (idempotent — never recreate existing branches/PRs):
+
+```bash
+.codex/scripts/goal-git.sh groups validate -
+.codex/scripts/goal-git.sh groups init -
+# paste the delivery_groups JSON on stdin
+.codex/scripts/goal-git.sh harness event orchestrator delivery_grouping_completed
+```
+
+3. **Never** create a `goal/*` aggregation branch or combined PR/MR.
+4. **Never** invoke `git`, `gh`, or `glab` directly — only `goal-git.sh`.
+
+### Group loop
+
+Until every required group is `merged`, `completed`, or `cancelled`:
+
+```bash
+.codex/scripts/goal-git.sh groups list
+.codex/scripts/goal-git.sh groups ready
+```
+
+Honor `max_parallel_prs` (planning signal). Independent ready groups may run
+concurrently in **separate** worktrees. Dependent groups wait until
+prerequisites are **merged** (or `completed` per policy), then
+`groups start` from the updated target branch.
+
+For each unblocked group:
+
+```bash
+.codex/scripts/goal-git.sh groups start <group-id>
+# persist/activate already sets worktree + typed branch
+.codex/scripts/goal-git.sh harness event orchestrator group_branch_created
+.codex/scripts/goal-git.sh harness event orchestrator group_worktree_created
+.codex/scripts/goal-git.sh harness init --route <route> --qa <bool> --visual <bool> \
+  --complexity <LEVEL> --planner-required true --reviewer-required true
+.codex/scripts/goal-git.sh harness gate PLAN PASS "delivery group <id> from markdown plan"
+.codex/scripts/goal-git.sh harness phase BUILDING
+.codex/scripts/goal-git.sh groups persist
+```
+
+Then run PHASE D–L **for this group only** (its tasks, files, harness, spawn
+budget, PLAN/IMPLEMENTATION/VERIFICATION/REVIEW and conditional QA/VISUAL).
+Pass every builder the **group worktree path** from `groups status`. Builders
+for the group run only inside that worktree. Never spawn two builders into
+the same worktree (`harness spawn` will reject it).
+
+One group's passing gates never satisfy another group.
+
+After the group's gates pass:
+
+```bash
+.codex/scripts/goal-git.sh push
+.codex/scripts/goal-git.sh groups pr <group-id>
+.codex/scripts/goal-git.sh harness event orchestrator group_pr_created
+```
+
+If `auto_merge=true`: `groups merge <group-id>` (stops on conflict; do not
+rewrite user code). Then start newly unblocked groups from the latest target.
+
+If `auto_merge=false`: report the group ready for manual merge. Do **not**
+start a dependent group until its prerequisite is on the intended base
+(merged or otherwise available).
+
+Resume (`$goal --continue`):
+
+```bash
+.codex/scripts/goal-git.sh groups list
+.codex/scripts/goal-git.sh groups continue <group-id>   # existing groups; idempotent
+```
+
+Reconcile persisted branches, worktrees, PR numbers, and merge status. Do not
+recreate existing artifacts. Resume failed/incomplete groups from their
+persisted harness phase. Start newly unblocked groups. Continue until all
+groups complete or a genuine external blocker occurs.
+
+Root completion:
+
+```bash
+.codex/scripts/goal-git.sh state complete
+```
+
+fails until every required group is merged/completed/cancelled. Then emit
+`root_goal_completed`.
 
 ==================================================
 
@@ -739,6 +847,11 @@ If no research is required:
 
 Read `concurrency` from config.
 
+When `delivery_mode=multi-pr`, execute PHASE D **inside the active delivery
+group worktree** (`groups start` / `groups continue`). Assign that worktree
+path in every builder brief. Independent groups may run concurrently (separate
+worktrees, up to `max_parallel_prs`). Sequential builders inside one group.
+
 ## Sequential mode
 
 When `concurrency = 1`:
@@ -755,11 +868,15 @@ When `concurrency > 1`:
 * only parallelize tasks explicitly determined to be independent
 * never parallelize tasks that touch conflicting file sets
 
-For single-repo parallel batches:
+For single-repo parallel batches **on a single-PR goal**:
 
 * create worktrees
 * spawn Builders in those worktrees
 * merge sequentially
+
+For Markdown `delivery_mode=multi-pr`: do **not** call `worktree add`. Use
+`groups start <id>` so each group owns one typed branch + one worktree.
+Never merge group worktrees into a `goal/` branch.
 
 For multi-repo mode:
 
@@ -1384,20 +1501,29 @@ Final checks:
 
 or the appropriate local review equivalent.
 
-If `auto_merge=true`:
+If `auto_merge=true` and `delivery_mode=multi-pr`:
+
+* `groups merge <group-id>` for each ready group
+* stop on conflict (do not auto-resolve)
+* start newly unblocked groups from the updated target branch
+
+If `auto_merge=true` and single-PR:
 
 * run merge
 * stop on conflict
 
 Otherwise:
 
-* report ready for manual merge
+* report each group (or the single PR) ready for manual merge
 
 Finally:
 
 ```bash
 .codex/scripts/goal-git.sh state complete
 ```
+
+For multi-PR Markdown goals this fails until every delivery group is
+merged, completed, or cancelled. Do not create a final aggregation PR.
 
 ==================================================
 
