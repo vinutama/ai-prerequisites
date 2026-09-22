@@ -407,10 +407,11 @@ The **review loop** is not iteration-capped. It ends only when:
 
 Retry budgets come from:
 
-* `max_rework` — starting ceiling; auto-extends for remaining review findings
+* `max_rework` — starting ceiling; auto-extends for remaining review **or QA** findings
 * `max_escalations` — hard stop
 * `max_verify_retries` — hard stop
 * `review_max_iterations` — **0 = unlimited** (counter only; never a stop reason)
+* `max_qa_runs` — starts at 1; auto-extends until `harness qa pending` is clean
 
 ==================================================
 7. TASK TRACKING
@@ -1272,10 +1273,10 @@ read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models qa --complexity 
 
 Then `spawn_agent({ agent_type: "qa", model: "$MODEL", reasoning_effort: "$EFFORT" })` and `wait`.
 
-Spawn `@qa` (mandatory). If `harness spawn qa` fails because budget is exhausted,
-STOP as BLOCKED — do **not** invent scenarios or mark QA PASS yourself.
-Spawn budget reserves a slot for required QA; prefer spawning QA over discretionary
-agents when near the limit.
+Spawn `@qa` (mandatory). `max_qa_runs` starts at 1 and **auto-extends** on each later
+`harness spawn qa` while failing scenarios remain. Do **not** stop because the
+starting cap was 1, and do **not** invent scenarios or mark QA PASS yourself.
+The loop ends only when `harness qa pending` exits 0.
 
 After QA returns:
 
@@ -1311,6 +1312,8 @@ QA failure follows:
 
 QA → REWORK → Builder (**REWORK** brief: failing scenarios + diff) → VERIFY → REVIEW → QA
 
+Repeat that cycle until `harness qa pending` exits 0. `max_qa_runs` and `max_rework`
+auto-extend while QA scenarios still FAIL. Do not stop because a numeric QA cap was hit.
 Do not skip deterministic verification after QA-triggered implementation changes.
 Use the same **REWORK** builder spawn pattern as review failures (findings from
 `harness qa pending`, not full discovery_context).

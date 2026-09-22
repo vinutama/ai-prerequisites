@@ -3396,16 +3396,16 @@ harness_budget_grow() {
   fi
 }
 
-# Reviewer must keep spawning until pending/threads are clean. Grow the
-# reviewer + total spawn caps instead of stopping with findings still open.
+# Reviewer and QA must keep spawning until findings are clean. Grow the
+# role cap and total spawn cap instead of stopping with findings still open.
 harness_ensure_review_loop_spawn_room() {
   local role="$1"
   case "$role" in
-    reviewer|builder) ;;
+    reviewer|builder|qa) ;;
     *) return 0 ;;
   esac
 
-  local total max_total reserved need
+  local total max_total reserved need runs max_runs
   total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics.agent_spawns // 0' "$STATE_FILE")"
   max_total="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.budget.max_total_spawns // 10' "$STATE_FILE")"
   reserved="$(harness_spawn_reserved_remaining "$role")"
@@ -3415,11 +3415,18 @@ harness_ensure_review_loop_spawn_room() {
   fi
 
   if [ "$role" = "reviewer" ]; then
-    local runs max_runs
     runs="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics.reviewer_runs // 0' "$STATE_FILE")"
     max_runs="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.budget.max_reviewer_runs // 0' "$STATE_FILE")"
     if [ "$runs" -ge "$max_runs" ]; then
       harness_budget_grow "max_reviewer_runs" "$((runs + 1))"
+    fi
+  fi
+
+  if [ "$role" = "qa" ]; then
+    runs="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics.qa_runs // 0' "$STATE_FILE")"
+    max_runs="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.budget.max_qa_runs // 0' "$STATE_FILE")"
+    if [ "$runs" -ge "$max_runs" ]; then
+      harness_budget_grow "max_qa_runs" "$((runs + 1))"
     fi
   fi
 }

@@ -125,11 +125,14 @@ from `.cursor/goal-models.json` role entries (default `inherit`) synced into
 frontmatter — optional per-role pin, project-wide.
 
 **Spawn budgets** (defaults): `max_reviewer_runs` starts at `1 + max_rework` and
-**auto-extends** while review findings remain. `max_total_spawns` grows with it.
-planner=1, researcher=1, expert=1, qa=1, visual=1. Use `harness spawn <role>`
-before each spawn. Do not mark REVIEW PASS without a reviewer spawn and a clean
-`pending` / `review pending`. `review_max_iterations` is **0 (unlimited)** —
-local `review iterate` only counts; the loop stops when findings are clean.
+**auto-extends** while review findings remain. `max_qa_runs` starts at `1` and
+**auto-extends** while `harness qa pending` still reports a failing scenario.
+`max_total_spawns` grows with those loops. planner=1, researcher=1, expert=1,
+visual=1. Use `harness spawn <role>` before each spawn. Do not mark REVIEW PASS
+without a reviewer spawn and a clean `pending` / `review pending`. Do not mark
+QA PASS without a QA spawn and `harness qa pending` exit 0.
+`review_max_iterations` is **0 (unlimited)** — local `review iterate` only
+counts; the loop stops when findings are clean.
 
 Phases: `PLANNED` → `RESEARCHING?` → `BUILDING` → `ESCALATED?` → `VERIFYING` →
 `REVIEWING?` → `QA?` → `VISUAL_REVIEW?` → `REWORK?` → `BUILDING` | `VERIFYING` →

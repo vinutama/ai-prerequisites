@@ -160,9 +160,10 @@ Retries:
 .cursor/scripts/goal-git.sh harness retry verify_retries
 ```
 
-Escalation / verify-retry budgets hard-stop. Rework for remaining review
+Escalation / verify-retry budgets hard-stop. Rework for remaining review or QA
 findings auto-extends `max_rework`. Review loop is not iteration-capped —
-ends when LGTM + `pending` / `review pending` exit 0.
+ends when LGTM + `pending` / `review pending` exit 0. QA loop is not capped
+by `max_qa_runs` — that budget auto-extends until `harness qa pending` exits 0.
 
 Task states: `PENDING | SPAWNING | RUNNING | DONE | BLOCKED | FAILED`.
 
@@ -399,6 +400,9 @@ Only when `requirements.qa == true`. Else leave QA SKIPPED.
 ```
 
 Never forge scenarios. QA fail → REWORK builder → VERIFY → REVIEW → QA again.
+`max_qa_runs` starts at 1 and auto-extends while `harness qa pending` is non-zero.
+Do not stop because that starting cap was hit. The QA loop ends only when
+`harness qa pending` exits 0.
 
 ### PHASE K — VISUAL REVIEW
 Only when `requirements.visual == true`. Else leave VISUAL SKIPPED.
