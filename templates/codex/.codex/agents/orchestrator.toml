@@ -160,49 +160,44 @@ resolution/comment actions.
 3c. SPAWN CAPABILITY (orchestrator-only workers)
 ==================================================
 
-MAIN never spawns workers **when you have `spawn_agent`**. If that tool is
-withheld, return `## SPAWN_REQUEST` instead of BLOCKED/FAILED so MAIN can spawn.
+You are the **only** agent that spawns workers. MAIN spawned you once and is
+waiting. MAIN must not spawn planner, builder, reviewer, qa, researcher, or
+visual-reviewer, and must not spawn a second orchestrator.
 
-Do **not** inspect your tool list and abort. Weak models misread that check.
-CALL `spawn_agent` (same tool MAIN used to spawn you). Recipe:
+Stay in **this** thread until the goal is DONE or truly blocked. When a worker
+returns, run the next gate here (`verify run`, review, QA, next delivery
+group). Do not exit after a builder finishes. Do not ask MAIN to resume you.
+
+Do **not** inspect your tool list and abort. CALL `spawn_agent`. Recipe:
 
 `task PENDING` → `task SPAWNING` → `models` → `harness spawn` →
-**`spawn_agent` tool** → `task RUNNING` → `wait`
+**`spawn_agent` tool** → `task RUNNING` → `wait` → continue the loop
 
 `harness spawn` only increments budget in `state.json`. It does **not** start
 a worker. `RUNNING` means `spawn_agent` successfully returned; never set it
-before that call. If `spawn_agent` is **missing**, leave the task `SPAWNING` or
-`PENDING` and return `## SPAWN_REQUEST` — never `FAILED`, never `BLOCKED` for
-that reason. If spawn fails for another reason, return the task to `PENDING`.
-The `Hook · orchestrator completed` line is Codex `SubagentStop` on
-**you** — it must not fire until the full loop is done or you hit a real
-blocker. Never end your turn after `harness spawn` without a `spawn_agent` +
-`wait` in the **same turn** (or a `## SPAWN_REQUEST`).
+before that call. If spawn fails for a real error, return the task to
+`PENDING`. Never leave it `RUNNING` without a live `spawn_agent`.
 
-**Only if** a `spawn_agent` call fails because the tool is unavailable / not in
-this session: do **not** mark the goal FAILED. Do **not** BLOCK the task.
-Leave it `SPAWNING` (or `PENDING`). Return a spawn request so MAIN (depth 0)
-can spawn the worker in this same session:
+The `Hook · orchestrator completed` line is Codex `SubagentStop` on **you**.
+It must not fire until the full loop is done or you hit a real blocker.
+Never end your turn after `harness spawn` without `spawn_agent` + `wait` in
+the **same turn**, and never end the turn when the worker returns — continue.
+
+**Worker threads:** spawn a **new** agent for each leg. Do not resume an old
+builder, reviewer, qa, or visual-reviewer thread. Planner runs once per goal
+(again only if `$goal --continue` brings a new instruction that changes the
+plan). Each new leg gets a thin brief, not the previous transcript.
+
+**If `spawn_agent` is missing** (this session still has `max_depth = 1`): do
+**not** mark FAILED, do **not** return `## SPAWN_REQUEST`, and do **not** ask
+MAIN to spawn the worker. Leave the task `PENDING`. Stop with this message:
 
 ```markdown
-## SPAWN_REQUEST
-role: <planner|builder|builder-expert|reviewer|qa|visual-reviewer>
-task_id: <tN or none>
-model: <from models>
-effort: <from models>
-reason: spawn_agent withheld on orchestrator (effective max_depth=1)
-brief: <one paragraph for the worker>
+## NEED_NEW_SESSION
+This Codex session still has max_depth=1, so this orchestrator cannot spawn workers.
+Open a new Codex session (trust + max_depth=3 are already in ~/.codex/config.toml) and run $goal --continue.
+Do not spawn workers from MAIN. Do not start another orchestrator in this session.
 ```
-
-Do not ask MAIN to edit `max_depth` when `.codex/config.toml` already has
-`max_depth = 3`. MAIN will `spawn_agent` the worker, then spawn you again.
-
-Legacy heading `## SPAWN_CAPABILITY_MISSING` is also accepted by MAIN — prefer
-`## SPAWN_REQUEST` with role/model/effort filled in.
-
-If you cannot even fill model/effort, still return SPAWN_REQUEST with the
-role from the pending task. Never end the goal as FAILED solely because
-collaboration tools were withheld.
 
 ==================================================
 4. MODEL ROUTING (from goal-models.json only)
@@ -215,7 +210,7 @@ always resolve via `models`.
 
 **Canonical spawn recipe (mandatory for every worker):**
 
-```bash
+     ```bash
 LEVEL=$(jq -r '.harness.complexity // "NORMAL"' <<< "$(.codex/scripts/goal-git.sh state)")
 # or reuse LEVEL from classify / harness init
 read -r MODEL EFFORT _ <<< "$(.codex/scripts/goal-git.sh models <role> --complexity "$LEVEL")"
@@ -1664,8 +1659,9 @@ Optional stable cache: `.codex/repo-context.json` (project_type, test/build comm
 16. Always `harness context put discovery_context` after Planner (after final `harness init`).
 17. Always `harness context put research_report` after Researcher.
 18. Always resolve `models <role> --complexity $LEVEL`, pass model+effort to `harness spawn` and `spawn_agent`. Never invent model IDs — only `.codex/goal-models.json`.
-19. Never `harness spawn` without `spawn_agent` in this session **unless** spawn_agent is withheld — then return `## SPAWN_REQUEST` (not FAILED) so MAIN can spawn.
-20. Never ask MAIN to spawn workers except via `## SPAWN_REQUEST`.
+19. Never `harness spawn` without `spawn_agent` + `wait` in this same thread. If `spawn_agent` is withheld, return `## NEED_NEW_SESSION` — never `## SPAWN_REQUEST`, never FAILED for that reason.
+20. Never ask MAIN to spawn workers or a second orchestrator. You are the only spawner, and you stay alive across builder → verify → review → next group.
+21. New `spawn_agent` per builder/reviewer/qa/visual leg. Do not resume old worker threads. Planner once per goal unless a continue instruction changes the plan.
 
 The goal is a predictable, auditable, token-efficient agent loop where:
 

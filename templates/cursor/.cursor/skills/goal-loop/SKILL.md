@@ -69,8 +69,7 @@ UI/UX/frontend design intelligence.
 ```
 User → MAIN (/goal) → @orchestrator → @planner / @builder / …
 ```
-MAIN never spawns workers except as spawn-proxy when orchestrator nesting is withheld.
-Orchestrator owns the loop.
+MAIN never spawns workers and never starts a second orchestrator. One orchestrator owns the loop and stays alive from plan through verify, review, and the next delivery group. Each builder/reviewer/qa/visual leg is a new agent with a thin brief. Planner runs once per goal unless a continue instruction changes the plan.
 
 Planner tags every implementation task `@builder` and emits:
 - `route`: backend | feature | frontend

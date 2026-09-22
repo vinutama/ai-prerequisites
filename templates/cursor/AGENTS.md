@@ -48,10 +48,15 @@ If a skill is absent, the agent proceeds normally. Re-run `/init-skills` with
 ```
 
 **Delegation:** `/goal` runs on MAIN (thin). After setup, MAIN spawns **one**
-`@orchestrator` and waits. Cursor allows **two levels** of subagent nesting
-(`/goal` → orchestrator → worker). If the orchestrator cannot nest further, it
-returns `## SPAWN_REQUEST` and MAIN **spawn-proxies** the next worker in this
-session — it does not tell you to `/goal --continue` again as the only next step.
+`@orchestrator` and waits until that thread finishes the whole goal. Only the
+orchestrator spawns planner, builder, reviewer, qa, researcher, and
+visual-reviewer. MAIN never spawns those workers and never starts a second
+orchestrator after a builder returns.
+
+Cursor allows **two levels** of nesting (`/goal` → orchestrator → worker).
+That is enough for this loop. Workers must not spawn further agents. If the
+orchestrator cannot nest, it stops with `## NESTING_BLOCKED`. MAIN does not
+spawn the worker as a workaround.
 
 Continue parsing (no quotes): first token is checked against existing goals via
 `goal-git.sh list` — if it matches, that token is the goal id and the rest is

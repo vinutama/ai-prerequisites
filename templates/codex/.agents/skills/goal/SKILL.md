@@ -12,23 +12,22 @@ You are the **MAIN** agent loading `$goal`. Stay thin.
 
 | You (MAIN) | `@orchestrator` |
 |---|---|
-| Parse `$goal` args | Own the full goal loop |
+| Parse `$goal` args | Own the full goal loop in **one** thread |
 | `list` / `status` / resolve goal text | `harness *`, `models *`, `verify` |
-| `start` / `continue` / `issues list` + `issues start` (setup only) | Spawn workers when `spawn_agent` is available |
-| Spawn `@orchestrator`; **spawn-proxy workers** if orchestrator spawn is withheld | Phases, gates, QA/Visual, PR, `harness done` |
+| `start` / `continue` / `issues list` + `issues start` (setup only) | Spawn planner, builder, reviewer, qa, researcher, visual-reviewer |
+| Spawn **exactly one** `@orchestrator`, then wait until it finishes | Phases, gates, QA/Visual, PR, `harness done` |
 
-**Never** from MAIN: drive harness gates yourself; edit application source; run
-verify/review as if you were the orchestrator.
-
-**Exception — spawn proxy:** if `@orchestrator` cannot call `spawn_agent`
-(effective `max_depth = 1`), YOU spawn the requested worker, wait, then spawn
-`@orchestrator` again. Do **not** tell the user `$goal --continue` in this same
-session as the only next step. That is the stuck loop.
+**Never** from MAIN: spawn planner, builder, builder-expert, reviewer, qa,
+researcher, or visual-reviewer; drive harness gates; edit application source;
+spawn a second orchestrator after a worker finishes.
 
 ```
-User → MAIN ($goal) → @orchestrator → workers
-                 ↘ spawn proxy (only when orchestrator spawn_agent is withheld)
+User → MAIN ($goal) → one @orchestrator → workers
 ```
+
+One orchestrator stays alive for the whole goal. After a builder returns, that
+same orchestrator runs verify, review, QA, and the next group. Do not start
+another orchestrator to "continue the handoff."
 
 ### Handoff (after setup)
 
@@ -71,7 +70,7 @@ Spawn `@orchestrator` with that `model` + `reasoning_effort`. Pass a short brief
 * multi-repo: yes/no (from `state.json` `repos`)
 * for issues: `GOAL_RUN_ID`, issue number(s), queue vs single
 * complexity: `$LEVEL`
-* reminder: orchestrator owns harness + worker `spawn_agent` calls; if withheld, return `## SPAWN_REQUEST`
+* reminder: you are the only orchestrator. You spawn every worker and you do not return until the goal is DONE or truly blocked. MAIN will not spawn workers for you.
 
 ```text
 spawn_agent({
@@ -91,31 +90,20 @@ roles, and ignores `$routing.orchestrator`). Copy
 
 `.codex/config.toml` `[agents] max_depth = 3` is loaded **only for trusted
 projects**. `codex ensure-user-config` writes that trust into
-`~/.codex/config.toml`. **This already-open session still has max_depth = 1.**
-Do not spawn another orchestrator-only retry that will fail the same way.
+`~/.codex/config.toml`. **This already-open session still has max_depth = 1**,
+so the orchestrator in *this* session cannot spawn workers. Do **not** work
+around that by spawning workers yourself or by starting another orchestrator.
+Tell the user to open a **new** Codex session and run `$goal --continue`.
+The new session loads `max_depth = 3`, and that one orchestrator nests normally.
 
-### Spawn proxy (mandatory when nesting is withheld)
-
-If `@orchestrator` returns `## SPAWN_REQUEST` or `## SPAWN_CAPABILITY_MISSING`:
-
-1. `.codex/scripts/goal-git.sh harness recover-spawn` (if phase FAILED / task BLOCKED).
-2. Take `role`, `model`, `effort` from the SPAWN_REQUEST. If missing, use
-   `recover-spawn` JSON `.next.role` and
-   `models <role> --complexity "$LEVEL"`.
-3. `.codex/scripts/goal-git.sh harness task set <id> SPAWNING` (when task_id present).
-4. `.codex/scripts/goal-git.sh harness spawn <role> "$MODEL" "$EFFORT"`
-5. **You** call `spawn_agent({ agent_type, model, reasoning_effort })` and `wait`.
-6. Spawn `@orchestrator` again with: worker finished; continue the loop; if
-   spawn_agent is still withheld, return the next SPAWN_REQUEST (do not FAILED).
-7. Repeat until orchestrator reaches DONE / a real (non-spawn) blocker.
-
-Do **not** STOP with “run /status and $goal --continue”. That repeats forever
-in this session. After the goal finishes, tell the user a **new** Codex session
-will load trusted `max_depth = 3` so future goals nest normally.
+If the orchestrator returns `## SPAWN_REQUEST` or `## SPAWN_CAPABILITY_MISSING`,
+ignore the request to spawn a worker. Do not spawn a second orchestrator.
+Tell the user this session cannot nest; they need a new session and
+`$goal --continue`.
 
 Model IDs come only from `.codex/goal-models.json` — never hardcode them in this skill.
 
-Wait until `@orchestrator` finishes (or the spawn-proxy loop finishes). Then
+Wait until that **one** `@orchestrator` finishes. Then
 report PR URL(s) / blockers from its result (or `harness status` / `harness done`).
 For Markdown multi-PR goals, report each delivery group's PR/MR — there is no
 aggregation PR. Do **not** call `harness spawn orchestrator` (worker budget is for child agents only).

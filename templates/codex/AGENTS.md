@@ -48,14 +48,17 @@ $create-issues <path.md>                # standalone: publish ### Tasks as forge
 ```
 
 **Delegation:** `$goal` runs on MAIN (thin). After setup, MAIN spawns **one**
-`@orchestrator` and waits. `.codex/config.toml` `[agents] max_depth` must be **3**
-**and the project must be trusted** so Codex loads that file. `$goal` writes
-trust + `max_depth = 3` into `~/.codex/config.toml` via
-`goal-git.sh codex ensure-user-config` (already-open sessions keep old depth).
-If the orchestrator still cannot spawn (effective `max_depth = 1`), MAIN
-**spawn-proxies** the next worker in this session — it does not tell you to
-`$goal --continue` again in the same thread. A **new** Codex session is only
-needed so later goals nest without the proxy.
+`@orchestrator` and waits until that thread finishes the whole goal. Only the
+orchestrator spawns planner, builder, reviewer, qa, researcher, and
+visual-reviewer. MAIN never spawns those workers and never starts a second
+orchestrator after a builder returns.
+
+`.codex/config.toml` `[agents] max_depth` must be **3** and the project must be
+trusted so the orchestrator can nest. `$goal` writes trust + `max_depth = 3`
+into `~/.codex/config.toml` via `goal-git.sh codex ensure-user-config`.
+**Already-open sessions keep max_depth = 1.** In that session the orchestrator
+cannot spawn; it stops with `## NEED_NEW_SESSION`. Open a **new** Codex session
+and `$goal --continue`. Do not have MAIN spawn the builder as a workaround.
 
 Continue parsing (no quotes): first token is checked against existing goals via
 `goal-git.sh list` — if it matches, that token is the goal id and the rest is

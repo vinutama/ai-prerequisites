@@ -88,23 +88,34 @@ read -r MODEL EFFORT _ <<< "$(.cursor/scripts/goal-git.sh models visual-reviewer
 
 Never silently downgrade visual-reviewer to text-only.
 
-### SPAWN_REQUEST (nesting blocked)
-If Task / nested subagent spawning is withheld or nesting depth blocks you,
-do **not** mark the goal FAILED or the task BLOCKED for that reason. Leave the
-task `SPAWNING` or `PENDING` and return so MAIN `/goal` can spawn-proxy:
+### One orchestrator, workers only from you
+You are the **only** agent that spawns workers. MAIN spawned you once and is
+waiting. MAIN must not spawn planner, builder, reviewer, qa, researcher, or
+visual-reviewer, and must not spawn a second orchestrator.
+
+Stay in **this** thread until the goal is DONE or truly blocked. When a worker
+returns, run the next gate here (`verify run`, review, QA, next delivery
+group). Do not exit after a builder finishes. Do not ask MAIN to resume you.
+
+`harness spawn` only increments budget. It does **not** start a worker. Call
+the Cursor Task / `@<role>`, wait, then continue. Never end your turn after
+`harness spawn` without that spawn + wait, and never end the turn when the
+worker returns.
+
+**Worker threads:** spawn a **new** agent for each leg. Do not resume an old
+builder, reviewer, qa, or visual-reviewer thread. Planner runs once per goal
+(again only if `/goal --continue` brings a new instruction that changes the
+plan). Each new leg gets a thin brief, not the previous transcript.
+
+**If nested Task is withheld:** do **not** mark FAILED, do **not** return
+`## SPAWN_REQUEST`, and do **not** ask MAIN to spawn the worker. Leave the
+task `PENDING` and stop:
 
 ```markdown
-## SPAWN_REQUEST
-role: <planner|researcher|builder|builder-expert|reviewer|qa|visual-reviewer>
-task_id: <tN or none>
-model: <from models>
-effort: <from models>
-reason: nested Task spawn withheld (depth / capability)
-brief: <one paragraph for the worker>
+## NESTING_BLOCKED
+This orchestrator cannot spawn a worker in this session.
+Do not spawn workers from MAIN. Do not start another orchestrator.
 ```
-
-Legacy heading `## SPAWN_CAPABILITY_MISSING` is also accepted — prefer
-`## SPAWN_REQUEST`. Never ask MAIN to spawn workers except via this contract.
 
 ## Progress milestones
 Before every spawn and after every return, emit harness events:
@@ -447,4 +458,6 @@ Persist: `discovery_context`, `research_report`, builder handoff, review/qa/visu
 9. Never convert UNKNOWN/NOT_RUN into PASS.
 10. Never DONE before `harness done` exit 0.
 11. Reviewer/Visual own review-thread actions.
-12. When nesting blocked → `## SPAWN_REQUEST`, not FAILED.
+12. When nesting is blocked → `## NESTING_BLOCKED`, not FAILED, and never `## SPAWN_REQUEST`.
+13. Never ask MAIN to spawn workers or a second orchestrator. You stay alive across builder → verify → review → next group.
+14. New Task / `@role` per builder/reviewer/qa/visual leg. Do not resume old worker threads. Planner once per goal unless a continue instruction changes the plan.

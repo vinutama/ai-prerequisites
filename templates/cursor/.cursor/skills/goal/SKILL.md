@@ -15,23 +15,24 @@ You are the **MAIN** agent loading `/goal`. Stay thin.
 
 | You (MAIN) | `@orchestrator` |
 |---|---|
-| Parse `/goal` args | Own the full goal loop |
+| Parse `/goal` args | Own the full goal loop in **one** thread |
 | `list` / `status` / resolve goal text | `harness *`, `models *`, `verify` |
-| `start` / `continue` / `issues list` + `issues start` (setup only) | Spawn workers when nested Task is available |
-| Spawn `@orchestrator`; **spawn-proxy workers** if orchestrator nesting is withheld | Phases, gates, QA/Visual, PR, `harness done` |
+| `start` / `continue` / `issues list` + `issues start` (setup only) | Spawn planner, builder, reviewer, qa, researcher, visual-reviewer |
+| Spawn **exactly one** `@orchestrator`, then wait until it finishes | Phases, gates, QA/Visual, PR, `harness done` |
 
-**Never** from MAIN: drive harness gates yourself; edit application source; run
-verify/review as if you were the orchestrator.
-
-**Exception — spawn proxy:** if `@orchestrator` cannot nest Task / `@role`
-(Cursor two-level nesting), YOU spawn the requested worker, wait, then spawn
-`@orchestrator` again. Do **not** tell the user `/goal --continue` in this same
-session as the only next step. That is the stuck loop.
+**Never** from MAIN: spawn planner, builder, builder-expert, reviewer, qa,
+researcher, or visual-reviewer; drive harness gates; edit application source;
+spawn a second orchestrator after a worker finishes.
 
 ```
-User → MAIN (/goal) → @orchestrator → workers
-                 ↘ spawn proxy (only when orchestrator nesting is withheld)
+User → MAIN (/goal) → one @orchestrator → workers
 ```
+
+One orchestrator stays alive for the whole goal. After a builder returns, that
+same orchestrator runs verify, review, QA, and the next group. Do not start
+another orchestrator to continue the handoff. Cursor's two-level nest
+(`/goal` → orchestrator → worker) is the shape that fits. Workers must not
+spawn further agents.
 
 ### Handoff (after setup)
 
@@ -71,8 +72,7 @@ Spawn `@orchestrator` via Cursor Task / `@orchestrator` (do not invent a
 * multi-repo: yes/no (from `state.json` `repos`)
 * for issues: `GOAL_RUN_ID`, issue number(s), queue vs single
 * complexity: `$LEVEL`
-* reminder: orchestrator owns harness + worker Task/`@role` spawns; if nesting
-  is withheld, return `## SPAWN_REQUEST`
+* reminder: you are the only orchestrator. You spawn every worker and you do not return until the goal is DONE or truly blocked. MAIN will not spawn workers for you.
 
 If `models orchestrator --complexity` prints `Unknown role`:
 the project's `goal-git.sh` is stale (it only treats **top-level** JSON keys as
@@ -81,30 +81,16 @@ roles, and ignores `$routing.orchestrator`). Copy
 `./init.sh --cursor`), then `/goal --continue`. **Do not** treat this as a
 nesting-depth failure.
 
-### Spawn proxy (mandatory when nesting is withheld)
-
-If `@orchestrator` returns `## SPAWN_REQUEST` or `## SPAWN_CAPABILITY_MISSING`:
-
-1. `.cursor/scripts/goal-git.sh harness recover-spawn` (if phase FAILED / task BLOCKED).
-2. Take `role`, `model`, `effort` from the SPAWN_REQUEST. If missing, use
-   `recover-spawn` JSON `.next.role` and
-   `models <role> --complexity "$LEVEL"`.
-3. `.cursor/scripts/goal-git.sh harness task set <id> SPAWNING` (when task_id present).
-4. `.cursor/scripts/goal-git.sh harness spawn <role> "$MODEL" "$EFFORT"`
-5. **You** spawn the worker via Task / `@<role>` (wait until it finishes).
-6. Spawn `@orchestrator` again with: worker finished; continue the loop; if
-   nesting is still withheld, return the next SPAWN_REQUEST (do not FAILED).
-7. Repeat until orchestrator reaches DONE / a real (non-spawn) blocker.
-
-Do **not** STOP with “run `/goal --continue`”. That repeats forever in this
-session. Spawn-proxy is the correct recovery path while nesting is limited.
+If the orchestrator returns `## SPAWN_REQUEST`, `## SPAWN_CAPABILITY_MISSING`,
+or `## NESTING_BLOCKED`, ignore any request to spawn a worker. Do not spawn a
+second orchestrator. Report the blocker and stop.
 
 Model IDs come only from `.cursor/goal-models.json` via `models …` — never
 hardcode them in this skill. Cursor role agents already declare `model` in
 frontmatter; `models` routing is still useful for harness spawn audit and
 effort/role display.
 
-Wait until `@orchestrator` finishes (or the spawn-proxy loop finishes). Then
+Wait until that **one** `@orchestrator` finishes. Then
 report PR URL(s) / blockers from its result (or `harness status` / `harness done`).
 For Markdown multi-PR goals, report each delivery group's PR/MR — there is no
 aggregation PR. Do **not** call `harness spawn orchestrator` (worker budget is for child agents only).
