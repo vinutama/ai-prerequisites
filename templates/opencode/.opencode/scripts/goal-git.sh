@@ -1345,7 +1345,7 @@ cmd_issues_list() {
         --search "$search" --json number,title,body,labels,url,createdAt)
       ;;
     gitlab)
-      local glab_cmd=(glab issue list --repo "$ISSUE_LIST_REPO" --opened --per-page "$limit" --sort created --order asc --output json)
+      local glab_cmd=(glab issue list --repo "$ISSUE_LIST_REPO" --opened --per-page "$limit" --order created_at --sort asc --output json)
       if [ -n "$ISSUE_LIST_QUERY" ]; then
         glab_cmd+=(--label "$ISSUE_LIST_QUERY")
       fi

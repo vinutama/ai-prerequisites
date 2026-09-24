@@ -26,7 +26,7 @@ This command configures the goal workflow for this project. Ask the user the fol
    - Ask for the issue list URL (e.g. `https://github.com/org/repo/issues` or `https://gitlab.com/group/project/-/issues`)
    - Ask how many issues per run (default `3`) — store as `issue_limit`
    - Run: `.claude/scripts/goal-git.sh issues list "<url>" 1`
-   - If the command fails, do NOT save `issues` yet. Guide the user to authenticate `gh` or `glab`, confirm the URL, then re-run `/init-goal`. Offer `prompt` or `markdown` instead for now.
+   - If the command fails, do NOT save `issues` yet. Read the error before guiding the user. An invalid `--sort` / `--order` flag is a script bug, not an auth failure — do not ask them to run `glab auth login` for that. Auth failures mention login, token, or 401. For those, confirm `gh` or `glab` auth and the URL, then re-run `/init-goal`. Offer `prompt` or `markdown` instead for now.
    - If successful, remember `issue_list_url` and `issue_limit` for persistence after `config set` (step below).
    - Note: concurrent issue worktrees are **single-repo only**. Multi-repo + issues runs one issue at a time across repos.
 
