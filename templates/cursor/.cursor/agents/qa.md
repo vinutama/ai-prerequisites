@@ -54,9 +54,9 @@ Also record scenarios via `harness qa add`.
 Do not reject for style, alternate patterns, or aesthetic refactors — that is Reviewer.
 
 ## When QA runs
-Orchestrator invokes QA when applicable (user-facing feature, business logic,
+MAIN invokes QA when applicable (user-facing feature, business logic,
 workflows, acceptance-criteria changes, `qa_required: true`, `qa_mode=always`,
-etc.). Orchestrator owns whether QA runs. Do not invent requirements.
+etc.). MAIN owns whether QA runs. Do not invent requirements.
 
 ## Related skills
 Invoke only relevant installed skills with `/skill-name`. Skip if unavailable.

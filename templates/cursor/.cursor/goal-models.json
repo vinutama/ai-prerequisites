@@ -3,12 +3,6 @@
     "vision_models": []
   },
   "$routing": {
-    "orchestrator": {
-      "TRIVIAL": { "model": "inherit" },
-      "NORMAL": { "model": "inherit" },
-      "COMPLEX": { "model": "inherit" },
-      "ARCHITECTURAL": { "model": "inherit" }
-    },
     "planner": {
       "TRIVIAL": null,
       "NORMAL": { "model": "inherit" },
@@ -50,17 +44,6 @@
       "NORMAL": { "model": "inherit" },
       "COMPLEX": { "model": "inherit" },
       "ARCHITECTURAL": { "model": "inherit" }
-    }
-  },
-  "orchestrator": {
-    "model": "inherit",
-    "readonly": false,
-    "capabilities": {
-      "multimodal": false,
-      "modalities": {
-        "input": ["text"],
-        "output": ["text"]
-      }
     }
   },
   "planner": {

@@ -87,12 +87,12 @@ This command configures the goal workflow for this project. Ask the user the fol
 
 7. **Auto-merge** — After review is clean (zero unresolved threads or local findings), merge the PR/MR into the target branch automatically?
    - `no` — leave PR open; user merges manually (**default**)
-   - `yes` — after LGTM + clean review gate, orchestrator runs `goal-git.sh merge`
+   - `yes` — after LGTM + clean review gate, MAIN runs `goal-git.sh merge`
      - On merge conflict: **stop**, report conflict files; do **not** invent conflict resolutions. User or a follow-up `/goal --continue` with builders can fix.
 
 8. **Review mode** — How should reviewers report findings?
    - `inline` (**default**) — create PR first; reviewers post inline comments on GitHub/GitLab and resolve threads (`goal-git.sh pending` gates the loop).
-   - `local` — reviewers read the diff locally, record findings via `goal-git.sh review add`, orchestrator delegates builders immediately. **No PR until review is clean** (push + `pr` happen only in DONE).
+   - `local` — reviewers read the diff locally, record findings via `goal-git.sh review add`, MAIN delegates builders immediately. **No PR until review is clean** (push + `pr` happen only in DONE).
      Review loops until `review pending` exits 0. Do **not** ask for a max iteration cap.
 
 9. **Markdown PR strategy** (only when goal source is `markdown`) — How should a Markdown goal be delivered?

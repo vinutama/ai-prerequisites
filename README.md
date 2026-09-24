@@ -31,6 +31,11 @@ cursor-agent
 # optional: /create-issues plan.md
 ```
 
+Cursor `/goal` runs the full loop on MAIN and delegates to project worker
+subagents directly. There is no Cursor orchestrator subagent. Re-running
+`init.sh --cursor` moves an old `.cursor/agents/orchestrator.md` to a
+recoverable `.disabled` backup so Cursor no longer discovers it.
+
 ### Claude Code
 ```bash
 ./init.sh --claude /path/to/your/project
@@ -44,13 +49,15 @@ claude
 ```bash
 ./init.sh --codex /path/to/your/project
 cd /path/to/your/project
-codex                 # CLI >= 0.138.0; init/goal write trust + max_depth=3 to ~/.codex/config.toml
+codex                 # CLI >= 0.138.0; init trusts the project
 $init-goal
 $goal Add a health-check endpoint
 ```
 
 Codex removed custom prompts in 0.117.0. Entry points are skills invoked with
 `$goal`, `$init-goal`, `$init-skills` — not slash commands.
+`$goal` runs the full loop on MAIN, which spawns specialized workers directly;
+there is no Codex orchestrator subagent.
 
 Codex includes an expanded harness (`goal-git.sh harness|verify|route|complexity`),
 model routing from `.codex/goal-models.json` (`$routing` by complexity), Planner
@@ -73,13 +80,15 @@ Initialize after Planner routing signals:
 |---|---|
 | PLAN | Planner accepted |
 | IMPLEMENTATION | All builder/builder-expert tasks DONE |
+| ANALYSIS | One `analyze` run after the reconciled implementation batch |
 | VERIFICATION | `verify run` only (manual PASS rejected) |
 | REVIEW | `pending` (inline) or `review pending` (local) exit 0 |
 | QA | required + scenarios recorded + `harness qa pending` exit 0 |
 | VISUAL | required + observations + `harness visual pending` exit 0 |
 
-Definition of DONE: always PLAN + IMPLEMENTATION + VERIFICATION + REVIEW must
-be `PASS`. QA / VISUAL only when harness `requirements` say so.
+Definition of DONE: IMPLEMENTATION + ANALYSIS + VERIFICATION always pass.
+PLAN / REVIEW are required except on TRIVIAL goals; QA / VISUAL only when
+harness `requirements` say so.
 `route detect` is a baseline classifier; Planner `### Routing` is authoritative.
 
 #### Codex progress visibility
@@ -92,9 +101,9 @@ While a goal runs, subagent milestones land in `harness.events`. Watch them with
 # or: tail -f .codex/goal-progress.log
 ```
 
-Orchestrator emits start/complete around every spawn. Write-capable agents
+MAIN emits start/complete around every spawn. Write-capable agents
 emit mid-run `progress` events. Read-only `planner`/`researcher` report a
-`## Milestones` block that the orchestrator replays. Codex hooks
+`## Milestones` block that MAIN replays. Codex hooks
 (`SubagentStart`/`SubagentStop` in `.codex/hooks.json`) bracket every agent
 automatically once the project `.codex/` layer is trusted. Use Codex `/agent`
 to jump into a live child thread — the parent wait view filters child tokens
@@ -144,11 +153,13 @@ Shared across every target: `state.json` (gitignored, project root),
 | Codex | `AGENTS.md`, `.codex/` (TOML agents, scripts, `config.toml`), `.agents/skills/` | `$goal`, `$create-issues` |
 | Qoder | `AGENTS.md`, `.qoder/` (agents, commands, skills, scripts), `.qoder/settings.json` (Figma MCP) | `/goal-arch` (not built-in `/goal`) |
 
-Each tree includes the core agents (`planner`, `builder`, `builder-expert`,
-`reviewer`, `visual-reviewer`, `orchestrator`), `goal-git.sh`, `goal-models.json`,
-and the `goal-loop` skill. **Codex** and **Cursor** also ship `researcher` and
+Each tree includes core worker agents (`planner`, `builder`, `builder-expert`,
+`reviewer`, `visual-reviewer`), `goal-git.sh`, `goal-models.json`, and the
+`goal-loop` skill. OpenCode, Claude, and Qoder retain an `orchestrator`
+agent; Cursor and Codex use MAIN.
+**Codex** and **Cursor** also ship `researcher` and
 `qa`, plus `harness` / `verify` / `route` / `groups` on their `goal-git.sh`.
-The harness (not the orchestrator's judgment) is the completion authority for
+The harness (not the coordinator's judgment) is the completion authority for
 those targets.
 
 ## Commands
@@ -207,7 +218,7 @@ When initialized at a parent directory with multiple git repos:
 3. **Planner** — sees all repos. Produces a unified plan with repo-tagged tasks (`[repo-name]`). Groups into dependency batches.
 4. **Builders** — work in parallel within each batch, across repos. Each builder works in one repo at a time.
 5. **Reviewers** — review each repo's PR independently. Cross-repo consistency checks are part of the review.
-6. **Orchestrator** — coordinates the loop across repos, tracks per-repo state, reports all PR URLs at the end.
+6. **Coordinator** — MAIN on Cursor/Codex (the orchestrator subagent on other targets) coordinates the loop across repos, tracks per-repo state, and reports all PR URLs at the end.
 
 **Example:**
 ```
@@ -276,7 +287,7 @@ re-init needed.
 ### Concurrent subagents (opt-in)
 When `concurrency` > 1 (set via `/init-goal`), independent tasks run in
 parallel using isolated git worktrees. The planner groups tasks into
-concurrency batches; the orchestrator merges results back into the goal branch.
+concurrency batches; the coordinator (MAIN on Cursor/Codex) merges results back into the goal branch.
 
 Markdown goals default to **multi-PR delivery** (`markdown_pr_strategy=auto`):
 the planner emits `delivery_groups`, and each group gets its own
@@ -289,7 +300,7 @@ When `goal_source` is `issues` (set via `/init-goal`), `/goal --issues` fetches
 open issues from a configured or passed issue list URL, takes the first N
 (`issue_limit`), and drives **each issue to its own branch and PR**. The planner
 reorders by dependency and groups independent issues into concurrency batches;
-the orchestrator runs parallel builders in isolated worktrees (single-repo only).
+the coordinator (MAIN on Cursor/Codex) runs parallel builders in isolated worktrees (single-repo only).
 Multi-repo + issues processes one issue at a time across repos. Resume a partial
 run with `/goal --continue`. Requires `gh` or `glab` authenticated for the repo
 in the list URL.
@@ -304,17 +315,18 @@ PR bodies include `Closes #N` so merging closes the forge issue.
 
 ### Inline PR/MR review (`review_mode: inline`, default)
 Reviewers post inline comments on GitHub/GitLab and **must** resolve threads when
-issues are fixed (`goal-git.sh resolve`). The orchestrator never fixes code itself —
-it re-delegates to builders until `pending` returns exit 0.
+issues are fixed (`goal-git.sh resolve`). The coordinator (MAIN on Cursor/Codex)
+delegates fixes to builders until `pending` returns exit 0.
 
 ### Local review (`review_mode: local`)
 Reviewers read `goal-git.sh diff` and record findings in gitignored `.goal-review/`
 via `review add` / `review resolve`. No PR is created until review is clean; the
-orchestrator commits locally during the fix loop, then `push` + `pr` in DONE.
-Gate: `review pending` exit 0. Cap: `review_max_iterations` (default 5) via `review iterate`.
+coordinator (MAIN on Cursor/Codex) commits locally during the fix loop, then `push` + `pr` in DONE.
+Gate: `review pending` exit 0. On Codex/Cursor, `review iterate` is a counter only;
+required re-review continues until findings are clean.
 
 ### Auto-merge (opt-in)
-When `auto_merge` is `true` (set via `/init-goal`), the orchestrator runs
+When `auto_merge` is `true` (set via `/init-goal`), the coordinator runs
 `goal-git.sh merge` after a clean review. Default is `false` — PR stays open for
 manual merge. On merge conflict, agents stop and report; they do not invent resolutions.
 
@@ -377,7 +389,7 @@ filter: `safe,none`.
 | `builder-expert` | Complex execution (escalation-only on Codex/Cursor) | `opencode-go/kimi-k2.7-code` | `opus` | inherit | see `goal-models.json` | performance |
 | `reviewer` | Code review + inline PR comments | `opencode-go/deepseek-v4-pro` | `opus` | inherit | see `goal-models.json` `$routing` | performance |
 | `qa` | Behavior/business QA (Codex + Cursor, conditional) | — | — | inherit | see `goal-models.json` | — |
-| `orchestrator` | Workflow manager | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | see `goal-models.json` | efficient |
+| Workflow coordinator | Goal-loop manager | `orchestrator` | `orchestrator` | MAIN (`/goal`) | MAIN (`$goal`) | `orchestrator` |
 | `visual-reviewer` | UI/multimodal review + inline PR comments | `opencode-go/mimo-v2.5-pro` | `sonnet` | inherit | see `goal-models.json` + vision allowlist | inherit |
 
 Every agent operates in `/ponytail full` mode.
@@ -391,8 +403,9 @@ classifier; after planning, the Planner's `### Routing` block (`route`,
 `qa_required`, `visual_required`) is authoritative — QA is not implied by
 "feature" and Visual is not implied by "frontend".
 
-The orchestrator delegates automatically (OpenCode `@mentions`, Cursor/Claude/Qoder
-subagent launch, Codex `spawn_agent` with `agent_type`). Cursor models default to
+The coordinator delegates automatically (OpenCode `@mentions`, Claude/Qoder
+orchestrator subagent, Cursor MAIN Agent/Task, Codex MAIN `spawn_agent` with
+`agent_type`). Cursor models default to
 `inherit`; optional per-role pins live in `.cursor/goal-models.json` (no spawn-time
 model pick).
 
@@ -402,12 +415,12 @@ The loop is the same. These are the harness limits:
 
 - **Codex has no slash commands.** Custom prompts were removed in CLI 0.117.0. Use `$goal`.
 - **Codex CLI 0.138.0+** is required. 0.137.0 hid `agent_type` from `spawn_agent`, which blocks custom-agent delegation.
-- **Codex `.codex/config.toml` loads only for trusted projects.** `goal-git.sh codex ensure-user-config` writes `trust_level = "trusted"` and `max_depth = 3` into `~/.codex/config.toml`. Already-open sessions keep `max_depth = 1`, so the one orchestrator cannot spawn workers. It stops with `## NEED_NEW_SESSION`. Open a new Codex session and `$goal --continue`. MAIN does not spawn workers or a second orchestrator.
+- **Codex `.codex/config.toml` loads only for trusted projects.** `goal-git.sh codex ensure-user-config` writes `trust_level = "trusted"` into `~/.codex/config.toml` without changing an existing global `max_depth`. The project config uses depth 1 because MAIN spawns workers directly. A newly trusted project may need a new Codex session before its config loads; resume with `$goal --continue`.
 - **Codex and Cursor harness** (`harness` / `verify` / `route` / `complexity` / `groups` on `goal-git.sh`) plus `researcher` / `qa` ship on those targets; Claude/OpenCode/Qoder keep the prior six-agent loop. Gates are evidence-backed; `analyze` is not part of `verify`. Models: Codex uses `.codex/goal-models.json` `$routing` at spawn; Cursor defaults to `inherit` with optional per-role frontmatter pins (no spawn-time model override). TRIVIAL skips Planner; spawn budgets cap runaway loops.
-- **Cursor nesting is two levels.** `/goal` (main) → one orchestrator → worker fits. Only the orchestrator spawns workers. MAIN does not spawn a second orchestrator or proxy workers. If nesting is blocked, the orchestrator stops with `## NESTING_BLOCKED`. Builders must never spawn subagents.
+- **Cursor delegation is one level.** `/goal` (MAIN) delegates directly to planner/builder/reviewer/etc. MAIN stays active through all gates. If Cursor withholds the Agent/Task tool, stop with a capability blocker and resume with `/goal --continue`; builders must never spawn subagents.
 - **Codex visual-reviewer** hard-fails rather than downgrading to a text-only model. Vision allowlist is `$capabilities.vision_models` in `goal-models.json` (edit per project).
-- **Codex and Cursor cannot machine-enforce `edit: deny`** on `orchestrator`, `reviewer`, or `visual-reviewer`. That rule is prompt-enforced. (Claude Code uses a `tools` allowlist; OpenCode uses `permission.edit: deny`.)
-- **Goal-loop installs auto-approve tool prompts** (paths, bash, MCP) on all five targets so agents are not interrupted for permission dialogs. Orchestrator/planner/reviewer still cannot edit application source via role tool limits.
+- **Codex and Cursor cannot machine-enforce `edit: deny`** on MAIN coordination, `reviewer`, or `visual-reviewer`. MAIN's no-source-edit rule is instruction-enforced. (Claude Code uses a `tools` allowlist; OpenCode uses `permission.edit: deny`.)
+- **Goal-loop installs auto-approve tool prompts** (paths, bash, MCP) on all five targets so agents are not interrupted for permission dialogs. MAIN/planner/reviewer do not edit application source during Cursor/Codex goals.
 - **Model fallback is OpenCode-only** for automatic plugin fallbacks; Codex uses `goal-git.sh models <role> --next` at spawn time (vision-filtered for multimodal roles via `$capabilities.vision_models`).
 - **Cursor and Codex have no `$ARGUMENTS` expansion.** Command skills read the text typed after `/goal` or `$goal` from the user message.
 - **Installing `--cursor` and `--codex` together** surfaces the goal skills twice in Cursor, because Cursor also scans `.agents/skills/`.

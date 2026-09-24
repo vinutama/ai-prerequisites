@@ -1,165 +1,108 @@
 ---
 name: goal
 description: >-
-  Set, list, continue, status, or run issue queue. Usage: /goal <objective> | /goal --list | /goal --status | /goal --issues [url] [count] | /goal --continue [id] [new instruction]
+  Run a goal on MAIN: /goal <objective> | --list | --status | --issues [url] [count] | --continue [id] [instruction]
 disable-model-invocation: true
 ---
 
-Read the project README and AGENTS.md to understand conventions first.
+# Goal loop on MAIN
 
-Arguments are the text the user typed after `/goal` in this message. Read them from the surrounding user message — there is no placeholder expansion.
+Read AGENTS.md and only the relevant README sections. Arguments are the text
+the user typed after `/goal`; Cursor does not expand a placeholder. You are
+MAIN and the only workflow coordinator. Do not spawn an orchestrator. Stay in
+this thread through every worker handoff, verification, review, conditional
+QA/visual check, delivery group, and issue. Spawn project workers directly
+with Cursor's Agent/Task delegation tool; do not invent a `spawn_agent` API.
+Do not edit application source yourself; delegate implementation and rework.
 
-## Role split (non-negotiable)
-
-You are the **MAIN** agent loading `/goal`. Stay thin.
-
-| You (MAIN) | `@orchestrator` |
-|---|---|
-| Parse `/goal` args | Own the full goal loop in **one** thread |
-| `list` / `status` / resolve goal text | `harness *`, `models *`, `verify` |
-| `start` / `continue` / `issues list` + `issues start` (setup only) | Spawn planner, builder, reviewer, qa, researcher, visual-reviewer |
-| Spawn **exactly one** `@orchestrator`, then wait until it finishes | Phases, gates, QA/Visual, PR, `harness done` |
-
-**Never** from MAIN: spawn planner, builder, builder-expert, reviewer, qa,
-researcher, or visual-reviewer; drive harness gates; edit application source;
-spawn a second orchestrator after a worker finishes.
-
-```
-User → MAIN (/goal) → one @orchestrator → workers
-```
-
-One orchestrator stays alive for the whole goal. After a builder returns, that
-same orchestrator runs verify, review, QA, and the next group. Do not start
-another orchestrator to continue the handoff. Cursor's two-level nest
-(`/goal` → orchestrator → worker) is the shape that fits. Workers must not
-spawn further agents.
-
-### Handoff (after setup)
-
-On `/goal --continue`, if harness phase is `FAILED` or a task is `SPAWNING`/`BLOCKED`:
-
-```bash
-.cursor/scripts/goal-git.sh harness recover-spawn
-```
-
-Then resolve orchestrator routing (for role/effort display and harness spawn audit;
-Cursor agent `.md` files already pin `model` in frontmatter — do not invent or
-hardcode model IDs here):
-
-```bash
-LEVEL=$(.cursor/scripts/goal-git.sh complexity classify "<goal or issue text>" | jq -r .complexity)
-if ! read -r MODEL EFFORT _ <<< "$(.cursor/scripts/goal-git.sh models orchestrator --complexity "$LEVEL")"; then
-  # Failed lookup is a catalog/script problem — NOT nesting / spawn capability.
-  STOP. Show the command error. Tell the user to copy the latest
-  `.cursor/scripts/goal-git.sh` (or re-run `./init.sh --cursor`) so `models`
-  accepts `$routing.orchestrator`. Do **not** ask for a new session for this error.
-fi
-# TAB from models: model · reasoning_effort · fallbacks (from .cursor/goal-models.json)
-```
-
-Spawn `@orchestrator` via Cursor Task / `@orchestrator` (do not invent a
-`spawn_agent` API). Prefer the project's orchestrator agent; pass routing
-`MODEL`/`EFFORT` in the brief for harness audit when useful. Brief contents:
-
-* mode: `single` | `continue` | `issue` | `issue-queue`
-* `goal_source` (`prompt` | `markdown` | `jira` | `issues`)
-* active goal text (and continuation instruction if any)
-* when `markdown`: the `.md` **path** — orchestrator must still spawn `@planner`
-  unless classify printed `planner_required=false`. The file is draft input,
-  not a skip. After planning, expect multiple delivery groups (typed branches +
-  isolated worktrees + one PR/MR each) unless `markdown_pr_strategy=single`.
-  Report **one PR URL per delivery group**, never a final aggregation PR.
-* multi-repo: yes/no (from `state.json` `repos`)
-* for issues: `GOAL_RUN_ID`, issue number(s), queue vs single
-* complexity: `$LEVEL`
-* reminder: you are the only orchestrator. You spawn every worker and you do not return until the goal is DONE or truly blocked. MAIN will not spawn workers for you.
-
-If `models orchestrator --complexity` prints `Unknown role`:
-the project's `goal-git.sh` is stale (it only treats **top-level** JSON keys as
-roles, and ignores `$routing.orchestrator`). Copy
-`templates/cursor/.cursor/scripts/goal-git.sh` into the project (or
-`./init.sh --cursor`), then `/goal --continue`. **Do not** treat this as a
-nesting-depth failure.
-
-If the orchestrator returns `## SPAWN_REQUEST`, `## SPAWN_CAPABILITY_MISSING`,
-or `## NESTING_BLOCKED`, ignore any request to spawn a worker. Do not spawn a
-second orchestrator. Report the blocker and stop.
-
-Model IDs come only from `.cursor/goal-models.json` via `models …` — never
-hardcode them in this skill. Cursor role agents already declare `model` in
-frontmatter; `models` routing is still useful for harness spawn audit and
-effort/role display.
-
-Wait until that **one** `@orchestrator` finishes. Then
-report PR URL(s) / blockers from its result (or `harness status` / `harness done`).
-For Markdown multi-PR goals, report each delivery group's PR/MR — there is no
-aggregation PR. Do **not** call `harness spawn orchestrator` (worker budget is for child agents only).
-
-Only use `.cursor/scripts/goal-git.sh` for git/state — never raw `git` / `gh` / `glab`.
+Use `.cursor/scripts/goal-git.sh` for every git and goal-state operation;
+never invoke raw `git`, `gh`, or `glab`. `state.json` and its harness decide
+phase, tasks, evidence, budgets, and completion. Never claim success before
+`harness done` exits 0. Resolve worker roles through
+`.cursor/goal-models.json` via `models <role> --complexity <LEVEL>` for the
+`harness spawn` audit. Cursor worker frontmatter owns the actual model; do not
+invent a per-spawn model override. MAIN's session model is user-selected.
 
 ## Dispatch
 
-Inspect the arguments from the user message and follow the matching path:
+- `--list`: run `goal-git.sh list`; for multi-repo goals show `.repos` from
+  `state`. Return without starting a worker.
+- `--status`: run `harness progress` and `harness status`, showing phase,
+  requirements, gates, and tasks. Mention `.cursor/goal-progress.log` for
+  live milestones. Return.
+- `--continue [id] [instruction]`: compare the first token to `goal-git.sh
+  list`. If it matches, it is the ID and the rest is the new instruction;
+  otherwise the full remainder instructs the active goal. Run `continue`.
+  If phase is FAILED or a task is SPAWNING/BLOCKED, run
+  `harness recover-spawn`. Resume an incomplete issue queue if `issues queue`
+  has entries; otherwise resume the active goal from persisted phase. Never
+  recreate an existing branch, worktree, PR, or completed task.
+- `--issues [url] [count]`, or bare `/goal` when `goal_source=issues`: use the
+  explicit URL/count or config's `issue_list_url`/`issue_limit` (default 3).
+  Require a URL. Set `GOAL_RUN_ID`, run `issues list`, and read
+  `references/issue-queue.md`. One issue uses `issues start <n>` and the
+  normal loop; 2+ issues use one queue plan and one PR per issue.
+- New goal: resolve `--source <prompt|markdown|jira|issues>` or configured
+  `goal_source` (default `prompt`). Prompt requires a nonempty objective.
+  If the source is `issues`, use the issue dispatch above. Markdown reads the
+  explicit path or `markdown_path` from config and gives the path to Planner
+  as draft input. Jira requires Atlassian MCP: fetch the ticket, then run
+  `GOAL_SOURCE_OVERRIDE=jira .cursor/scripts/goal-git.sh start <summary> <ticket> <task-type>`.
+  For prompt/markdown, run
+  `GOAL_SOURCE_OVERRIDE=<source> .cursor/scripts/goal-git.sh start <resolved-goal>`;
+  preserve the optional Markdown task-type override (`bugfix` → `fix`) when
+  there is a single delivery group. Then enter the loop below.
 
-### `/goal --list`
-Run `.cursor/scripts/goal-git.sh list` and display the output.
-If `repos` has more than one entry, also show each repo path and branch
-(`.cursor/scripts/goal-git.sh state | jq '.repos'`). **Stop** (no orchestrator).
+## Core loop
 
-### `/goal --status`
-```bash
-.cursor/scripts/goal-git.sh harness progress
-.cursor/scripts/goal-git.sh harness status | jq '{phase, route, requirements, gates, tasks}'
-```
-Mention `.cursor/goal-progress.log` for the plain-text timeline. **Stop**.
+Read `references/execution.md` before a new or resumed goal. For an active
+Markdown `delivery_mode=multi-pr` goal, also read
+`references/delivery-groups.md`. Read `references/issue-queue.md` only for an
+issue invocation or resumed queue. Do not load unrelated workflow branches.
 
-### `/goal --issues [url] [count]`
-1. Parse remainder: optional `url`, optional `count`.
-   - Missing `url` → `issue_list_url` from config.
-   - Missing `count` → `issue_limit` from config (default `3`).
-   - Still no URL → STOP; tell user to run `/init-goal` or pass a URL.
-2. `export GOAL_RUN_ID="run-$(date +%s)-$$"`
-3. `.cursor/scripts/goal-git.sh issues list "<url>" <count>`
-4. Dispatch:
-   - **Exactly 1 issue:** `issues start <number>`, then **Handoff** with mode `issue`.
-   - **2+ issues:** **Handoff** with mode `issue-queue` (orchestrator: queue plan, batches, one PR per issue; multi-repo = one issue at a time).
-5. When orchestrator returns, report **one PR URL per issue**.
+1. Classify a short goal title with `complexity classify`; honor its
+   `planner_required` and `reviewer_required`. `route detect` is a baseline;
+   Planner's route and QA/visual signals take precedence.
+2. For TRIVIAL, initialize the harness with planner/reviewer not required and
+   skip their workers. Otherwise provisionally initialize the harness, spawn
+   Planner once, then initialize with Planner's final signals. Persist
+   `discovery_context` after final init and pass PLAN. A Markdown draft does
+   not skip Planner.
+3. Run Researcher only for a concrete unresolved question. Builders implement
+   scoped tasks and stage structured handoffs. Independent tasks may use
+   isolated worktrees; serialize state changes and shared-file edits.
+4. After each reconciled implementation batch, pass IMPLEMENTATION, run
+   `analyze` once, then `verify run`. This command alone may pass
+   VERIFICATION. A real verify failure or serious architectural review
+   finding may trigger Builder Expert only after Builder has attempted it.
+5. Run Reviewer when required. Run QA and Visual Reviewer only when harness
+   requirements say so. Rework through a new Builder, analyze, verify, and
+   re-review until findings are clean. Only Reviewer/Visual Reviewer resolve
+   review threads. Never let an iteration cap substitute for clean review.
+6. Run `harness done`; only then complete goal state. For single-PR goals,
+   report ready for manual merge unless `auto_merge=true`, in which case run
+   `merge` and stop on conflict. For Markdown multi-PR, report one PR per
+   group and never create an aggregation PR.
 
-Also use this path when `goal_source` is `issues` and the user runs bare `/goal` / `/goal <count>`.
+## Worker handoff and waiting
 
-### `/goal --continue [id] [new instruction]`
-Examples:
-```
-/goal --continue
-/goal --continue add-health
-/goal --continue add-health fix the healthcheck API
-/goal --continue fix the healthcheck API
-```
+Before each worker, resolve `models <role> --complexity <LEVEL>`, record
+`harness spawn <role> <MODEL> <EFFORT>` and a
+`harness event main <role>_started`. For builder tasks, set PENDING →
+SPAWNING before delegation; set RUNNING only after Cursor accepts the Task.
+Give the project `@<role>` a bounded brief: task, relevant discovery context
+or findings, target repo/worktree, and expected handoff. Do not pass full
+transcripts. Wait for the result, record completion, and continue the loop on
+MAIN. Do not generate repeated waiting commentary or poll a queue with model
+turns; intervene on timeout, stall, or interruption.
 
-Parse remainder after `--continue`:
-1. Empty → active goal, no instruction.
-2. Else first token vs `.cursor/scripts/goal-git.sh list` (branch/goal match).
-   - Match → identifier = token, instruction = rest.
-   - No match → identifier empty (active), instruction = whole remainder.
-3. `.cursor/scripts/goal-git.sh continue "<identifier>"`
-4. If harness phase is `FAILED` or a task is `SPAWNING`/`BLOCKED`, run
-   `harness recover-spawn` before handoff.
-5. If `issues queue` has incomplete entries → `export GOAL_RUN_ID=<run_id>`, **Handoff** mode `issue-queue` (resume). Do not run the loop yourself.
-6. Else **Handoff** mode `continue`, include any continuation instruction for Planner.
-7. Report PR URL(s) when orchestrator finishes.
+If Cursor's Agent/Task tool is unavailable, keep the task PENDING, report the
+capability blocker, and use `/goal --continue` once resolved. Never invent a
+worker result or PASS gate. On provider/rate-limit failure, use the next
+configured model only if Cursor can actually honor it; on missing tools,
+lock, network, or UNKNOWN verification, report the blocker instead of
+escalating the model.
 
-### `/goal <objective>` (new goal)
-1. `goal_source`: optional leading `--source <jira|markdown|prompt|issues>`; else config; else `prompt`.
-   If source is `issues` and remainder empty/integer → **`/goal --issues`**.
-   Prefix starts with `GOAL_SOURCE_OVERRIDE=<effective_source>`.
-2. Resolve goal text:
-   - `prompt` — remainder (empty → ask user and STOP).
-   - `markdown` — path from remainder or `markdown_path`; read file (missing → STOP).
-   - `jira` — optional task_type token, then ticket (or `jira_ticket`); require Atlassian MCP; `jira_get_issue`; map type; then:
-     ```bash
-     GOAL_SOURCE_OVERRIDE=<effective_source> .cursor/scripts/goal-git.sh start "<goal>" "<ticket>" "<task_type>"
-     ```
-3. For `prompt` / `markdown`: `GOAL_SOURCE_OVERRIDE=… .cursor/scripts/goal-git.sh start "<resolved goal>"`.
-   Optional markdown task-type token (`bugfix` → `fix`) may be passed as the third `start` argument; it overrides planner inference only when the plan yields a single delivery group.
-4. **Handoff** mode `single` (orchestrator classifies, **plans**, builds, verifies, reviews, QA/Visual, DONE). Markdown does **not** skip `@planner`. For `markdown` + `auto`/`task`, orchestrator runs the **per-group** loop (`groups init` → `groups start` → verify/review → `groups pr` → merge in dependency order). Do not expect one `goal/` PR.
-5. Report the final PR URL(s). Markdown multi-PR: one URL per delivery group.
+Use typed `harness event main ...` at goal/issue pickup, before and after
+worker spawns, verification, PR creation, and completion. Read progress from
+`harness progress` rather than producing duplicate status turns.

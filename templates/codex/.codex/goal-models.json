@@ -5,24 +5,6 @@
     ]
   },
   "$routing": {
-    "orchestrator": {
-      "TRIVIAL": {
-        "model": "gpt-5.6-terra",
-        "model_reasoning_effort": "low"
-      },
-      "NORMAL": {
-        "model": "gpt-5.6-terra",
-        "model_reasoning_effort": "low"
-      },
-      "COMPLEX": {
-        "model": "gpt-5.6-terra",
-        "model_reasoning_effort": "low"
-      },
-      "ARCHITECTURAL": {
-        "model": "gpt-5.6-terra",
-        "model_reasoning_effort": "low"
-      }
-    },
     "planner": {
       "TRIVIAL": null,
       "NORMAL": {

@@ -75,7 +75,7 @@ Commands:
                             Print stored handoff artifact
   harness status            Print harness object
   harness done              Exit 0 only when required gates PASS (from requirements)
-  harness recover-spawn     Unstick FAILED/SPAWNING/BLOCKED after spawn_agent was withheld
+  harness recover-spawn     Unstick FAILED/SPAWNING/BLOCKED after Agent/Task delegation was withheld
   groups persist            Save active group harness/PR overlay back into delivery_groups
   groups list               List delivery groups on the active Markdown goal
   groups init [file|-]      Persist planner delivery_groups JSON (stdin or file)
@@ -1308,7 +1308,7 @@ cmd_state_complete() {
       err "Root Markdown goal is not complete — unfinished groups: $incomplete"
       exit 1
     fi
-    harness_event "orchestrator" "root_goal_completed" "all delivery groups merged/completed"
+    harness_event "main" "root_goal_completed" "all delivery groups merged/completed"
   fi
   state_update status completed
   log "Goal marked completed"
@@ -3144,6 +3144,7 @@ harness_humanize_event() {
 harness_humanize_agent() {
   local a="$1"
   case "$a" in
+    main) echo "MAIN" ;;
     orchestrator) echo "Orchestrator" ;;
     planner) echo "Planner" ;;
     researcher) echo "Researcher" ;;
@@ -3451,12 +3452,11 @@ cmd_harness_spawn() {
     reviewer) metric_field="reviewer_runs"; budget_field="max_reviewer_runs" ;;
     qa) metric_field="qa_runs"; budget_field="max_qa_runs" ;;
     visual-reviewer) metric_field="visual_runs"; budget_field="max_visual_runs" ;;
-    orchestrator) metric_field=""; budget_field="" ;;
     *) err "Unknown spawn role: $role"; exit 1 ;;
   esac
 
-  # Agent .toml workers omit model; without spawn override Codex uses default_subagent_model.
-  if [ "$role" != "orchestrator" ] && [ -z "$model" ]; then
+  # Cursor agent frontmatter owns model selection; record its catalog value for audit.
+  if [ -z "$model" ]; then
     err "harness spawn $role requires <model> [effort] from: models $role --complexity <LEVEL>"
     err "Example: harness spawn planner \"\$(models planner --complexity COMPLEX | cut -f1)\" high"
     exit 1

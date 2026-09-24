@@ -388,7 +388,7 @@ print(json.dumps(groups))
     | .[$idx].markdown_pr_strategy = $strategy
     | .[$idx].delivery_groups = $groups
   '
-  harness_event "orchestrator" "delivery_grouping_completed" "groups=$(echo "$groups_out" | jq 'length') strategy=$strategy"
+  harness_event "main" "delivery_grouping_completed" "groups=$(echo "$groups_out" | jq 'length') strategy=$strategy"
   echo "$groups_out" | jq .
   log "Initialized $(echo "$groups_out" | jq 'length') delivery group(s)"
 }
@@ -506,7 +506,7 @@ cmd_groups_start() {
     | .[$idx].active_group_id = $gid
   '
   groups_activate "$gid"
-  harness_event "orchestrator" "group_builder_ready" "$gid $branch"
+  harness_event "main" "group_builder_ready" "$gid $branch"
   echo "$wt_rel"
   log "Group $gid ready: $branch @ $wt_rel"
 }
@@ -568,7 +568,7 @@ print("## Root Markdown goal\n" + root + "\n\n## Delivery group `" + str(g.get("
         | if .id == $gid then . + {pr_number: $pn, pr_url: $url, pr_title: $title} else . end
       ]
   '
-  harness_event "orchestrator" "group_pr_created" "$gid #$PR_RESULT_NUMBER $PR_RESULT_URL"
+  harness_event "main" "group_pr_created" "$gid #$PR_RESULT_NUMBER $PR_RESULT_URL"
   log "Created $gid PR: $PR_RESULT_URL"
 }
 
@@ -604,8 +604,8 @@ cmd_groups_merge() {
     ]
     | if .[$idx].active_group_id == $gid then .[$idx].active_group_id = null | .[$idx].worktree = "" else . end
   '
-  harness_event "orchestrator" "group_merged" "$gid #$pr_number"
-  harness_event "orchestrator" "group_deps_resolved" "$gid merged"
+  harness_event "main" "group_merged" "$gid #$pr_number"
+  harness_event "main" "group_deps_resolved" "$gid merged"
   log "Merged group $gid"
 }
 

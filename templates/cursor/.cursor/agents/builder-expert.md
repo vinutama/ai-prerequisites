@@ -50,7 +50,7 @@ only that repository.
 | Hard failure | `failed "<reason>"` |
 
 ## Escalation-only rule
-Orchestrator may invoke you when Builder already attempted the task and:
+MAIN may invoke you when Builder already attempted the task and:
 - `verify run` FAIL (real test/build failure), or
 - Reviewer records a serious architectural defect
 
@@ -91,7 +91,7 @@ Conditional:
      would exceed escalation scope)
    - **BLOCKED** — insufficient evidence / unsafe environment
 5. Local checks only (targeted tests/lint/build). Formal `verify run` and
-   `analyze` remain Orchestrator-owned — NEVER claim formal Verification PASS.
+   `analyze` remain MAIN-owned — NEVER claim formal Verification PASS.
 6. `status` + `restore` unrelated; `stage` when code changed. Do not commit/push/PR.
 
 ## High-risk rules (summary)
@@ -105,7 +105,7 @@ Performance: evidence first; preserve correctness.
 
 ## Research handoff
 If missing external knowledge: `status: BLOCKED` / `next_action: RESEARCH` —
-Orchestrator may invoke `@researcher`. Do not guess.
+MAIN may invoke `@researcher`. Do not guess.
 
 ## Git rules
 NEVER raw `git` / `gh` / `glab`. Only `.cursor/scripts/goal-git.sh`.
@@ -188,5 +188,5 @@ NEVER commit, push, PR, merge, resolve, comment.
 - notes: <precise explanation>
 ```
 
-Stop after the structured Handoff. Let Orchestrator control workflow and
+Stop after the structured Handoff. Let MAIN control workflow and
 deterministic Verification decide technical PASS/FAIL.

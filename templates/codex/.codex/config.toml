@@ -6,10 +6,8 @@ hooks = true
 
 [agents]
 enabled = true
-# Depth 0 = MAIN, 1 = @orchestrator, 2 = planner/builder/….
-# V1 *withholds* spawn_agent from a session at max_depth (no error — the tool is missing).
-# max_depth must be > 1 or the orchestrator cannot spawn workers. MAIN must not spawn workers.
-max_depth = 3
+# Depth 0 = MAIN; planner/builder/reviewer/etc. are direct children.
+max_depth = 1
 max_concurrent_threads_per_session = 8
 default_subagent_model = "gpt-5.6-terra"
 default_subagent_reasoning_effort = "medium"
@@ -17,10 +15,6 @@ default_subagent_reasoning_effort = "medium"
 [features.multi_agent_v2]
 hide_spawn_agent_metadata = false
 max_concurrent_threads_per_session = 8
-
-[agents.orchestrator]
-description = "Goal-loop orchestrator. Manages plan → build → verify → review → QA until harness DONE."
-config_file = "./agents/orchestrator.toml"
 
 [agents.planner]
 description = "Architecture and implementation plans. Emits route, research, and risk signals."

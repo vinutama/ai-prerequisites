@@ -103,7 +103,7 @@ You own:
 2. WHEN TO RUN
 ==============
 
-The Orchestrator invokes Visual Reviewer only when applicable:
+MAIN invokes Visual Reviewer only when applicable:
 
 * frontend route
 * UI files changed
@@ -122,7 +122,7 @@ This role requires a vision-capable model.
 
 The assigned model MUST support image input.
 
-The Orchestrator must resolve the model through:
+MAIN must resolve the model through:
 
 ```bash id="q2p5g8"
 .codex/scripts/goal-git.sh models visual-reviewer

@@ -76,7 +76,7 @@ Commands:
   harness status            Print harness object
   harness done              Exit 0 only when required gates PASS (from requirements)
   harness recover-spawn     Unstick FAILED/SPAWNING/BLOCKED after spawn_agent was withheld
-  codex ensure-user-config  Trust this project in ~/.codex/config.toml and set max_depth=3
+  codex ensure-user-config  Trust this project in ~/.codex/config.toml
   groups persist            Save active group harness/PR overlay back into delivery_groups
   groups list               List delivery groups on the active Markdown goal
   groups init [file|-]      Persist planner delivery_groups JSON (stdin or file)
@@ -207,7 +207,12 @@ platform="${GOAL_PLATFORM:-$(config_read platform)}"
 [ -z "$platform" ] && platform="$(detect_platform)"
 case "$platform" in
   github|gitlab) ;;
-  *) err "Cannot detect platform. Run '/init-goal' or set GOAL_PLATFORM=github|gitlab"; exit 1 ;;
+  *)
+    if [ "${1:-}" != "codex" ] || [ "${2:-}" != "ensure-user-config" ]; then
+      err "Cannot detect platform. Run '/init-goal' or set GOAL_PLATFORM=github|gitlab"
+      exit 1
+    fi
+    ;;
 esac
 
 require_vcs_cli() {
@@ -1038,7 +1043,7 @@ merge_figma_mcp() {
     cat > "$config_toml" <<'TOML'
 [agents]
 enabled = true
-max_depth = 3
+max_depth = 1
 max_concurrent_threads_per_session = 8
 
 [sandbox_workspace_write]
@@ -1339,7 +1344,7 @@ cmd_state_complete() {
       err "Root Markdown goal is not complete — unfinished groups: $incomplete"
       exit 1
     fi
-    harness_event "orchestrator" "root_goal_completed" "all delivery groups merged/completed"
+    harness_event "main" "root_goal_completed" "all delivery groups merged/completed"
   fi
   state_update status completed
   log "Goal marked completed"
@@ -3175,6 +3180,7 @@ harness_humanize_event() {
 harness_humanize_agent() {
   local a="$1"
   case "$a" in
+    main) echo "MAIN" ;;
     orchestrator) echo "Orchestrator" ;;
     planner) echo "Planner" ;;
     researcher) echo "Researcher" ;;
@@ -3482,12 +3488,11 @@ cmd_harness_spawn() {
     reviewer) metric_field="reviewer_runs"; budget_field="max_reviewer_runs" ;;
     qa) metric_field="qa_runs"; budget_field="max_qa_runs" ;;
     visual-reviewer) metric_field="visual_runs"; budget_field="max_visual_runs" ;;
-    orchestrator) metric_field=""; budget_field="" ;;
     *) err "Unknown spawn role: $role"; exit 1 ;;
   esac
 
   # Agent .toml workers omit model; without spawn override Codex uses default_subagent_model.
-  if [ "$role" != "orchestrator" ] && [ -z "$model" ]; then
+  if [ -z "$model" ]; then
     err "harness spawn $role requires <model> [effort] from: models $role --complexity <LEVEL>"
     err "Example: harness spawn planner \"\$(models planner --complexity COMPLEX | cut -f1)\" high"
     exit 1
@@ -4003,10 +4008,7 @@ cmd_codex_ensure_user_config() {
   mkdir -p "$codex_home"
 
   if ! command -v python3 >/dev/null 2>&1; then
-    warn "python3 not found — appending Codex trust/max_depth to $cfg"
-    if [ ! -f "$cfg" ] || ! grep -qE '^max_depth\s*=' "$cfg"; then
-      printf '\n[agents]\nmax_depth = 3\n' >> "$cfg"
-    fi
+    warn "python3 not found — appending Codex trust to $cfg"
     if ! grep -qF "[projects.\"$PROJECT_ROOT\"]" "$cfg"; then
       printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$PROJECT_ROOT" >> "$cfg"
     fi
@@ -4020,21 +4022,6 @@ import os, pathlib, re, sys
 cfg_path = pathlib.Path(sys.argv[1])
 project = os.environ["GOAL_PROJECT_ROOT"]
 text = cfg_path.read_text() if cfg_path.exists() else ""
-
-def upsert_max_depth(s: str) -> str:
-    m = re.search(r"(?ms)^\[agents\][^\[]*", s)
-    if m:
-        block = m.group(0)
-        if re.search(r"(?m)^max_depth\s*=", block):
-            new_block = re.sub(r"(?m)^max_depth\s*=\s*.*$", "max_depth = 3", block, count=1)
-        else:
-            new_block = re.sub(r"(?m)^\[agents\]\s*$", "[agents]\nmax_depth = 3", block, count=1)
-        return s[: m.start()] + new_block + s[m.end() :]
-    if s and not s.endswith("\n"):
-        s += "\n"
-    return s + "\n[agents]\nmax_depth = 3\n"
-
-text = upsert_max_depth(text)
 
 escaped = project.replace("\\", "\\\\").replace('"', '\\"')
 header = f'[projects."{escaped}"]'
@@ -4056,8 +4043,7 @@ cfg_path.write_text(text)
 print(str(cfg_path))
 PY
 
-  log "Ensured $cfg has [agents] max_depth=3 and trust_level=trusted for $PROJECT_ROOT"
-  log "Already-open Codex sessions keep their old max_depth. A NEW session is required for orchestrator spawn_agent."
+  log "Ensured $cfg has trust_level=trusted for $PROJECT_ROOT (existing max_depth preserved)"
 }
 
 # shellcheck source=delivery-groups.sh

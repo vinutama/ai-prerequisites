@@ -25,7 +25,6 @@ Canonical map (exclude `ui-ux-pro-max` from the npx `--skills` install):
 
 | Agent | Skills (awesome-skills `--skills`) |
 |---|---|
-| `orchestrator` | `parallel-agents`, `multi-agent-patterns`, `verification-before-completion` |
 | `planner` | `brainstorming`, `concise-planning`, `writing-plans`, `architecture` |
 | `researcher` | `deep-research`, `research-prompt`, `documentation`, `documentation-templates`, `architecture`, `api-security-best-practices` |
 | `builder` | `test-driven-development`, `lint-and-validate`, `error-handling-patterns`, `api-endpoint-builder` |
@@ -43,7 +42,7 @@ Ask the user the following questions one at a time and wait for each answer:
    If `recommended`, compute the deduplicated union and install from the project root:
    ```bash
    npx agentic-awesome-skills --path .codex/skills --skills \
-   parallel-agents,multi-agent-patterns,verification-before-completion,brainstorming,concise-planning,writing-plans,architecture,deep-research,research-prompt,documentation,documentation-templates,api-security-best-practices,test-driven-development,lint-and-validate,error-handling-patterns,api-endpoint-builder,systematic-debugging,code-review-excellence,e2e-testing-patterns,webapp-testing,browser-automation,api-security-testing,wcag-audit-patterns,frontend-design
+   verification-before-completion,brainstorming,concise-planning,writing-plans,architecture,deep-research,research-prompt,documentation,documentation-templates,api-security-best-practices,test-driven-development,lint-and-validate,error-handling-patterns,api-endpoint-builder,systematic-debugging,code-review-excellence,e2e-testing-patterns,webapp-testing,browser-automation,api-security-testing,wcag-audit-patterns,frontend-design
    ```
    Do **not** pass `--category` or `--risk` for recommended — the skill list is exact.
    Then skip to **After agentic-awesome-skills install** below.
@@ -51,7 +50,7 @@ Ask the user the following questions one at a time and wait for each answer:
    If `custom`, continue with question 2.
 
 2. **Agents** (custom only) — Which agents' skills to install? (multi-select)
-   - `orchestrator`, `planner`, `researcher`, `builder`, `builder-expert`, `reviewer`, `qa`, `visual-reviewer`
+   - `planner`, `researcher`, `builder`, `builder-expert`, `reviewer`, `qa`, `visual-reviewer`
    - Or `all` (same as recommended)
 
    Build a deduplicated comma-separated `--skills` list from the map for the selected agents only.

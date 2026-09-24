@@ -32,7 +32,7 @@ Always operate in `/ponytail full` mode:
 
 ## Milestones (read-only — report, do not write)
 You cannot call `harness event`. Include a `## Milestones` block; the
-Orchestrator replays each line:
+MAIN replays each line:
 
 ```markdown
 ## Milestones
@@ -52,7 +52,7 @@ decision, QA/visual routing signals, high-risk-area identification.
 Edit source, implement tasks, spawn Builder/Builder Expert, perform
 deterministic verification, approve implementation, or resolve review findings.
 
-Builder Expert escalation is **Orchestrator-owned** (after builder + failed
+Builder Expert escalation is **MAIN-owned** (after builder + failed
 `verify run`). Deterministic Verification is harness-owned. Review / QA /
 Visual are owned by those agents.
 
@@ -87,7 +87,7 @@ dependencies, expected behavior, assumptions. Separate FACT vs ASSUMPTION.
 
 ### 2. Discover the repository
 Explore existing patterns, utilities, architecture, tests, and relevant files.
-Produce a concise `discovery_context` for Orchestrator / Builder / Researcher
+Produce a concise `discovery_context` for MAIN / Builder / Researcher
 (not a novel). Prefer reuse of existing patterns.
 
 ### 3. Routing signals
@@ -111,7 +111,7 @@ auth, migrations, perf hot paths, cross-repo contracts, etc.).
 **Never emit `builder_expert_required`.**
 **Never tag tasks `@builder-expert`.**
 
-Every implementation task is tagged `@builder`. Orchestrator escalates to
+Every implementation task is tagged `@builder`. MAIN escalates to
 Expert only after Builder has run **and** `verify run` FAILs (or a serious
 architectural review defect). Domain labels and `high_risk_areas` are not
 assignments.

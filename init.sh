@@ -172,6 +172,20 @@ install_target() {
   done
 }
 
+disable_legacy_cursor_orchestrator() {
+  local dest="$1"
+  local legacy="$dest/.cursor/agents/orchestrator.md"
+  [ -e "$legacy" ] || return 0
+
+  local backup="$legacy.disabled" n=1
+  while [ -e "$backup" ]; do
+    backup="$legacy.disabled.$n"
+    n=$((n + 1))
+  done
+  mv "$legacy" "$backup"
+  log "Disabled legacy Cursor orchestrator (recoverable at $backup)"
+}
+
 # --- migrate .cursor assets ---
 
 migrate_cursor_assets() {
@@ -366,7 +380,7 @@ remove_agent_toml_key() {
   ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
 }
 
-# Keep [agents] default_subagent_* aligned with goal-models.json orchestrator (catalog SSOT).
+# Keep [agents] default_subagent_* aligned with the normal builder route (catalog SSOT).
 sync_codex_config_defaults() {
   local dest="$1"
   local models_file="$dest/.codex/goal-models.json"
@@ -377,15 +391,15 @@ sync_codex_config_defaults() {
 
   local model effort
   model="$(jq -r '
-    .["$routing"].orchestrator.NORMAL.model
-    // .["$routing"].orchestrator.TRIVIAL.model
-    // .orchestrator.model
+    .["$routing"].builder.NORMAL.model
+    // .["$routing"].builder.TRIVIAL.model
+    // .builder.model
     // empty
   ' "$models_file")"
   effort="$(jq -r '
-    .["$routing"].orchestrator.NORMAL.model_reasoning_effort
-    // .["$routing"].orchestrator.TRIVIAL.model_reasoning_effort
-    // .orchestrator.model_reasoning_effort
+    .["$routing"].builder.NORMAL.model_reasoning_effort
+    // .["$routing"].builder.TRIVIAL.model_reasoning_effort
+    // .builder.model_reasoning_effort
     // "medium"
   ' "$models_file")"
   [ -n "$model" ] || return 0
@@ -471,7 +485,7 @@ sync_agent_models() {
     sync_codex_config_defaults "$dest"
     if [ -x "$dest/.codex/scripts/goal-git.sh" ]; then
       "$dest/.codex/scripts/goal-git.sh" codex ensure-user-config \
-        || warn "Could not write ~/.codex trust / max_depth for $dest"
+        || warn "Could not write ~/.codex trust for $dest"
     fi
   elif [ "$name" = "qoder" ]; then
     jq -r 'to_entries[] | select(.key | startswith("$") | not) | "\(.key)\t\(.value.model // "inherit")\t\(.value.effort // "")\t\(.value.readonly // "")"' "$models_file" | while IFS=$'\t' read -r agent_name model effort readonly; do
@@ -892,7 +906,7 @@ print_tree() {
       echo "├── state.json          (gitignored, created at runtime; includes harness)"
       echo "├── AGENTS.md           (gitignored)"
       echo "└── .cursor/            (gitignored)"
-      echo "    ├── agents/         (8 specialized agents)"
+      echo "    ├── agents/         (7 specialized workers; MAIN coordinates)"
       echo "    ├── skills/         (/goal, /init-goal, /init-skills, /create-issues, goal-loop)"
       echo "    ├── scripts/        (goal-git.sh harness/verify/groups, delivery-groups.sh, run-cursor.sh)"
       echo "    └── goal-models.json"
@@ -957,6 +971,9 @@ auto_detect_and_cleanup "$TARGET"
 local_name=""
 for local_name in "${TARGETS[@]}"; do
   install_target "$local_name" "$TARGET"
+  if [ "$local_name" = "cursor" ]; then
+    disable_legacy_cursor_orchestrator "$TARGET"
+  fi
   migrate_cursor_assets "$TARGET" "$local_name"
   if [ "$local_name" = "opencode" ]; then
     generate_opencode_json "$TARGET"

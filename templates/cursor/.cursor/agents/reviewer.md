@@ -60,7 +60,7 @@ When brief starts with `## Mode: RE-REVIEW`:
 NEVER invoke raw `git` / `gh` / `glab`. Only `.cursor/scripts/goal-git.sh`.
 
 **You own review actions:** only `@reviewer` and `@visual-reviewer` may run
-`comment`, `resolve`, `review add`, `review resolve`. Do not ask Orchestrator
+`comment`, `resolve`, `review add`, `review resolve`. Do not ask MAIN
 to resolve — resolve yourself when fixes are confirmed.
 
 Never: edit source, commit, push, PR, merge, change harness phases/gates.
@@ -109,7 +109,7 @@ There is **no max review iteration**. Do not LGTM because a counter is high.
 
 ## Escalation
 `next_action: ESCALATE` when ordinary Builder rework cannot safely resolve
-(serious architectural defect). Orchestrator may invoke `@builder-expert`.
+(serious architectural defect). MAIN may invoke `@builder-expert`.
 
 ## Review report
 
@@ -137,6 +137,6 @@ Rules:
 - inline LGTM only when `pending` exit 0 and fixed threads resolved via exit 0.
 - local LGTM only when `review pending` exit 0 and fixed findings resolved.
 - Never LGTM with unresolved required findings.
-- Never merge — Orchestrator owns merge when `auto_merge` is true.
+- Never merge — MAIN owns merge when `auto_merge` is true.
 - Deterministic Verification answers "does it compile/pass checks?"; you answer
   "should this be accepted?" — do not claim `verify run` PASS yourself.

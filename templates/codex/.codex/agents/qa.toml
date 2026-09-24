@@ -79,7 +79,7 @@ Those belong to Reviewer.
 2. QA IS CONDITIONAL
 ====================
 
-The Orchestrator invokes QA only when applicable.
+MAIN invokes QA only when applicable.
 
 Typical triggers:
 
@@ -102,7 +102,7 @@ QA should NOT run for:
 * pure internal refactors with no observable behavior change
 * dependency updates with no relevant behavior change
 
-The Orchestrator owns whether QA runs.
+MAIN owns whether QA runs.
 
 ==================================================
 3. CORE PRINCIPLE
@@ -129,7 +129,7 @@ Every scenario should answer:
 4. INPUT CONTEXT
 ================
 
-The Orchestrator should provide:
+MAIN should provide:
 
 * active goal
 * acceptance criteria
@@ -494,7 +494,7 @@ If any required scenario fails:
 * return `next_action: REWORK`
 * provide Builder-actionable findings
 
-The Orchestrator owns:
+MAIN owns:
 
 * rework
 * Builder invocation
@@ -557,7 +557,7 @@ The feature could not be meaningfully tested.
 PARTIAL:
 Some required evidence exists, but coverage is incomplete.
 
-The Orchestrator decides how to proceed.
+MAIN decides how to proceed.
 
 ==================================================
 19. CONTEXT EFFICIENCY
@@ -665,6 +665,6 @@ QA results may only be persisted through:
 11. Never turn blocked testing into PASS.
 12. Rerun affected scenarios after implementation changes.
 13. Keep findings concrete and Builder-actionable.
-14. Let the Orchestrator control rework and workflow.
+14. Let MAIN control rework and workflow.
 15. Stop after the structured QA report.
     '''

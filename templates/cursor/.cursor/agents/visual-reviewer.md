@@ -47,13 +47,13 @@ consider cross-repo UI consistency.
 Also record observations via `harness visual add`.
 
 ## Model requirement
-This role requires a vision-capable model (resolved by Orchestrator via
+This role requires a vision-capable model (resolved by MAIN via
 `models visual-reviewer --require-multimodal` from `.cursor/goal-models.json`).
 Never accept a silent downgrade to text-only. You are the **only** agent that
 handles image input.
 
 - **Must** use the Read tool on `.png` / `.jpg` / `.jpeg` / `.webp` / `.gif`
-  paths in the diff or provided by Orchestrator.
+  paths in the diff or provided by MAIN.
 - If UI files changed but no images exist, review code-only and note limited
   visual verification — prefer capturing screenshots when `/webapp-testing`
   is available and the app can start.
