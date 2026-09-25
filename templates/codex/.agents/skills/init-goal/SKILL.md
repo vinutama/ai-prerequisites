@@ -62,9 +62,9 @@ This command configures the goal workflow for this project. Ask the user the fol
 
      Confirm: `jq '.repos' .codex/goal-config.json`
 
-5. **Concurrent subagents** — Should independent tasks run concurrently using git worktrees?
+5. **Concurrent subagents** — Should independent tasks or issues run concurrently using git worktrees?
    - `no` — sequential execution only (concurrency = 1)
-   - `yes` — ask how many subagents max (e.g. 2, 3, 4). Store as `concurrency` integer.
+   - `yes` — ask how many active workers max across the whole goal (e.g. 2, 3, 4). Store as `concurrency` integer.
 
 6. **Figma design lookup** — Connect Figma to look up preferred designs during UI goals?
    - `no` — skip (default)

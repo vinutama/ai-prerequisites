@@ -1,7 +1,7 @@
 ---
 name: goal
 description: >-
-  Run a goal on MAIN: /goal <objective> | --list | --status | --issues [url] [count] | --continue [id] [instruction]
+  Run a goal on MAIN from an objective, issue queue, status request, or continuation.
 disable-model-invocation: true
 ---
 
@@ -36,12 +36,14 @@ invent a per-spawn model override. MAIN's session model is user-selected.
   If phase is FAILED or a task is SPAWNING/BLOCKED, run
   `harness recover-spawn`. Resume an incomplete issue queue if `issues queue`
   has entries; otherwise resume the active goal from persisted phase. Never
-  recreate an existing branch, worktree, PR, or completed task.
+  recreate an existing branch, worktree, PR, or completed task. For a queue,
+  select each issue with `GOAL_ISSUE` and follow the persisted batch plan.
 - `--issues [url] [count]`, or bare `/goal` when `goal_source=issues`: use the
   explicit URL/count or config's `issue_list_url`/`issue_limit` (default 3).
   Require a URL. Set `GOAL_RUN_ID`, run `issues list`, and read
   `references/issue-queue.md`. One issue uses `issues start <n>` and the
-  normal loop; 2+ issues use one queue plan and one PR per issue.
+  normal loop; 2+ issues use one queue plan and one PR per issue. Independent
+  single-repo issues in the same batch start together in separate worktrees.
 - New goal: resolve `--source <prompt|markdown|jira|issues>` or configured
   `goal_source` (default `prompt`). Prompt requires a nonempty objective.
   If the source is `issues`, use the issue dispatch above. Markdown reads the
@@ -92,8 +94,10 @@ Before each worker, resolve `models <role> --complexity <LEVEL>`, record
 SPAWNING before delegation; set RUNNING only after Cursor accepts the Task.
 Give the project `@<role>` a bounded brief: task, relevant discovery context
 or findings, target repo/worktree, and expected handoff. Do not pass full
-transcripts. Wait for the result, record completion, and continue the loop on
-MAIN. Do not generate repeated waiting commentary or poll a queue with model
+transcripts. For a parallel issue batch, delegate each ready issue's worker
+up to the shared limit before waiting; then handle whichever result is ready
+and refill a free slot. Otherwise wait for the result, record completion, and
+continue the loop on MAIN. Do not generate repeated waiting commentary or poll a queue with model
 turns; intervene on timeout, stall, or interruption.
 
 If Cursor's Agent/Task tool is unavailable, keep the task PENDING, report the

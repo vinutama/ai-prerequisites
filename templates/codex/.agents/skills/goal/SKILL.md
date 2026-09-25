@@ -1,7 +1,7 @@
 ---
 name: goal
 description: >-
-  Run a goal in MAIN: $goal <objective> | --list | --status | --issues [url] [count] | --continue [id] [instruction]
+  Run a goal in MAIN from an objective, issue queue, status request, or continuation.
 ---
 
 # Goal loop on MAIN
@@ -35,12 +35,14 @@ Parse the text after `$goal` before running the execution loop.
   `continue`. If phase is FAILED or a task is SPAWNING/BLOCKED, run
   `harness recover-spawn`. Resume an incomplete issue queue if `issues queue`
   has entries, otherwise resume the active goal from its persisted phase.
-  Never recreate an existing branch, worktree, PR, or completed task.
+  For a queue, select each issue with `GOAL_ISSUE` and follow the persisted
+  batch plan. Never recreate an existing branch, worktree, PR, or completed task.
 - `--issues [url] [count]`, or bare `$goal` when `goal_source=issues`: use the
   explicit URL/count or config's `issue_list_url`/`issue_limit` (default 3).
   Require a URL. Set `GOAL_RUN_ID`, run `issues list`, and read
   `references/issue-queue.md`. One issue uses `issues start <n>` and the normal
-  loop; 2+ issues use one queue plan and one PR per issue.
+  loop; 2+ issues use one queue plan and one PR per issue. Independent
+  single-repo issues in the same batch start together in separate worktrees.
 - New goal: resolve `--source <prompt|markdown|jira|issues>` or configured
   `goal_source` (default `prompt`). Prompt requires nonempty objective.
   If the resolved source is `issues`, use the issue dispatch above.
@@ -98,8 +100,10 @@ after `spawn_agent` succeeds. Call `spawn_agent` with `agent_type=<role>`, the
 resolved model and effort, and `fork_turns="none"` when supported. Pass a
 bounded brief: task, relevant discovery
 context or findings, target repo/worktree, and expected handoff. Do not pass
-full transcripts. Wait for the worker result, then record its completion and
-continue the loop in MAIN. Do not generate repeated waiting commentary or
+full transcripts. For a parallel issue batch, spawn each ready issue's worker
+up to the shared limit before waiting; then handle whichever result is ready
+and refill a free slot. Otherwise wait for the worker result, record its
+completion, and continue the loop in MAIN. Do not generate repeated waiting commentary or
 poll a queue with model turns; intervene on timeout, stall, or interruption.
 If `spawn_agent` is unavailable, keep the task PENDING, report the capability
 blocker, and use `$goal --continue` after it is resolved. Never invent a

@@ -33,10 +33,13 @@ discovery in MAIN.
 
 Execute planner tasks in dependency order. With `concurrency>1`, parallelize
 only independent file sets in isolated worktrees and merge them sequentially.
+In an issue queue, count workers across all active issues against this one
+limit; do not grant each issue its own pool of `concurrency` workers.
 Multi-repo tasks carry an explicit repo path and retain per-repo verification.
 For each task: `harness task add builder <title>`, set SPAWNING, resolve worker
-model/effort, `harness spawn`, `spawn_agent`, then set RUNNING and wait. On
-success mark DONE; on failure mark BLOCKED/FAILED. Builders stage changes and
+model/effort, `harness spawn`, `spawn_agent`, then set RUNNING. In a parallel
+issue batch, start other ready issue workers before waiting; otherwise wait
+now. On success mark DONE; on failure mark BLOCKED/FAILED. Builders stage changes and
 return a compact handoff; they do not commit or push. A rework Builder is a
 fresh thread with findings + diff + verify summary, not the previous transcript.
 

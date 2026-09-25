@@ -300,7 +300,12 @@ When `goal_source` is `issues` (set via `/init-goal`), `/goal --issues` fetches
 open issues from a configured or passed issue list URL, takes the first N
 (`issue_limit`), and drives **each issue to its own branch and PR**. The planner
 reorders by dependency and groups independent issues into concurrency batches;
-the coordinator (MAIN on Cursor/Codex) runs parallel builders in isolated worktrees (single-repo only).
+the coordinator (MAIN on Cursor/Codex) starts every ready issue in the batch in
+its own worktree, then runs its workers and verification separately. The
+configured concurrency is a global worker cap, not a cap per issue. Each
+issue keeps its own branch and PR/MR; issue branches are not merged together.
+Parallel issue state lives in the root checkout, so `--continue` reuses the
+existing worktrees and per-issue harnesses.
 Multi-repo + issues processes one issue at a time across repos. Resume a partial
 run with `/goal --continue`. Requires `gh` or `glab` authenticated for the repo
 in the list URL.

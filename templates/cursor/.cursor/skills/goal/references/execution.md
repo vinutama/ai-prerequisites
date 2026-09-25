@@ -35,10 +35,13 @@ codebase discovery in MAIN.
 
 Execute Planner tasks in dependency order. With `concurrency>1`, parallelize
 only independent file sets in isolated worktrees and merge sequentially.
+In an issue queue, count workers across all active issues against this one
+limit; do not grant each issue its own pool of `concurrency` workers.
 Multi-repo tasks carry an explicit repo path and keep per-repo verification.
 For each task: `harness task add builder <title>`, set SPAWNING, resolve the
-catalog model/effort, `harness spawn`, delegate to `@builder`, then set RUNNING
-and wait. On success mark DONE; on failure mark BLOCKED/FAILED. Builders
+catalog model/effort, `harness spawn`, delegate to `@builder`, then set RUNNING.
+In a parallel issue batch, start other ready issue workers before waiting;
+otherwise wait now. On success mark DONE; on failure mark BLOCKED/FAILED. Builders
 stage changes and return a compact handoff; they do not commit or push. A
 rework Builder is a fresh Task with findings + diff + verify summary, not a
 previous transcript.

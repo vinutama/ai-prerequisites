@@ -219,10 +219,13 @@ require_vcs_cli() {
 # --- Goal index (GOAL_ISSUE selects entry; default -1 = active goal) ---
 
 resolve_goal_idx() {
-  if [ -n "${GOAL_ISSUE:-}" ] && [ -f "$STATE_FILE" ]; then
+  if [ -n "${GOAL_ISSUE:-}" ]; then
+    [ -f "$STATE_FILE" ] || { err "No state for issue #$GOAL_ISSUE"; return 1; }
     state_ensure_array
-    jq --argjson n "$GOAL_ISSUE" \
-      '(map(.issue.number? == $n) | index(true)) // (length - 1)' "$STATE_FILE"
+    local idx
+    idx=$(jq -r --argjson n "$GOAL_ISSUE" 'map(.issue.number? == $n) | index(true) // empty' "$STATE_FILE")
+    [ -n "$idx" ] || { err "Issue #$GOAL_ISSUE is not in state.json"; return 1; }
+    echo "$idx"
   else
     echo "-1"
   fi
@@ -239,15 +242,13 @@ goal_workdir() {
   fi
   local wt
   wt=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].worktree // ""' "$STATE_FILE" 2>/dev/null || echo "")
-  if [ -n "$wt" ] && [ -d "$PROJECT_ROOT/$wt" ]; then
+  if [ -n "$wt" ]; then
+    [ -d "$PROJECT_ROOT/$wt" ] || { err "Goal worktree is missing: $PROJECT_ROOT/$wt"; return 1; }
     echo "$PROJECT_ROOT/$wt"
-  else
-    echo "$PROJECT_ROOT"
+    return
   fi
+  echo "$PROJECT_ROOT"
 }
-
-GOAL_IDX="-1"
-refresh_goal_idx
 
 # --- State Helpers ---
 
@@ -320,6 +321,9 @@ state_ensure_array() {
     state_mutate '[.]'
   fi
 }
+
+GOAL_IDX="-1"
+refresh_goal_idx
 
 state_active() {
   state_ensure_array
@@ -933,6 +937,12 @@ cmd_continue() {
     log "Continuing Markdown multi-PR goal (no aggregation checkout)"
     log "Goal: $(jq -r --argjson idx "$GOAL_IDX" '.[$idx].goal' "$STATE_FILE")"
     cmd_groups_list
+    return 0
+  fi
+  if [ -n "$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].worktree // empty' "$STATE_FILE")" ]; then
+    local wd
+    wd="$(goal_workdir)"
+    log "Continuing issue in its existing worktree: $wd"
     return 0
   fi
   while IFS= read -r repo; do
@@ -1707,6 +1717,22 @@ ${body}"
   batch="${GOAL_ISSUE_BATCH:-0}"
 
   state_ensure_array
+  local existing
+  existing=$(jq -c --arg rid "$run_id" --argjson n "$number" \
+    '[.[] | select(.run_id == $rid and .issue.number == $n)] | last // empty' "$STATE_FILE" 2>/dev/null || true)
+  if [ -n "$existing" ]; then
+    if [ "$(echo "$existing" | jq -r '.status')" = "completed" ]; then
+      err "Issue #$number is already completed in run $run_id"
+      exit 1
+    fi
+    log "Resuming existing issue #$number in run $run_id"
+    echo "$existing" | jq -r '.worktree // empty'
+    return 0
+  fi
+  if [ "$use_worktree" = true ] && [ "$(get_repos)" != "." ]; then
+    err "Parallel issue worktrees require a single root repository"
+    exit 1
+  fi
 
   local repos_json="[]"
   while IFS= read -r r; do
@@ -1728,7 +1754,6 @@ ${body}"
     local rd
     rd=$(repo_dir ".")
     (cd "$rd" && git worktree add -b "$branch" "$wt_path" "origin/$base")
-    sync_worktree_config "$wt_path"
     log "Issue worktree: $wt_rel (branch: $branch)"
   else
     while IFS= read -r r; do
@@ -1791,13 +1816,22 @@ cmd_issues_finish() {
 
   GOAL_ISSUE="$number"
   refresh_goal_idx
+  cmd_harness_done
+  if ! jq -e --argjson idx "$GOAL_IDX" '
+    .[$idx] | if (.repos // [] | length) > 0
+      then all(.repos[]; (.pr_url // "") != "")
+      else (.pr_url // "") != "" end
+  ' "$STATE_FILE" >/dev/null; then
+    err "Issue #$number has no completed PR/MR delivery"
+    exit 1
+  fi
 
   local wt_rel wt_path
   wt_rel=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].worktree // ""' "$STATE_FILE")
   if [ -n "$wt_rel" ] && [ "$wt_rel" != "null" ]; then
     wt_path="$PROJECT_ROOT/$wt_rel"
     if [ -d "$wt_path" ]; then
-      git worktree remove "$wt_path" --force 2>/dev/null || git worktree remove "$wt_path" 2>/dev/null || true
+      git worktree remove "$wt_path" || { err "Issue #$number worktree is not clean; keep it for recovery"; exit 1; }
       log "Removed issue worktree: $wt_rel"
     fi
     state_mutate --argjson idx "$GOAL_IDX" 'del(.[$idx].worktree)'
