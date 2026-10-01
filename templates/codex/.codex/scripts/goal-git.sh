@@ -672,7 +672,7 @@ Closes #${issue_num}"
     workdir="$PROJECT_ROOT/$repo_path"
   fi
 
-  local pr_number pr_url
+  local pr_number="" pr_url=""
   case "$platform" in
     github)
       # gh pr create does not support --json; it prints the PR URL on success.
@@ -699,27 +699,44 @@ Closes #${issue_num}"
       ;;
     gitlab)
       log "Creating MR: $title"
-      local mr_output mr_number
-      mr_output=$(cd "$workdir" && glab mr create --yes --source-branch "$branch" --target-branch "$base" --title "$title" --description "$issue_body" --output json 2>/dev/null || true)
-      if echo "$mr_output" | jq -e '.iid' >/dev/null 2>&1; then
-        mr_number=$(echo "$mr_output" | jq -r '.iid')
-        pr_url=$(echo "$mr_output" | jq -r '.web_url // empty')
+      local mr_output mr_number="" create_out="" create_rc=0
+      # A previous attempt may have created the MR without persisting its state.
+      mr_output=$(cd "$workdir" && glab mr view "$branch" --output json 2>&1) || true
+      if printf '%s\n' "$mr_output" | jq -e '
+        (.iid | type) == "number" and .iid > 0 and
+        (.web_url | type) == "string" and (.web_url | length) > 0
+      ' >/dev/null 2>&1; then
+        mr_number=$(printf '%s\n' "$mr_output" | jq -r '.iid')
+        pr_url=$(printf '%s\n' "$mr_output" | jq -r '.web_url')
       else
-        mr_output=$(cd "$workdir" && glab mr create --yes --source-branch "$branch" --target-branch "$base" --title "$title" --description "$issue_body" 2>&1)
-        mr_number=$(echo "$mr_output" | grep -oE '\!([0-9]+)' | head -1 | tr -d '!')
-      fi
-      [ -z "$mr_number" ] && { err "Failed to extract MR number from glab output"; err "Output: $mr_output"; exit 1; }
-      pr_number="$mr_number"
-      if [ -z "$pr_url" ]; then
-        local project_path remote_url
-        project_path=$(cd "$workdir" && glab repo view --output json 2>/dev/null | jq -r '.path_with_namespace // empty' || echo "")
-        if [ -n "$project_path" ]; then
-          pr_url="https://gitlab.com/$project_path/-/merge_requests/$pr_number"
+        # mr create prints text; only mr view supports --output json.
+        create_out=$(cd "$workdir" && glab mr create --yes --source-branch "$branch" --target-branch "$base" --title "$title" --description "$issue_body" 2>&1) || create_rc=$?
+        # Resolve even after failure: another attempt may have created the MR.
+        mr_output=$(cd "$workdir" && glab mr view "$branch" --output json 2>&1) || true
+        if printf '%s\n' "$mr_output" | jq -e '
+          (.iid | type) == "number" and .iid > 0 and
+          (.web_url | type) == "string" and (.web_url | length) > 0
+        ' >/dev/null 2>&1; then
+          mr_number=$(printf '%s\n' "$mr_output" | jq -r '.iid')
+          pr_url=$(printf '%s\n' "$mr_output" | jq -r '.web_url')
+        elif [ "$create_rc" -eq 0 ]; then
+          # Keep the actual host, including self-managed GitLab installations.
+          pr_url=$(printf '%s\n' "$create_out" | grep -Eo 'https?://[^[:space:]]+/-/merge_requests/[0-9]+' | tail -1 || true)
+          mr_number=$(printf '%s\n' "$pr_url" | grep -Eo '[0-9]+$' || true)
         else
-          remote_url=$(cd "$workdir" && git remote get-url origin 2>/dev/null | sed 's/\.git$//' | sed 's|^git@gitlab.com:|https://gitlab.com/|')
-          pr_url="${remote_url}/-/merge_requests/$pr_number"
+          err "Failed to create GitLab MR for branch $branch (exit $create_rc)"
+          err "glab output: $create_out"
+          err "MR lookup output: $mr_output"
+          exit 1
         fi
       fi
+      if [ -z "$mr_number" ] || [ -z "$pr_url" ]; then
+        err "Failed to resolve GitLab MR metadata for branch $branch"
+        err "glab create output: $create_out"
+        err "MR lookup output: $mr_output"
+        exit 1
+      fi
+      pr_number="$mr_number"
       ;;
   esac
 
