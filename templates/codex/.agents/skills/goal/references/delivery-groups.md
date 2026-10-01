@@ -17,7 +17,10 @@ For each group, activate its typed branch/worktree, initialize its own harness
 from Planner signals, persist its discovery context, pass PLAN, enter BUILDING,
 and `groups persist`. Run the common build/analyze/verify/review/conditional
 QA/visual loop only for its tasks/files. Every builder brief names that group
-worktree. One group's PASS gates never clear another's. In inline review mode,
+worktree, absolute `WORKFLOW_ROOT` and `GOAL_GIT`, and group/task IDs. MAIN
+owns group activation and serializes shared-state commands; workers do not
+switch groups, and must report a mismatch with the assigned group before
+mutations. One group's PASS gates never clear another's. In inline review mode,
 push and run `groups pr <id>` before Reviewer so it can review that group's
 PR. In local review mode, do so only after the clean `harness done` gate.
 Report one PR URL per group. If auto-merge is on,

@@ -24,10 +24,14 @@ branch and PR/MR per issue; never merge issue worktrees together.
 If actual changed files overlap despite the plan, stop concurrent writes to
 those files and run the affected issues sequentially.
 
-Run the root checkout's `goal-git.sh` for every state/git command. Its
+Run the absolute `GOAL_GIT` from `WORKFLOW_ROOT` for every state/git command. Its
 `state.json` is the sole queue/harness authority; issue worktrees contain code,
-not independent state copies. Builders receive their own worktree path and
-issue number, and may not run goal-state commands there. Serialize
+not independent state copies. Every worker receives concrete
+`WORKFLOW_ROOT`, `TARGET_WORKTREE`, `GOAL_GIT`,
+and `GOAL_ISSUE` values in its brief. Code commands run in its assigned
+worktree; helper commands use the root script and assigned issue selector.
+Workers return milestones and task results for MAIN to record; do not run
+state-changing harness commands independently. Serialize
 state-changing `harness`, `issues`, commit, push, PR, and merge commands in
 MAIN, always with the correct `GOAL_ISSUE`; code edits and read-only checks in
 different worktrees may overlap. Run analyze, verify, review, conditional

@@ -1,12 +1,13 @@
 # Common goal execution
 
 MAIN owns this state machine and every worker spawn. The harness, not an
-agent's claim, decides completion. Use only `.codex/scripts/goal-git.sh` for
-git/state. Read `state` and `config get` at start and after a resumed phase.
+agent's claim, decides completion. Use only the absolute `GOAL_GIT` resolved
+from `WORKFLOW_ROOT` for git/state. Read `state` and `config get` at start and after a resumed phase.
 Preserve `goal_source`, multi-repo paths, `review_mode`, `auto_merge`,
 concurrency, and retry limits. Keep each child brief focused on the relevant
 handoff: `discovery_context`, `implementation_plan`, `research_report`, staged
-diff, review findings, QA findings, or visual findings.
+diff, review findings, QA findings, or visual findings, plus the execution
+context required by SKILL.md.
 
 ## Plan and route
 

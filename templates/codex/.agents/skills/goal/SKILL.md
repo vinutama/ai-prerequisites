@@ -13,7 +13,9 @@ group or issue. Spawn planner, researcher, builder, builder-expert, reviewer,
 qa, and visual-reviewer directly when required. Do not edit application
 source yourself; delegate implementation and rework.
 
-Use `.codex/scripts/goal-git.sh` for every git and goal-state operation; never
+Resolve `WORKFLOW_ROOT` to the absolute main checkout path and `GOAL_GIT` to
+`WORKFLOW_ROOT/.codex/scripts/goal-git.sh` before entering a worktree. Use that
+absolute helper path for every git and goal-state operation; never
 invoke raw `git`, `gh`, or `glab`. `state.json` and its harness are the authority
 for phase, tasks, evidence, budgets, and completion. Never claim success before
 `harness done` exits 0. Model IDs and effort for workers come only from
@@ -48,15 +50,15 @@ Parse the text after `$goal` before running the execution loop.
   If the resolved source is `issues`, use the issue dispatch above.
   Markdown reads the explicit path or `markdown_path` from config and passes
   the path as draft input to Planner. Jira requires the Atlassian MCP; fetch
-  the ticket, then run `GOAL_SOURCE_OVERRIDE=jira .codex/scripts/goal-git.sh
+  the ticket, then run `GOAL_SOURCE_OVERRIDE=jira "$GOAL_GIT"
   start <summary> <ticket> <task-type>`. For prompt/markdown, run
-  `GOAL_SOURCE_OVERRIDE=<source> .codex/scripts/goal-git.sh start <resolved-goal>`;
+  `GOAL_SOURCE_OVERRIDE=<source> "$GOAL_GIT" start <resolved-goal>`;
   preserve the optional Markdown task-type override (`bugfix` → `fix`) for a
   single delivery group. Then run the loop below.
 
 ## Core loop
 
-Run `.codex/scripts/goal-git.sh codex ensure-user-config` before the first
+Run `"$GOAL_GIT" codex ensure-user-config` before the first
 worker spawn. This only sets project trust; it preserves the user's global
 Codex settings. A newly trusted project may require a new Codex session to
 load agent definitions.
@@ -99,8 +101,8 @@ For builder tasks, set PENDING → SPAWNING before the spawn; set RUNNING only
 after `spawn_agent` succeeds. Call `spawn_agent` with `agent_type=<role>`, the
 resolved model and effort, and `fork_turns="none"` when supported. Pass a
 bounded brief: task, relevant discovery
-context or findings, target repo/worktree, and expected handoff. Do not pass
-full transcripts. For a parallel issue batch, spawn each ready issue's worker
+context or findings, the execution context below, and expected handoff. Do not
+pass full transcripts. For a parallel issue batch, spawn each ready issue's worker
 up to the shared limit before waiting; then handle whichever result is ready
 and refill a free slot. Otherwise wait for the worker result, record its
 completion, and continue the loop in MAIN. Do not generate repeated waiting commentary or
@@ -114,3 +116,34 @@ report the blocker instead of escalating the model.
 Use typed `harness event main ...` at goal/issue pickup, before and after
 worker spawns, verification, PR creation, and completion. Read progress from
 `harness progress` rather than producing duplicate status turns.
+
+### Execution context in every worker brief
+
+Pass these concrete values on every spawn, including rework and review:
+
+- `WORKFLOW_ROOT`: absolute main checkout owning `.codex/` and `state.json`.
+- `TARGET_WORKTREE`: absolute assigned code checkout (root when no worktree).
+- `GOAL_GIT`: absolute `WORKFLOW_ROOT/.codex/scripts/goal-git.sh` path.
+- Assignment: goal/task ID, issue number, delivery group ID, and repo path as
+  applicable; include `GOAL_ISSUE=<number>` for issue-specific helper commands.
+
+Verify the helper is executable and the target directory exists before spawn.
+Workers read, edit, and test code in `TARGET_WORKTREE`; helper commands use
+`GOAL_GIT`, which keeps shared state in `WORKFLOW_ROOT`. These brief values are
+not inherited shell variables: workers must assign/export them in each shell
+invocation or substitute the concrete paths and issue selector directly.
+Workers must not resolve the helper relative to the worktree or copy runtime
+state there. For example, with MAIN's concrete values substituted:
+
+```bash
+GOAL_GIT="<absolute workflow root>/.codex/scripts/goal-git.sh"
+cd "<absolute assigned worktree>"
+GOAL_ISSUE="<assigned issue number>" "$GOAL_GIT" status
+```
+
+Omit `GOAL_ISSUE` for non-issue goals. MAIN owns group activation and serializes
+shared-state operations; a group ID in a brief is not a shell selector. Verify
+that the selected issue/group and helper's target match the assignment before
+mutating files or state. If they differ, return the mismatch to MAIN. For
+parallel issue workers, return milestones and task results for MAIN to record;
+do not run state-changing harness commands independently.

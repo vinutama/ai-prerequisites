@@ -54,7 +54,10 @@ catalog's `$capabilities.vision_models`; never downgrade to text-only.
 
 Use `harness spawn <role> <model> <effort>` before every worker and wait for
 its result. Keep worker briefs small: relevant task/context, diff or findings,
-target repo/worktree, and expected handoff. Avoid repeated status polling.
+absolute `WORKFLOW_ROOT`, `TARGET_WORKTREE`, and `GOAL_GIT` paths, assignment
+IDs (including `GOAL_ISSUE` for issues), and expected handoff. Validate the
+helper and worktree before spawning. Brief values are not automatically
+exported into worker shells. Avoid repeated status polling.
 Read live milestones via `goal-git.sh harness progress`, `$goal --status`, or
 `.codex/goal-progress.log`; `/agent` opens a live child thread.
 
@@ -95,12 +98,17 @@ in its worktree. Multi-repo work preserves repo boundaries and per-repo PRs.
 ## Git and state boundary
 
 Never invoke `git`, `gh`, or `glab` directly during a goal. Use
-`.codex/scripts/goal-git.sh` for start/continue, worktrees, stage/commit,
-push/PR, pending threads, review findings, merge, harness, groups, issues,
+the absolute `GOAL_GIT` resolved by MAIN and passed in each worker brief for
+start/continue, worktrees, stage/commit, push/PR, pending threads, review findings, merge, harness, groups, issues,
 models, and state. MAIN may commit and publish after Builder stages; builders
 never push. In local review mode, create the PR after clean local review.
 In inline mode, create/update it before Reviewer. Auto-merge is opt-in; when
 off, report "Ready for manual merge." Stop on merge conflict.
+
+Workers run code reads, edits, and tests in `TARGET_WORKTREE`, while the helper
+uses shared runtime/state in `WORKFLOW_ROOT`. Do not assume `.codex/` exists
+in a worktree. Preserve the assigned `GOAL_ISSUE` on every issue helper call;
+MAIN owns delivery-group activation and serializes shared-state mutations.
 
 Project runtime files `.codex/`, `state.json`, `.worktrees/`, and
 `.goal-review/` are gitignored. `design-system/` is durable and tracked when
