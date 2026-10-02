@@ -364,4 +364,22 @@ if [ "$r1" -eq 0 ]; then test "$r2" -ne 0; else test "$r2" -eq 0; fi
 check '.[0].spawn_reservations | length == 1'
 check '.[0].harness.metrics.agent_spawns == 0'
 printf '%s\n' 'PASS: concurrent reservation race accepts exactly one launch'
+
+# Legal phase auto-advance on spawn (researcher from PLANNED → RESEARCHING).
+reset_fixture
+mutate_fixture '.[0].harness.phase = "PLANNED" | .[0].harness.budget.max_researcher_runs = 2'
+RESEARCHER="$(jq -r '."$routing".researcher.NORMAL.model' "$PROJECT/.codex/goal-models.json")"
+id="$(reserve researcher "$RESEARCHER" medium)"
+check '.[0].harness.phase == "RESEARCHING"'
+jq -e --arg id "$id" '.reservation.phase == "RESEARCHING"' "$TEST_ROOT/reserved.json" >/dev/null
+printf '%s\n' 'PASS: spawn auto-advances legal phase for researcher'
+
+# harness brief writes a readable file
+reset_fixture
+brief_path="$(run harness brief builder --task t1)"
+test -f "$brief_path"
+rg -q "GOAL_TASK='t1'" "$brief_path"
+rg -q 'TARGET_WORKTREE' "$brief_path"
+printf '%s\n' 'PASS: harness brief writes worker brief file'
+
 printf '%s\n' 'PASS: delegation fixture suite'

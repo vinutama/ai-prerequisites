@@ -413,9 +413,13 @@ if [ "$AGENT" = codex ]; then
     G push >/dev/null
   done
 fi
-G groups pr g1 >/dev/null
+body1=$(mktemp); body2=$(mktemp)
+printf '%s\n' "## Summary" "" "Implements group g1 fixture changes." "" "## Changes" "" "- README update" "" "## Verification" "" "- fixture checks" "" "## References" "" "Markdown multi-PR fixture" > "$body1"
+printf '%s\n' "## Summary" "" "Implements group g2 fixture changes." "" "## Changes" "" "- README update" "" "## Verification" "" "- fixture checks" "" "## References" "" "Markdown multi-PR fixture" > "$body2"
+G groups pr g1 --title "feat(g1): deliver group fixture" --body-file "$body1" >/dev/null
 G groups persist >/dev/null 2>&1 || true
-G groups pr g2 >/dev/null
+G groups pr g2 --title "feat(g2): deliver group fixture" --body-file "$body2" >/dev/null
+rm -f "$body1" "$body2"
 p1=$(jq -r '.[-1].delivery_groups[] | select(.id=="g1") | .pr_number' "$PROJ/state.json")
 p2=$(jq -r '.[-1].delivery_groups[] | select(.id=="g2") | .pr_number' "$PROJ/state.json")
 [ "$p1" != "null" ] && [ -n "$p1" ] && ok "g1 has PR #$p1" || fail "g1 missing PR"

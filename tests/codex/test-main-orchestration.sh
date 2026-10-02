@@ -21,7 +21,7 @@ test -f "$PROJECT/.agents/skills/goal/references/execution.md"
 test -f "$PROJECT/.agents/skills/goal/references/delivery-groups.md"
 test -f "$PROJECT/.agents/skills/goal/references/issue-queue.md"
 rg -q 'You are the sole coordinator' "$PROJECT/.agents/skills/goal/SKILL.md"
-rg -q 'Spawn specialized workers directly' "$PROJECT/.agents/skills/goal/SKILL.md"
+rg -q 'Spawn workers directly' "$PROJECT/.agents/skills/goal/SKILL.md"
 test -f "$PROJECT/.agents/skills/goal/references/commands.md"
 rg -q 'spawn-confirm' "$PROJECT/.agents/skills/goal/references/commands.md"
 if rg -q '^\[agents\.orchestrator\]' "$PROJECT/.codex/config.toml"; then

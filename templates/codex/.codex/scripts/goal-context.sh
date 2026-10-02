@@ -163,17 +163,41 @@ repo_dir() {
   (cd "$PROJECT_ROOT/$repo" && pwd)
 }
 
+# Resolve a GOAL_TASK selector to either a dedicated task worktree or the
+# parent goal/issue checkout when the harness task has no isolated worktree.
+task_checkout() {
+  local task="${GOAL_TASK:-}" entry=""
+  [ -n "$task" ] || return 1
+  entry=$(jq -c --argjson idx "$GOAL_IDX" --arg task "$task" \
+    '.[$idx].task_worktrees[$task] // empty' "$STATE_FILE" 2>/dev/null) || entry=""
+  if [ -n "$entry" ] && [ "$entry" != "null" ]; then
+    printf '%s\n' "$entry"
+    return 0
+  fi
+  if jq -e --argjson idx "$GOAL_IDX" --arg task "$task" \
+    'any((.[$idx].harness.tasks // [])[]; .id == $task)' "$STATE_FILE" >/dev/null 2>&1; then
+    # Harness task without an isolated checkout: use the goal/issue worktree.
+    return 2
+  fi
+  goal_error assignment "Unknown GOAL_TASK '$task'; no task_worktrees entry and no harness.tasks id. Use worktree add $task or clear GOAL_TASK."
+  return 1
+}
+
 goal_workdir() {
-  local wt="" expected=""
+  local wt="" expected="" task_status=0
   if [ -f "$STATE_FILE" ]; then
     wt=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].worktree // empty' "$STATE_FILE")
     expected=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch // empty' "$STATE_FILE")
     if [ -n "${GOAL_TASK:-}" ]; then
       local task
-      task=$(jq -ce --argjson idx "$GOAL_IDX" --arg task "$GOAL_TASK" \
-        '.[$idx].task_worktrees[$task] // error("Unknown GOAL_TASK worktree")' "$STATE_FILE") || return
-      wt=$(printf '%s' "$task" | jq -r .worktree)
-      expected=$(printf '%s' "$task" | jq -r .branch)
+      task=$(task_checkout) && task_status=0 || task_status=$?
+      if [ "$task_status" -eq 0 ]; then
+        wt=$(printf '%s' "$task" | jq -r .worktree)
+        expected=$(printf '%s' "$task" | jq -r .branch)
+      elif [ "$task_status" -ne 2 ]; then
+        return 1
+      fi
+      # status 2: harness task ID without dedicated worktree — keep goal/issue wt
     fi
   fi
   if [ -n "$wt" ]; then
@@ -192,10 +216,18 @@ goal_workdir() {
 }
 
 context_assert_branch() {
-  local wd="$1" branch="${2:-}"
+  local wd="$1" branch="${2:-}" task_status=0
   [ -n "$branch" ] || branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch // empty' "$STATE_FILE")
   if [ -n "${GOAL_TASK:-}" ]; then
-    branch=$(jq -r --argjson idx "$GOAL_IDX" --arg task "$GOAL_TASK" '.[$idx].task_worktrees[$task].branch' "$STATE_FILE")
+    local task
+    task=$(task_checkout) && task_status=0 || task_status=$?
+    if [ "$task_status" -eq 0 ]; then
+      branch=$(printf '%s' "$task" | jq -r .branch)
+    elif [ "$task_status" -eq 2 ]; then
+      : # harness task without task worktree — assert goal/issue branch
+    else
+      return 1
+    fi
   fi
   [ -n "$branch" ] && [ "$(git -C "$wd" branch --show-current)" = "$branch" ] || {
     goal_error assignment "Expected branch '$branch' is not checked out in $wd"; return 1;
@@ -206,7 +238,8 @@ cmd_context() {
   require_active_goal; refresh_goal_idx
   local wd
   wd="$(repo_dir "${GOAL_REPO:-.}")" || return
-  local script="$wd/.codex/scripts/goal-git.sh" branch
+  # Always use the root helper. Workers must not depend on copied .codex trees.
+  local script="$PROJECT_ROOT/.codex/scripts/goal-git.sh" branch
   [ -f "$script" ] || script="$SCRIPTS_DIR/goal-git.sh"
   branch=$(git -C "$wd" branch --show-current)
   if [ -n "$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch // empty' "$STATE_FILE")" ]; then context_assert_branch "$wd" || return; fi
@@ -218,41 +251,76 @@ cmd_context() {
       GOAL_TASK:$task,GOAL_REPO:$repo,GOAL_ISSUE_REPO:$g.issue.repo,branch:$actual_branch,base_branch:$g.base_branch,source:$g.source}'
 }
 
-sync_worktree_config() {
-  local wt_path="$1" source_common target_common manifest old file
+# Shared exclude block so linked worktrees never see workflow runtime as dirty.
+# All worktrees share git-common-dir/info/exclude — no per-worktree copies needed.
+WORKFLOW_EXCLUDE_BEGIN="# >>> goal-workflow excludes >>>"
+WORKFLOW_EXCLUDE_END="# <<< goal-workflow excludes <<<"
+
+worktree_install_excludes() {
   require_cmd git
-  [ -f "$wt_path/.git" ] || { goal_error assignment "Not a linked worktree: $wt_path"; return 1; }
+  local common exclude_file tmp
+  common=$(git -C "$PROJECT_ROOT" rev-parse --path-format=absolute --git-common-dir) || return 1
+  exclude_file="$common/info/exclude"
+  mkdir -p "$(dirname "$exclude_file")"
+  [ -f "$exclude_file" ] || touch "$exclude_file"
+  tmp=$(mktemp)
+  # Strip any previous managed block, then append a fresh one.
+  awk -v begin="$WORKFLOW_EXCLUDE_BEGIN" -v end="$WORKFLOW_EXCLUDE_END" '
+    $0 == begin {skip=1; next}
+    $0 == end {skip=0; next}
+    !skip {print}
+  ' "$exclude_file" > "$tmp" || { rm -f "$tmp"; return 1; }
+  {
+    printf '%s\n' "$WORKFLOW_EXCLUDE_BEGIN"
+    printf '%s\n' \
+      '.codex/' \
+      '.agents/skills/goal/' \
+      '.agents/skills/goal-loop/' \
+      '.agents/skills/init-goal/' \
+      '.agents/skills/init-skills/' \
+      '.agents/skills/create-issues/' \
+      'AGENTS.md' \
+      '.worktrees/' \
+      '.goal-review/' \
+      'state.json' \
+      '.gitnexus/' \
+      '.claude/skills/gitnexus-*/'
+    printf '%s\n' "$WORKFLOW_EXCLUDE_END"
+  } >> "$tmp"
+  mv "$tmp" "$exclude_file" || return 1
+}
+
+# Compatibility: install excludes and remove previously copied managed files.
+# Does not copy scripts/agents into worktrees — MAIN and workers use the root helper.
+sync_worktree_config() {
+  local wt_path="$1" source_common target_common manifest file
+  require_cmd git
+  worktree_install_excludes || return 1
+  [ -n "$wt_path" ] || return 0
+  [ -e "$wt_path" ] || return 0
+  [ -f "$wt_path/.git" ] || [ -d "$wt_path/.git" ] || {
+    # Plain path that is not yet a worktree — excludes already installed.
+    return 0
+  }
   wt_path=$(cd "$wt_path" && pwd)
-  [ "$wt_path" != "$PROJECT_ROOT" ] || return 1
+  [ "$wt_path" != "$PROJECT_ROOT" ] || return 0
   source_common=$(git -C "$PROJECT_ROOT" rev-parse --path-format=absolute --git-common-dir)
   target_common=$(git -C "$wt_path" rev-parse --path-format=absolute --git-common-dir)
   [ "$source_common" = "$target_common" ] || { goal_error assignment "Worktree belongs to another repository"; return 1; }
-  mkdir -p "$wt_path/.codex" "$wt_path/.agents/skills"
   manifest="$wt_path/.codex/workflow-manifest"
-  # Overwrite only files managed by this copier; leave tracked/user-owned files alone.
-  old=$(cat "$manifest" 2>/dev/null || true)
-  # Migrate copies made by the older .codex-only synchronizer.
-  if [ ! -f "$manifest" ] && [ -f "$wt_path/.codex/workflow-root" ]; then
-    old=$(cd "$wt_path" && find .codex/scripts .codex/agents -type f 2>/dev/null || true)
+  if [ -f "$manifest" ]; then
+    while IFS= read -r file; do
+      [ -n "$file" ] || continue
+      if git -C "$wt_path" ls-files --error-unmatch "$file" >/dev/null 2>&1; then continue; fi
+      rm -f "$wt_path/$file" 2>/dev/null || true
+      rmdir "$(dirname "$wt_path/$file")" 2>/dev/null || true
+    done < "$manifest"
+    rm -f "$manifest"
   fi
-  local new_manifest
-  new_manifest=$(mktemp)
-  while IFS= read -r file; do
-    case "$file" in .codex/.state.lock/*|.codex/workflow-root|.codex/workflow-manifest|.codex/*log|.codex/queue-plan.json|.codex/discovery-context.json|.codex/repo-context.json|.codex/cli-cache/*|.codex/cache/*|.codex/*.env) continue;; esac
-    if git -C "$wt_path" ls-files --error-unmatch "$file" >/dev/null 2>&1; then continue; fi
-    if [ -e "$wt_path/$file" ] && ! printf '%s\n' "$old" | grep -Fxq "$file"; then continue; fi
-    mkdir -p "$(dirname "$wt_path/$file")"
-    cp -p "$PROJECT_ROOT/$file" "$wt_path/$file" || { rm -f "$new_manifest"; return 1; }
-    printf '%s\n' "$file" >> "$new_manifest"
-  done < <(cd "$PROJECT_ROOT" && {
-    find .codex -type f
-    for dir in goal goal-loop init-goal init-skills create-issues; do
-      [ ! -d ".agents/skills/$dir" ] || find ".agents/skills/$dir" -type f
-    done
-    [ ! -f AGENTS.md ] || printf '%s\n' AGENTS.md
-  })
-  mv "$new_manifest" "$manifest" || return
-  printf '%s\n' "$PROJECT_ROOT" > "$wt_path/.codex/workflow-root"
+  # Clean leftover workflow-root marker from the old copier.
+  rm -f "$wt_path/.codex/workflow-root" 2>/dev/null || true
+  # Remove emptied .codex / .agents trees that only held managed copies.
+  rmdir "$wt_path/.codex" 2>/dev/null || true
 }
 
 source_snapshot() {

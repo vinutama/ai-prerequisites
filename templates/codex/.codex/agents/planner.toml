@@ -9,23 +9,24 @@ and local GOAL_GIT, plus explicit GOAL_ID, GOAL_RUN_ID, GOAL_ISSUE, GOAL_GROUP,
 GOAL_TASK, and GOAL_REPO (empty only when inapplicable). For issues also carry
 GOAL_ISSUE_REPO, the forge repository identity (URL/host/path); GOAL_REPO is
 the configured local repo key, such as . or a selected service name.
-Carry all selectors in
-every shell invocation; brief values are not environment exports. Resolve
-GOAL_GIT context --json and confirm the identity/paths before work. Worktree
-creation/resume syncs managed scripts/agents/config, workflow skills, and ignored
-AGENTS instructions. The local helper resolves one WORKFLOW_ROOT state authority;
-never copy state, locks, progress, or review files into a worktree. Do not find
-another helper in the root checkout or depend on shared active group selection.
-Read/check code only in TARGET_WORKTREE; source edits require the role permission
-below. Report missing/mismatched context to MAIN before any mutation.
+MAIN supplies a brief file — read it first and export the selectors it lists
+in every shell. Brief values in chat are not environment exports. Resolve
+GOAL_GIT context --json (root helper only) and confirm identity/paths before
+work. Shared .git/info/exclude keeps worktrees clean; do not copy .codex into
+a worktree or invent another helper path. Never edit .codex/scripts. The local
+helper resolves one WORKFLOW_ROOT state authority; never copy state, locks,
+progress, or review files. Read/check code only in TARGET_WORKTREE; source
+edits require the role permission below. Report missing/mismatched context to
+MAIN before any mutation.
 
 goal-git.sh is the sole operational entry for Git/forge/workflow operations.
 Read-only Git inspection and gh/glab help/version inspection are allowed.
-All forge operations and Git mutations use the helper. CLI failures use helper structured diagnostics and doctor --json
-with the same selectors. Stop auth/permission blockers with the suggested local
-command. No web/browser/--web/ad hoc forge fallback, automatic browser login,
-or automatic upgrades. CLI documentation lookup is maintenance outside active
-operations. Application browser QA and unrelated Researcher web are allowed.
+All forge operations and Git mutations use the helper. CLI failures use helper
+structured diagnostics and doctor --json with the same selectors. Stop
+auth/permission blockers with the suggested local command. No web/browser/--web/
+ad hoc forge fallback, automatic browser login, or automatic upgrades. CLI
+documentation lookup is maintenance outside active operations. Application
+browser QA and unrelated Researcher web are allowed.
 
 MAIN owns all workflow state writes. Never write harness events/tasks/gates/
 context, reviews, QA/visual findings, queue/group state, or switch assignments.
@@ -97,7 +98,9 @@ Task types: feat|fix|chore|refactor|docs|test|perf|build|ci. Normalize
 bugfix/bug/defect to fix and feature to feat; reject other types. A user task
 kind overrides inference for one group; multi-group plans keep individual
 kinds. Branches are <task-type>/<group-id>-<kebab-slug>. IDs/task references
-must be stable. Optional pr_title must be descriptive, single line, ≤72 chars.
+must be stable. Optional pr_title must be conventional
+(`feat|fix|docs|refactor|perf|test|chore|build|ci(scope)?: subject`), single line, ≤72 chars;
+subject must not start with an uppercase letter.
 
 For queue-level planning (2+ issues), return only ## Issue Execution Plan and
 milestones: full issue metadata, predicted file ownership, dependency ordering,

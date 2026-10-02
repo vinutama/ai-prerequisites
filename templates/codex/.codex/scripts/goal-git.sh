@@ -40,6 +40,7 @@ Commands:
   commit [msg]              Commit staged changes (conventional commit)
   push                      Push branch to origin
   pr [--title t] --body-file f  Create or update the PR (GitHub) / MR (GitLab)
+  pr draft [--group id]         Suggest conventional title + body draft (JSON)
   pending                   Check for unresolved review threads (exit 0 = clean)
   threads                   List review threads as JSON
   comment <path> <line> <body>  Post inline review comment
@@ -79,9 +80,12 @@ Commands:
                             Raise a live spawn cap (e.g. max_reviewer_runs) without re-init
   harness metrics           Print spawn/run metrics
   harness context put <name> [file|-]
-                            Store compact handoff artifact (discovery_context, …)
+                            Store compact handoff (any snake_case name; review_verdict
+                            requires {"verdict":"LGTM","sha":"<commit>"})
   harness context get <name>
                             Print stored handoff artifact
+  harness brief <role> [--task tN]
+                            Write worker brief markdown; print absolute path
   harness status            Print harness object
   harness done              Exit 0 only when required gates PASS (from requirements)
   harness recover-spawn     Unstick FAILED/SPAWNING/BLOCKED after spawn_agent was withheld
@@ -123,11 +127,11 @@ Commands:
   status                    Show working tree status
   restore <file>...         Restore files to HEAD
   diff                      Show diff against base branch for active goal
-  worktree add <task-slug>  Create isolated git worktree for parallel task
+  worktree add <task-slug|tN>  Create isolated git worktree for parallel task
   worktree list             List active task worktrees
-  worktree sync [path]      Refresh managed runtime, skills and instructions into one or all linked worktrees
-  worktree merge <task-slug>  Merge worktree branch into goal branch
-  worktree remove <task-slug> Remove worktree without merging
+  worktree sync [path]      Install shared excludes; clean old copied workflow files
+  worktree merge <task-slug|tN>  Merge worktree branch into goal branch
+  worktree remove <task-slug|tN> Remove worktree without merging
   figma setup <token>       Store Figma PAT and enable figma MCP in .codex/mcp.json
   figma design set <url>    Set default Figma design link in goal-config.json
   figma disable             Disable Figma integration
@@ -138,7 +142,7 @@ Commands:
   issues finish <number>        Mark issue goal complete and remove worktree
   review init [repo_path]       Initialize local review findings file
   review add <path> <line> <severity> <body> [repo_path]  Add local finding
-  review list [repo_path]       List local findings as JSON
+  review list [repo_path]       List local findings as JSON (auto-inits)
   review resolve <id> [repo_path]  Mark local finding resolved
   review pending [repo_path]    Check unresolved local findings (exit 0 = clean)
   review iterate [repo_path]      Increment review iteration counter (no cap; loop until clean)
@@ -367,8 +371,20 @@ normalize_task_type() {
   esac
 }
 
+# Path for a task worktree, namespaced by the goal/issue branch so parallel
+# issues cannot collide on harness IDs like t1.
+task_worktree_rel() {
+  local slug="$1" goal_branch goal_slug
+  require_active_goal
+  refresh_goal_idx
+  goal_branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch // empty' "$STATE_FILE")
+  goal_slug="$(slugify "${goal_branch:-goal}")"
+  echo ".worktrees/${goal_slug}--$(slugify "$slug")"
+}
+
 worktree_path() {
-  echo "$WORKTREES_DIR/$(slugify "$1")"
+  # Absolute path for a task slug (namespaced under the active goal branch).
+  echo "$PROJECT_ROOT/$(task_worktree_rel "$1")"
 }
 
 task_branch_name() {
@@ -380,6 +396,7 @@ task_branch_name() {
 
 
 cmd_worktree_sync() {
+  worktree_install_excludes || return
   if [ -n "${1:-}" ]; then
     sync_worktree_config "$1"
     return
@@ -522,6 +539,7 @@ cmd_start() {
     }')
 
   state_append_goal "$new_goal" || return
+  worktree_install_excludes || true
   log "Goal #$(jq 'length' "$STATE_FILE") started ($repo_count repos, delivery_mode=$delivery_mode)"
 }
 
@@ -1214,9 +1232,15 @@ cmd_diff() {
 cmd_worktree_add() {
   require_cmd git jq
   local slug="${1:-}"
-  [ -z "$slug" ] && { err "worktree add requires <task-slug>"; exit 1; }
+  [ -z "$slug" ] && { err "worktree add requires <task-slug|tN>"; exit 1; }
 
-  slug="$(slugify "$slug")"
+  # Preserve harness task IDs like t1 as the state key; slugify only the path segment.
+  local key="$slug"
+  if [[ "$slug" =~ ^t[0-9]+$ ]]; then
+    key="$slug"
+  else
+    key="$(slugify "$slug")"
+  fi
   require_active_goal
   refresh_goal_idx
 
@@ -1228,10 +1252,11 @@ cmd_worktree_add() {
     exit 1
   fi
 
-  local goal_branch task_branch wt_path
+  local goal_branch task_branch wt_path wt_rel
   goal_branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch' "$STATE_FILE")
-  task_branch="$(task_branch_name "$goal_branch" "$slug")"
-  wt_path="$(worktree_path "$slug")"
+  task_branch="$(task_branch_name "$goal_branch" "$key")"
+  wt_rel="$(task_worktree_rel "$key")"
+  wt_path="$PROJECT_ROOT/$wt_rel"
 
   mkdir -p "$WORKTREES_DIR"
   if [ -d "$wt_path" ]; then
@@ -1239,12 +1264,20 @@ cmd_worktree_add() {
     exit 1
   fi
 
-  git -C "$PROJECT_ROOT" worktree add -b "$task_branch" "$wt_path" "$goal_branch" >&2 || return
-  sync_worktree_config "$wt_path" || return
-  state_mutate --argjson idx "$GOAL_IDX" --arg task "$slug" --arg branch "$task_branch" --arg wt "${wt_path#"$PROJECT_ROOT"/}"     '.[$idx].task_worktrees[$task] = {branch:$branch,worktree:$wt}' || return
+  # Prefer branching from the goal/issue worktree HEAD when the goal lives there.
+  local start_ref="$goal_branch" parent_wd
+  parent_wd=$(GOAL_TASK= goal_workdir) || return
+  if [ -n "$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].worktree // empty' "$STATE_FILE")" ]; then
+    start_ref="$(git -C "$parent_wd" rev-parse HEAD)"
+  fi
+
+  git -C "$PROJECT_ROOT" worktree add -b "$task_branch" "$wt_path" "$start_ref" >&2 || return
+  worktree_install_excludes || return
+  state_mutate --argjson idx "$GOAL_IDX" --arg task "$key" --arg branch "$task_branch" --arg wt "$wt_rel" \
+    '.[$idx].task_worktrees = ((.[$idx].task_worktrees // {}) + {($task): {branch:$branch,worktree:$wt}})' || return
 
   echo "$wt_path"
-  log "Worktree created: $wt_path (branch: $task_branch)"
+  log "Worktree created: $wt_path (branch: $task_branch, task=$key)"
 }
 
 cmd_worktree_list() {
@@ -1264,31 +1297,31 @@ cmd_worktree_list() {
 
 cmd_worktree_merge() {
   require_active_goal; refresh_goal_idx
-  local slug="${1:-}" wd wt branch
+  local slug="${1:-}" wd wt branch key
   [ -n "$slug" ] || return 1
-  slug=$(slugify "$slug")
-  wt=$(worktree_path "$slug")
-  wd=$(goal_workdir) || return
+  if [[ "$slug" =~ ^t[0-9]+$ ]]; then key="$slug"; else key=$(slugify "$slug"); fi
+  wt=$(worktree_path "$key")
+  wd=$(GOAL_TASK= goal_workdir) || return
   context_assert_branch "$wd" || return
   delivery_clean "$wd" || return
   delivery_clean "$wt" || return
   branch=$(git -C "$wt" branch --show-current)
-  [ "$branch" = "$(task_branch_name "$(git -C "$wd" branch --show-current)" "$slug")" ] || return 1
-  git -C "$wd" merge "$branch" -m "merge: $slug" >&2 || return
+  [ "$branch" = "$(task_branch_name "$(git -C "$wd" branch --show-current)" "$key")" ] || return 1
+  git -C "$wd" merge "$branch" -m "merge: $key" >&2 || return
   harness_invalidate "task branch integrated"
   git -C "$PROJECT_ROOT" worktree remove "$wt" >&2 || return
   # The root checkout may still be on main while the goal lives in a worktree.
   git -C "$wd" merge-base --is-ancestor "$branch" HEAD || return
   git -C "$PROJECT_ROOT" branch -D "$branch" >&2 || return
-  state_mutate --argjson idx "$GOAL_IDX" --arg task "$slug" 'del(.[$idx].task_worktrees[$task])'
+  state_mutate --argjson idx "$GOAL_IDX" --arg task "$key" 'del(.[$idx].task_worktrees[$task])'
 }
 
 cmd_worktree_remove() {
   require_cmd git jq
-  local slug="${1:-}"
-  [ -z "$slug" ] && { err "worktree remove requires <task-slug>"; exit 1; }
+  local slug="${1:-}" key
+  [ -z "$slug" ] && { err "worktree remove requires <task-slug|tN>"; exit 1; }
 
-  slug="$(slugify "$slug")"
+  if [[ "$slug" =~ ^t[0-9]+$ ]]; then key="$slug"; else key="$(slugify "$slug")"; fi
   require_active_goal
   refresh_goal_idx
 
@@ -1302,15 +1335,15 @@ cmd_worktree_remove() {
 
   local goal_branch task_branch wt_path
   goal_branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch' "$STATE_FILE")
-  task_branch="$(task_branch_name "$goal_branch" "$slug")"
-  wt_path="$(worktree_path "$slug")"
+  task_branch="$(task_branch_name "$goal_branch" "$key")"
+  wt_path="$(worktree_path "$key")"
 
   [ -d "$wt_path" ] || { err "Worktree not found: $wt_path"; exit 1; }
 
   delivery_clean "$wt_path" || return
   git -C "$PROJECT_ROOT" worktree remove "$wt_path" >&2 || return
   git -C "$PROJECT_ROOT" branch -d "$task_branch" >&2 || warn "Retained unmerged task branch $task_branch"
-  state_mutate --argjson idx "$GOAL_IDX" --arg task "$slug" 'del(.[$idx].task_worktrees[$task])'
+  state_mutate --argjson idx "$GOAL_IDX" --arg task "$key" 'del(.[$idx].task_worktrees[$task])'
   log "Removed worktree: $wt_path"
 }
 
@@ -1516,6 +1549,7 @@ ${body}"
     existing_dir=$(goal_workdir) || return
     context_assert_branch "$existing_dir" || return
     existing_wt="$(echo "$existing" | jq -r '.worktree // empty')"
+    worktree_install_excludes || return
     [ -z "$existing_wt" ] || sync_worktree_config "$PROJECT_ROOT/$existing_wt"
     echo "$existing" | jq -r '.worktree // empty'
     return 0
@@ -1545,7 +1579,7 @@ ${body}"
     local rd
     rd="$PROJECT_ROOT"
     (cd "$rd" && git worktree add -b "$branch" "$wt_path" "origin/$base")
-    sync_worktree_config "$wt_path"
+    worktree_install_excludes || return
     log "Issue worktree: $wt_rel (branch: $branch)"
   else
     while IFS= read -r r; do
@@ -1643,8 +1677,52 @@ cmd_issues_finish() {
 
 # --- Local review findings (.goal-review/) ---
 
+# Normalize a review [repo_path] argument: accept ., configured repo keys,
+# worktree-relative paths, or absolute paths that resolve to the goal checkout.
+review_normalize_repo() {
+  local arg="${1:-${GOAL_REPO:-.}}" abs wd
+  case "$arg" in
+    ""|.) echo "."; return 0 ;;
+    .worktrees/*|worktrees/*)
+      # Worktree path → the assignment's primary repo key (usually ".")
+      echo "."
+      return 0
+      ;;
+    /*)
+      abs=$(cd "$arg" 2>/dev/null && pwd) || {
+        goal_error assignment "Review path does not exist: $arg" "Pass . or a configured GOAL_REPO key, not a missing path."
+        return 1
+      }
+      wd=$(repo_dir "${GOAL_REPO:-.}") || return
+      if [ "$abs" = "$wd" ] || [ "$abs" = "$PROJECT_ROOT" ]; then
+        echo "${GOAL_REPO:-.}"
+        return 0
+      fi
+      # Absolute path under a configured multi-repo service
+      local key="${abs#"$PROJECT_ROOT"/}"
+      if [ "$key" != "$abs" ] && jq -e --arg r "$key" '.repos // [] | index($r) != null' "$CONFIG_FILE" >/dev/null 2>&1; then
+        echo "$key"
+        return 0
+      fi
+      echo "."
+      return 0
+      ;;
+    *)
+      # Configured repo key
+      if [ -f "$CONFIG_FILE" ] && jq -e --arg r "$arg" '(.repos // []) | index($r) != null' "$CONFIG_FILE" >/dev/null 2>&1; then
+        echo "$arg"
+        return 0
+      fi
+      # Treat unknown relative paths like worktree hints as "."
+      echo "."
+      return 0
+      ;;
+  esac
+}
+
 review_file_key() {
-  local repo_path="${1:-${GOAL_REPO:-.}}"
+  local repo_path
+  repo_path="$(review_normalize_repo "${1:-${GOAL_REPO:-.}}")" || return
   repo_dir "${repo_path:-.}" >/dev/null || return
   local branch
   branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch' "$STATE_FILE")
@@ -1661,19 +1739,27 @@ review_file_path() {
   printf '%s/%s.json\n' "$REVIEW_DIR" "$key"
 }
 
+review_ensure_file() {
+  local repo_path rf
+  repo_path="$(review_normalize_repo "${1:-${GOAL_REPO:-.}}")" || return
+  rf="$(review_file_path "$repo_path")"
+  if [ ! -f "$rf" ]; then
+    cmd_review_init "$repo_path" >/dev/null
+  fi
+  echo "$rf"
+}
+
 review_require_file() {
   local repo_path="${1:-${GOAL_REPO:-.}}"
-  local rf
-  rf="$(review_file_path "$repo_path")"
-  [ -f "$rf" ] || { err "No local review file — run 'goal-git.sh review init' first"; exit 1; }
-  echo "$rf"
+  review_ensure_file "$repo_path"
 }
 
 cmd_review_init() {
   require_cmd jq
   require_active_goal
   refresh_goal_idx
-  local repo_path="${1:-${GOAL_REPO:-.}}"
+  local repo_path
+  repo_path="$(review_normalize_repo "${1:-${GOAL_REPO:-.}}")" || return
   local branch max_iter rf
   branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch' "$STATE_FILE")
   local max_iter="$(config_read review_max_iterations)"
@@ -1701,8 +1787,9 @@ cmd_review_add() {
     exit 1
   }
   refresh_goal_idx
+  repo_path="$(review_normalize_repo "$repo_path")" || return
   local rf new_id
-  rf="$(review_require_file "$repo_path")"
+  rf="$(review_ensure_file "$repo_path")"
   new_id=$(jq -r '.findings | length + 1 | "f\(.)"' "$rf")
   jq \
     --arg id "$new_id" \
@@ -1725,9 +1812,9 @@ cmd_review_add() {
 cmd_review_list() {
   require_cmd jq
   refresh_goal_idx
-  local repo_path="${1:-${GOAL_REPO:-.}}"
-  local rf
-  rf="$(review_require_file "$repo_path")"
+  local repo_path rf
+  repo_path="$(review_normalize_repo "${1:-${GOAL_REPO:-.}}")" || return
+  rf="$(review_ensure_file "$repo_path")"
   jq '.findings' "$rf"
 }
 
@@ -1736,8 +1823,9 @@ cmd_review_resolve() {
   local id="${1:-}" repo_path="${2:-${GOAL_REPO:-.}}"
   [ -z "$id" ] && { err "review resolve requires <id> [repo_path]"; exit 1; }
   refresh_goal_idx
+  repo_path="$(review_normalize_repo "$repo_path")" || return
   local rf found
-  rf="$(review_require_file "$repo_path")"
+  rf="$(review_ensure_file "$repo_path")"
   found=$(jq --arg id "$id" '[.findings[]? | select(.id == $id)] | length' "$rf")
   if [ "${found:-0}" -eq 0 ]; then
     err "Finding not found: $id"
@@ -1752,9 +1840,9 @@ cmd_review_resolve() {
 cmd_review_pending() {
   require_cmd jq
   refresh_goal_idx
-  local repo_path="${1:-${GOAL_REPO:-.}}"
-  local rf total unresolved
-  rf="$(review_require_file "$repo_path")"
+  local repo_path rf total unresolved
+  repo_path="$(review_normalize_repo "${1:-${GOAL_REPO:-.}}")" || return
+  rf="$(review_ensure_file "$repo_path")"
   total=$(jq '.findings | length' "$rf")
   unresolved=$(jq '[.findings[] | select(.resolved == false)] | length' "$rf")
 
@@ -1772,9 +1860,9 @@ cmd_review_pending() {
 cmd_review_iterate() {
   require_cmd jq
   refresh_goal_idx
-  local repo_path="${1:-${GOAL_REPO:-.}}"
-  local rf iterations
-  rf="$(review_require_file "$repo_path")"
+  local repo_path rf iterations
+  repo_path="$(review_normalize_repo "${1:-${GOAL_REPO:-.}}")" || return
+  rf="$(review_ensure_file "$repo_path")"
   iterations=$(jq -r '.iterations // 0' "$rf")
   iterations=$((iterations + 1))
   jq --argjson n "$iterations" \
@@ -1965,12 +2053,22 @@ harness_active_issue() {
 }
 
 progress_mirror_line() {
-  local at="$1" agent="$2" event="$3" detail="${4:-}"
+  local at="$1" agent="$2" event="$3" detail="${4:-}" tag="" issue_num group_id
   mkdir -p "$(dirname "$PROGRESS_LOG")"
+  issue_num="$(harness_active_issue)"
+  group_id="${GOAL_GROUP:-}"
+  if [ -z "$group_id" ] && [ -f "$STATE_FILE" ]; then
+    group_id=$(jq -r --argjson idx "${GOAL_IDX:--1}" '.[$idx].active_group_id // empty' "$STATE_FILE" 2>/dev/null || true)
+  fi
+  if [ -n "$issue_num" ]; then
+    tag="#${issue_num} "
+  elif [ -n "$group_id" ]; then
+    tag="[${group_id}] "
+  fi
   if [ -n "$detail" ]; then
-    printf '%s  %-16s  %-12s  %s\n' "$at" "$agent" "$event" "$detail" >> "$PROGRESS_LOG"
+    printf '%s  %-16s  %-12s  %s%s\n' "$at" "$agent" "$event" "$tag" "$detail" >> "$PROGRESS_LOG"
   else
-    printf '%s  %-16s  %-12s\n' "$at" "$agent" "$event" >> "$PROGRESS_LOG"
+    printf '%s  %-16s  %-12s  %s\n' "$at" "$agent" "$event" "${tag%% }" >> "$PROGRESS_LOG"
   fi
 }
 
@@ -3116,10 +3214,10 @@ cmd_harness_context_put() {
   harness_require
   local name="${1:-}" src="${2:--}"
   [ -z "$name" ] && { err "harness context put requires <name> [file|-]"; exit 1; }
-  case "$name" in
-    discovery_context|implementation_plan|research_report|repo_context|queue_plan|review_verdict) ;;
-    *) err "Unknown context name: $name (allowed: discovery_context, implementation_plan, research_report, repo_context, queue_plan, review_verdict)"; exit 1 ;;
-  esac
+  [[ "$name" =~ ^[a-z][a-z0-9_]{2,40}$ ]] || {
+    err "Context name must be snake_case (^[a-z][a-z0-9_]{2,40}\$); got: $name"
+    exit 1
+  }
 
   local payload
   if [ "$src" = "-" ] || [ -z "$src" ]; then
@@ -3130,7 +3228,16 @@ cmd_harness_context_put() {
   fi
   echo "$payload" | jq -e . >/dev/null || { err "Context payload must be valid JSON"; exit 1; }
 
-  # Also mirror discovery_context / repo_context to .codex/ for reuse
+  if [ "$name" = "review_verdict" ]; then
+    echo "$payload" | jq -e '
+      .verdict == "LGTM" and (.sha | type) == "string" and (.sha | length) > 0
+    ' >/dev/null || {
+      err "review_verdict requires JSON {\"verdict\":\"LGTM\",\"sha\":\"<commit>\"}"
+      exit 1
+    }
+  fi
+
+  # Mirror well-known handoffs for resume convenience
   mkdir -p "$PROJECT_ROOT/.codex"
   case "$name" in
     discovery_context) printf '%s\n' "$payload" > "$PROJECT_ROOT/.codex/discovery-context.json" ;;
@@ -3151,6 +3258,105 @@ cmd_harness_context_get() {
   [ -z "$name" ] && { err "harness context get requires <name>"; exit 1; }
   jq --argjson idx "$GOAL_IDX" --arg name "$name" \
     '.[$idx].harness.context[$name] // empty' "$STATE_FILE"
+}
+
+# Write a worker brief file so spawn_agent messages stay short (no backticks).
+cmd_harness_brief() {
+  harness_require
+  require_active_goal
+  refresh_goal_idx
+  local role="${1:-}" task=""
+  [ -n "$role" ] || { err "harness brief requires <role> [--task tN]"; exit 1; }
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --task) [ $# -ge 2 ] || return 1; task="$2"; shift 2 ;;
+      *) err "Unknown brief argument: $1"; exit 1 ;;
+    esac
+  done
+  case "$role" in
+    planner|researcher|builder|builder-expert|reviewer|qa|visual-reviewer) ;;
+    *) err "Unknown role for brief: $role"; exit 1 ;;
+  esac
+
+  local ctx wd goal_id run_id issue group repo issue_repo branch base source_json task_json
+  # Temporarily apply GOAL_TASK for path resolution when provided.
+  if [ -n "$task" ]; then
+    GOAL_TASK="$task"
+  fi
+  ctx=$(cmd_context) || return
+  wd=$(printf '%s' "$ctx" | jq -r .TARGET_WORKTREE)
+  goal_id=$(printf '%s' "$ctx" | jq -r .GOAL_ID)
+  run_id=$(printf '%s' "$ctx" | jq -r '.GOAL_RUN_ID // empty')
+  issue=$(printf '%s' "$ctx" | jq -r '.GOAL_ISSUE // empty')
+  group=$(printf '%s' "$ctx" | jq -r '.GOAL_GROUP // empty')
+  repo=$(printf '%s' "$ctx" | jq -r '.GOAL_REPO // "."')
+  issue_repo=$(printf '%s' "$ctx" | jq -r '.GOAL_ISSUE_REPO // empty')
+  branch=$(printf '%s' "$ctx" | jq -r .branch)
+  base=$(printf '%s' "$ctx" | jq -r '.base_branch // empty')
+  source_json=$(jq -c --argjson idx "$GOAL_IDX" '.[$idx].source // {}' "$STATE_FILE")
+  task_json='null'
+  if [ -n "$task" ]; then
+    task_json=$(jq -c --argjson idx "$GOAL_IDX" --arg task "$task" \
+      '((.[$idx].harness.tasks // []) | map(select(.id == $task)) | .[0]) // null' "$STATE_FILE")
+  fi
+
+  local briefs_dir slug out
+  briefs_dir="$PROJECT_ROOT/.codex/briefs"
+  mkdir -p "$briefs_dir"
+  slug="$(slugify "${goal_id}-${role}-${task:-root}")"
+  out="$briefs_dir/${slug}.md"
+
+  {
+    printf '# Worker brief: %s\n\n' "$role"
+    printf '## Selectors (export in every shell)\n\n'
+    printf '```bash\n'
+    printf "export GOAL_ID='%s'\n" "$goal_id"
+    printf "export GOAL_RUN_ID='%s'\n" "$run_id"
+    printf "export GOAL_ISSUE='%s'\n" "$issue"
+    printf "export GOAL_GROUP='%s'\n" "$group"
+    printf "export GOAL_TASK='%s'\n" "${task}"
+    printf "export GOAL_REPO='%s'\n" "$repo"
+    printf "export GOAL_ISSUE_REPO='%s'\n" "$issue_repo"
+    printf "GOAL_GIT='%s'\n" "$PROJECT_ROOT/.codex/scripts/goal-git.sh"
+    printf '```\n\n'
+    printf '## Paths\n\n'
+    printf -- '- WORKFLOW_ROOT: `%s`\n' "$PROJECT_ROOT"
+    printf -- '- TARGET_WORKTREE: `%s`\n' "$wd"
+    printf -- '- GOAL_GIT: `%s`\n' "$PROJECT_ROOT/.codex/scripts/goal-git.sh"
+    printf -- '- branch: `%s` (base: `%s`)\n\n' "$branch" "$base"
+    printf '## Rules\n\n'
+    printf -- '- Use only the root GOAL_GIT above. Do not invent helper paths from the worktree.\n'
+    printf -- '- Carry every selector on every shell invocation.\n'
+    printf -- '- Edit/check only TARGET_WORKTREE. Do not write harness/review/state.\n'
+    printf -- '- Never run raw gh/glab or web search for forge operations.\n'
+    printf -- '- Never edit `.codex/scripts` during a run.\n\n'
+    printf '## Source\n\n```json\n'
+    printf '%s\n' "$source_json" | jq .
+    printf '```\n\n'
+    if [ "$task_json" != "null" ]; then
+      printf '## Assigned task\n\n```json\n'
+      printf '%s\n' "$task_json" | jq .
+      printf '```\n\n'
+    fi
+    printf '## Compact context\n\n'
+    jq -r --argjson idx "$GOAL_IDX" '
+      .[$idx].harness.context // {}
+      | to_entries
+      | map(select(.key | IN("discovery_context","research_report","implementation_plan","queue_plan")))
+      | if length == 0 then "(none stored)" else
+          map("### " + .key + "\n\n```json\n" + (.value | tostring) + "\n```") | join("\n\n")
+        end
+    ' "$STATE_FILE"
+    printf '\n\n## Handoff required\n\n'
+    printf 'Return ## Agent output, ## Milestones, and ## Handoff with task_id, task_result,\n'
+    printf 'status, files_staged, checks_run, findings_addressed, decisions, notes, next_action.\n'
+    printf '\n## Notes from MAIN\n\n'
+    printf '(MAIN may append rework findings below this line.)\n'
+  } > "$out"
+
+  log "Wrote worker brief: $out"
+  printf '%s\n' "$out"
 }
 
 cmd_harness() {
@@ -3206,9 +3412,10 @@ cmd_harness() {
         *) err "harness context subcommand must be put or get"; exit 1 ;;
       esac
       ;;
+    brief) cmd_harness_brief "$@" ;;
     done) cmd_harness_done ;;
     recover-spawn) cmd_harness_recover_spawn ;;
-    *) err "harness subcommand must be: init, phase, task, gate, retry, qa, visual, event, progress, hook, spawn, metrics, budget, context, status, done, recover-spawn"; exit 1 ;;
+    *) err "harness subcommand must be: init, phase, task, gate, retry, qa, visual, event, progress, hook, spawn, metrics, budget, context, brief, status, done, recover-spawn"; exit 1 ;;
   esac
 }
 
@@ -3373,9 +3580,11 @@ cmd_verify_run() {
     if [ "$exit_code" -eq 0 ]; then
       status="PASS"
       suggested="none"
-    elif [ "$exit_code" -eq 127 ]; then
+    elif [ "$exit_code" -eq 127 ] || \
+         printf '%s' "$(cat "$outfile")" | grep -Eqi \
+           'command not found|not found in PATH|No such file or directory:.*(lint|go|node|npm|yarn|pnpm|cargo|python)|golangci-lint:.*(not found|No such file)|make:.*No rule to make target'; then
       status="UNKNOWN"
-      suggested="install missing tooling or set verify_commands in goal-config.json"
+      suggested="install missing tooling or set verify_commands in goal-config.json; then re-run verify"
       [ "$overall" = "PASS" ] && overall="UNKNOWN"
     else
       status="FAIL"
@@ -3597,7 +3806,7 @@ case "${1:-}" in
   stage)    shift; cmd_stage "$@" ;;
   commit)   cmd_commit "${2:-}" ;;
   push)     cmd_push ;;
-  pr)       shift; cmd_pr "$@" ;;
+  pr)       shift; case "${1:-}" in draft) shift; cmd_pr_draft "$@" ;; *) cmd_pr "$@" ;; esac ;;
   pending)  cmd_pending "${2:-}" ;;
   threads)  cmd_threads "${2:-}" ;;
   comment)  cmd_comment "${2:-}" "${3:-}" "${4:-}" "${5:-}" ;;

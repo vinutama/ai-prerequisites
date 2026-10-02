@@ -499,7 +499,7 @@ cmd_groups_start() {
       harness_event "harness" "group_worktree_created" "$wt_rel"
     fi
     context_assert_branch "$wt_abs" "$branch" || exit 1
-    sync_worktree_config "$wt_abs"
+    worktree_install_excludes || exit 1
   )
 
   state_mutate --argjson idx "$GOAL_IDX" --arg gid "$gid" --arg branch "$branch" --arg wt "$wt_rel" --arg base "$base" '

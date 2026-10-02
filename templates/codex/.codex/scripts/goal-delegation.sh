@@ -199,6 +199,25 @@ delegation_reserve() {
   if [ "$vision" = true ] && ! models_is_vision "$PROJECT_ROOT/$AGENT_CONFIG_DIR/goal-models.json" "$model"; then
     err "Role '$role' requires a vision-capable model: $model"; return 1
   fi
+  # Auto-advance to the role's expected phase when that transition is legal.
+  local expected_phase
+  expected_phase=$(jq -nr --arg role "$role" '
+    {planner:"PLANNED", researcher:"RESEARCHING", builder:"BUILDING", "builder-expert":"BUILDING",
+     reviewer:"REVIEWING", qa:"QA", "visual-reviewer":"VISUAL_REVIEW"}[$role] // "BUILDING"')
+  if [ "$phase" != "$expected_phase" ] && \
+     { [ "$role" != "builder-expert" ] || [ "$phase" != "ESCALATED" ]; }; then
+    if [ "$role" = "builder-expert" ] && [ "$phase" = "ESCALATED" ]; then
+      :
+    elif declare -F harness_phase_allowed >/dev/null && harness_phase_allowed "$phase" "$expected_phase"; then
+      cmd_harness_phase "$expected_phase" || return 1
+      phase="$expected_phase"
+    else
+      goal_error assignment \
+        "Spawn rejected: role $role during $phase; expected $expected_phase" \
+        "Run: GOAL_* selectors goal-git.sh harness phase $expected_phase"
+      return 1
+    fi
+  fi
   # Evidence workers inspect a committed, clean implementation. This is a
   # readonly check; an isolated module host may omit the fingerprint helper.
   case "$role" in
@@ -228,7 +247,9 @@ delegation_reserve() {
     | if $h.phase != $phase or ($h.complexity // "NORMAL") != $complexity then error("Harness changed; resolve routing and retry") else . end
     | ({planner:"PLANNED", researcher:"RESEARCHING", builder:"BUILDING", "builder-expert":"BUILDING",
         reviewer:"REVIEWING", qa:"QA", "visual-reviewer":"VISUAL_REVIEW"}[$role] // "BUILDING") as $expected
-    | if $phase != $expected and ($role != "builder-expert" or $phase != "ESCALATED") then error("Spawn rejected: role " + $role + " during " + $phase + "; expected " + $expected) else . end
+    | if $phase != $expected and ($role != "builder-expert" or $phase != "ESCALATED") then
+        error("Spawn rejected: role " + $role + " during " + $phase + "; expected " + $expected + ". Run: harness phase " + $expected)
+      else . end
     | if any($all[]; .state == "uncertain") then error("Uncertain launch outcome; reconcile reservation via spawn-confirm/fail before launching again") else . end
     | if ([$all[] | select(active)] | length) >= $concurrency then error("Global concurrency limit reached across issues/groups; finish and close an agent") else . end
     | [($g.spawn_reservations // [])[] | select(.group_id == ($g.active_group_id // null) and held)] as $pending

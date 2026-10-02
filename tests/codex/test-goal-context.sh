@@ -2,6 +2,9 @@
 # Public-command integration tests with real local repositories and no network.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# Keep fixtures inside the workspace so sandboxed agents can run the suite.
+export TMPDIR="${TMPDIR:-$ROOT/.tmp-tests}"
+mkdir -p "$TMPDIR"
 python3 - "$ROOT" <<'PY'
 import json, os, pathlib, shutil, subprocess, sys, tempfile
 
@@ -73,26 +76,43 @@ else:raise SystemExit('unexpected forge call '+repr(args))
         selectors={'GOAL_ID':'','GOAL_RUN_ID':'run-a','GOAL_ISSUE':'91','GOAL_GROUP':'','GOAL_TASK':'','GOAL_REPO':'','GOAL_ISSUE_REPO':'team/app'})
     check(state()[-1]['issue']['number']==91 and state()[-1]['run_id']=='run-a','explicit new issue selectors bypass unrelated prompt/Jira/Markdown state')
     selected={'GOAL_ISSUE':'91','GOAL_RUN_ID':'run-a'}
-    wt=project/state()[-1]['worktree'];local=wt/'.codex/scripts/goal-git.sh'
-    check((wt/'.codex/agents/reviewer.toml').exists() and (wt/'.agents/skills/goal/SKILL.md').exists() and (wt/'AGENTS.md').exists(),'worktree receives role files, skills and instructions')
+    wt=project/state()[-1]['worktree']
+    # Worktrees stay clean: shared info/exclude, no copied .codex tree required.
+    dirty=subprocess.check_output(['git','-C',str(wt),'status','--porcelain'],text=True).strip()
+    check(dirty=='','issue worktree is clean immediately after start --worktree')
+    exclude=(project/'.git/info/exclude').read_text()
+    check('.codex/' in exclude and 'goal-workflow excludes' in exclude,'shared info/exclude installed for worktrees')
     context=json.loads(run('context',selectors=selected).stdout)
     check(context['TARGET_WORKTREE']==str(wt) and context['WORKFLOW_ROOT']==str(project),'root resolves selected issue worktree')
-    check(json.loads(run('context',selectors=selected,local=local).stdout)['GOAL_ID']==state()[-1]['id'],'copied helper resolves shared goal ID')
+    check(context['GOAL_GIT']==str(helper),'context always returns the root helper')
+    # GOAL_TASK=t1 without a task worktree falls back to the issue checkout once harness has t1.
+    run('harness','init','--route','backend','--qa','false','--visual','false','--complexity','TRIVIAL',selectors=selected)
+    run('harness','phase','BUILDING',selectors=selected)
+    run('harness','task','add','builder','Quota work',selectors=selected)
+    task_ctx=json.loads(run('context',selectors=dict(selected,GOAL_TASK='t1')).stdout)
+    check(task_ctx['TARGET_WORKTREE']==str(wt) and task_ctx['GOAL_TASK']=='t1','GOAL_TASK harness id without worktree uses issue checkout')
+    payload=json.dumps(dict(summary='ok',files=['a.go']))
+    put=subprocess.run(['bash',str(helper),'harness','context','put','implementation_report','-'],
+                       env={**env,**selected},input=payload,text=True,capture_output=True,timeout=15)
+    check(put.returncode==0,'context put accepts snake_case implementation_report')
+    review_list=json.loads(run('review','list','.worktrees/issue-91',selectors=selected).stdout)
+    check(review_list==[],'review list accepts worktree path and auto-inits empty findings')
     (wt/'README.md').write_text('seed\nissue change\n')
     run('stage','README.md',selectors=selected)
     check('issue change' in run('diff',selectors=selected).stdout and git('diff','--cached','--name-only')=='','root diff sees selected staged work and leaves root index untouched')
-    run('review','init',selectors=selected);run('review','add','README.md','2','minor','Check result',selectors=selected)
+    run('review','add','README.md','2','minor','Check result',selectors=selected)
     run('review','init',selectors=selected)
     check(len(json.loads(run('review','list',selectors=selected).stdout))==1,'review resume preserves existing findings')
-    run('review','list','.worktrees/issue-91',selectors=selected,success=False)
-    check(not (project/'.goal-review'/'.json').exists(),'review rejects worktree paths as repository keys')
+    # sync cleans old copies if present; preserves user-owned files only when not in manifest
+    (wt/'.codex').mkdir(exist_ok=True)
+    (wt/'.codex/workflow-manifest').write_text('.codex/stale.txt\n')
+    (wt/'.codex/stale.txt').write_text('old copy')
     (wt/'.codex/user-settings.txt').write_text('owned by user')
-    (project/'.codex/user-settings.txt').write_text('template')
     run('worktree','sync',str(wt),selectors=selected)
-    check((wt/'.codex/user-settings.txt').read_text()=='owned by user','sync preserves worktree user configuration')
+    check(not (wt/'.codex/stale.txt').exists(),'sync removes previously copied managed files')
+    check((wt/'.codex/user-settings.txt').read_text()=='owned by user','sync preserves non-manifest user files')
     check(json.loads(run('issues','queue',selectors={'GOAL_RUN_ID':'run-a'}).stdout)[0]['issue']['number']==91,'queue reads state without blocking on stdin')
     run('commit','fix: intake routing',selectors=selected)
-    run('harness','init','--route','backend','--qa','false','--visual','false','--complexity','TRIVIAL',selectors=selected)
     report=json.loads(run('verify','run',selectors=selected).stdout)
     check(report['overall']=='PASS' and report['sha']==git('rev-parse','HEAD',cwd=wt),'verification stdout is one JSON report with committed SHA')
     check(state()[-1]['harness']['gates']['VERIFICATION']['sha']==report['sha'],'verification gate binds evidence to actual commit')
@@ -102,13 +122,26 @@ else:raise SystemExit('unexpected forge call '+repr(args))
     check(state()[-1]['status']=='in_progress','failed or incomplete evidence cannot mark goal complete')
     run('restore','README.md',selectors=selected)
     git('reset','--quiet','HEAD','README.md',cwd=wt);git('restore','README.md',cwd=wt)
-    run('worktree','add','task-one',selectors=selected)
-    assignment=dict(selected,GOAL_TASK='task-one');task_wt=project/state()[-1]['task_worktrees']['task-one']['worktree']
+    run('worktree','add','t1',selectors=selected)
+    assignment=dict(selected,GOAL_TASK='t1')
+    task_wt_rel=state()[-1]['task_worktrees']['t1']['worktree']
+    task_wt=project/task_wt_rel if not str(task_wt_rel).startswith('/') else pathlib.Path(task_wt_rel)
+    check('--t1' in str(task_wt_rel) or task_wt_rel.endswith('--t1') or '/--t1' in str(task_wt_rel) or str(task_wt_rel).endswith('--t1'),
+          'task worktree path is namespaced by goal branch')
+    # Accept slugified branch prefix --t1
+    check('t1' in str(task_wt_rel),'task worktree keyed by harness task id t1')
     (task_wt/'README.md').write_text('seed\ntask change\n');run('stage','README.md',selectors=assignment)
     check(git('diff','--cached','--name-only',cwd=task_wt)=='README.md' and git('diff','--cached','--name-only',cwd=wt)=='','task selector routes staging to task worktree')
     run('commit','fix: task change',selectors=assignment)
-    run('worktree','merge','task-one',selectors=selected)
+    run('worktree','merge','t1',selectors=selected)
     check('task change' in (wt/'README.md').read_text() and not task_wt.exists(),'task integration merges committed clean source into selected issue')
+    # PR draft + conventional title
+    draft=json.loads(run('pr','draft',selectors=selected).stdout)
+    check(draft['title_suggestion'] and pathlib.Path(draft['body_file']).exists(),'pr draft returns title and body file')
+    body=pathlib.Path(draft['body_file']).read_text()
+    check('## Summary' in body and 'REWRITE_THIS_SUMMARY' in body and '## Changes' in body,'pr draft body has required sections')
+    run('pr','--title','Bad Title Without Type','--body-file',draft['body_file'],selectors=selected,success=False)
+    check(True,'non-conventional PR title is rejected')
     (wt/'uncommitted.txt').write_text('keep this')
     run('issues','finish','91',selectors={'GOAL_RUN_ID':'run-a'},success=False)
     check((wt/'uncommitted.txt').exists(),'blocked delivery preserves dirty worktree')
@@ -149,5 +182,21 @@ else:raise SystemExit('unexpected forge call '+repr(args))
     check(set(state()[-1]['harness']['repo_gates'])=={'svc-a','svc-b'},'per-repository evidence is persisted separately')
     blocked=run('harness','done',success=False)
     check('IMPLEMENTATION' in blocked.stdout+blocked.stderr and 'stale_evidence' not in blocked.stderr,'complete repository checks still require implementation evidence')
+    # Missing tool behind make → UNKNOWN (use a clean single-repo checkout)
+    set_config(goal_source='prompt',repos=['.'],forge_repo='team/app',
+               verify_commands=[dict(name='missing-lint',cmd='bash -c \'echo "golangci-lint: command not found" >&2; exit 2\'')])
+    git('checkout','main')
+    # Multi-repo fixture left svc-* dirs untracked; remove so start can run cleanly.
+    for service in ('svc-a','svc-b'):
+        shutil.rmtree(project/service, ignore_errors=True)
+    subprocess.check_call(['git','-C',str(project),'reset','--hard','HEAD'],stderr=subprocess.DEVNULL)
+    subprocess.check_call(['git','-C',str(project),'clean','-fd'],stderr=subprocess.DEVNULL)
+    run('start','Tooling unknown check')
+    run('harness','init','--route','backend','--qa','false','--visual','false','--complexity','TRIVIAL')
+    git('checkout',state()[-1]['branch'])
+    (project/'README.md').write_text('seed\ntooling\n')
+    run('stage','README.md');run('commit','chore: tooling fixture')
+    unknown=json.loads(run('verify','run',success=False).stdout)
+    check(unknown['overall']=='UNKNOWN' and unknown['results'][0]['status']=='UNKNOWN','missing tooling behind failing exit is UNKNOWN not FAIL')
 print(str(count)+' context assertions passed')
 PY
