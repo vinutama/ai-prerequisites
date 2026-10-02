@@ -69,7 +69,9 @@ else:raise SystemExit('unexpected forge call '+repr(args))
     run('start','Implement file plan')
     check(state()[-1]['source']['body']=='seed\n' and state()[-1]['branch']=='','Markdown snapshot and group delivery persist')
     set_config(goal_source='issues',issue_list_url='https://github.com/team/app/issues')
-    run('issues','start','91','--worktree',selectors={'GOAL_RUN_ID':'run-a'})
+    run('issues','start','91','--url','https://github.com/team/app/issues','--worktree',
+        selectors={'GOAL_ID':'','GOAL_RUN_ID':'run-a','GOAL_ISSUE':'91','GOAL_GROUP':'','GOAL_TASK':'','GOAL_REPO':'','GOAL_ISSUE_REPO':'team/app'})
+    check(state()[-1]['issue']['number']==91 and state()[-1]['run_id']=='run-a','explicit new issue selectors bypass unrelated prompt/Jira/Markdown state')
     selected={'GOAL_ISSUE':'91','GOAL_RUN_ID':'run-a'}
     wt=project/state()[-1]['worktree'];local=wt/'.codex/scripts/goal-git.sh'
     check((wt/'.codex/agents/reviewer.toml').exists() and (wt/'.agents/skills/goal/SKILL.md').exists() and (wt/'AGENTS.md').exists(),'worktree receives role files, skills and instructions')

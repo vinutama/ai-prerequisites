@@ -34,8 +34,13 @@ environment variables. Explicit `GOAL_GROUP` chooses the group's harness;
 `GOAL_ISSUE_REPO` is the issue forge repository identity; carry it through
 list/start/resume and every issue-specific invocation to disambiguate equal
 issue numbers across repositories. It does not replace `GOAL_REPO`. Shared active selection is not a substitute.
-Before a new issue/group/task operation, select its identity explicitly and
+Before switching existing issues/groups/tasks, select their identity explicitly and
 resolve context again. Stop on any returned path/identity mismatch.
+For a new issue, `issues start` comes before `context`: keep GOAL_ID empty,
+supply the run ID, issue number, and issue-list URL, then resolve the created
+assignment. Intake accepts a repository path matching that URL; afterward
+carry the canonical GOAL_ISSUE_REPO returned by `context` (a full GitLab URL),
+without shortening it to its namespace/project path.
 
 Creation/resume automatically syncs managed `.codex` scripts/agents/config,
 `.agents` workflow skills, and ignored `AGENTS.md`. Refresh existing instructions

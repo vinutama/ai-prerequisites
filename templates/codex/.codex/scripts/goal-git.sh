@@ -1454,6 +1454,23 @@ cmd_issues_start() {
   platform="$ISSUE_LIST_PLATFORM"; require_vcs_cli
   repo="$ISSUE_LIST_REPO"
   [[ "$number" =~ ^[1-9][0-9]*$ ]] || { goal_error usage "Issue number must be positive"; return 1; }
+  [ -z "${GOAL_ISSUE:-}" ] || [ "$GOAL_ISSUE" = "$number" ] || {
+    goal_error assignment "GOAL_ISSUE differs from the requested issue number"; return 1;
+  }
+  [ -z "${GOAL_GROUP:-}${GOAL_TASK:-}" ] || {
+    goal_error assignment "Clear GOAL_GROUP and GOAL_TASK before issue intake"; return 1;
+  }
+  local requested_repo="${GOAL_ISSUE_REPO:-}" repo_path
+  repo_path=$(python3 - "$url" <<'PY'
+import sys
+from urllib.parse import urlsplit
+p=urlsplit(sys.argv[1]).path
+print(p.split('/-/issues')[0].strip('/') if '/-/issues' in p else p.split('/issues')[0].strip('/'))
+PY
+  ) || return
+  [ -z "$requested_repo" ] || [ "$requested_repo" = "$repo" ] || [ "$requested_repo" = "$repo_path" ] || {
+    goal_error assignment "GOAL_ISSUE_REPO differs from the supplied issue URL"; return 1;
+  }
 
   local issue_json
   issue_json="$(fetch_issue_by_number "$repo" "$number")"
@@ -1475,16 +1492,29 @@ ${body}"
   batch="${GOAL_ISSUE_BATCH:-0}"
 
   state_ensure_array
-  local existing
-  existing=$(jq -c --arg rid "$run_id" --argjson n "$number" \
-    --arg repo "$repo" '[.[] | select(.run_id == $rid and .issue.number == $n and (.issue.repo // $repo) == $repo)] | last // empty' "$STATE_FILE" 2>/dev/null || true)
+  local existing=""
+  if [ -f "$STATE_FILE" ]; then
+    existing=$(jq -c --arg rid "$run_id" --argjson n "$number" \
+      --arg repo "$repo" '[.[] | select(.run_id == $rid and .issue.number == $n and (.issue.repo // $repo) == $repo)]
+      | if length > 1 then error("Ambiguous issue assignment in state") else .[0] // empty end' "$STATE_FILE") || return
+  fi
+  if [ -n "${REQUESTED_GOAL_ID:-}" ]; then
+    [ -n "$existing" ] && [ "$(printf '%s' "$existing" | jq -r .id)" = "$REQUESTED_GOAL_ID" ] || {
+      goal_error assignment "GOAL_ID does not identify the requested issue/run/repository"; return 1;
+    }
+  fi
   if [ -n "$existing" ]; then
     if [ "$(echo "$existing" | jq -r '.status')" = "completed" ]; then
       err "Issue #$number is already completed in run $run_id"
       exit 1
     fi
     log "Resuming existing issue #$number in run $run_id"
-    local existing_wt
+    GOAL_ID=$(printf '%s' "$existing" | jq -r .id)
+    GOAL_ISSUE="$number"; GOAL_RUN_ID="$run_id"; GOAL_ISSUE_REPO="$repo"
+    refresh_goal_idx || return
+    local existing_wt existing_dir
+    existing_dir=$(goal_workdir) || return
+    context_assert_branch "$existing_dir" || return
     existing_wt="$(echo "$existing" | jq -r '.worktree // empty')"
     [ -z "$existing_wt" ] || sync_worktree_config "$PROJECT_ROOT/$existing_wt"
     echo "$existing" | jq -r '.worktree // empty'
@@ -3554,7 +3584,7 @@ for module in forge goal-context delivery-groups goal-delivery goal-delegation g
   [ -f "$SCRIPTS_DIR/$module.sh" ] || { err "Missing workflow module: $module.sh; reinstall the Codex template"; exit 1; }
   . "$SCRIPTS_DIR/$module.sh"
 done
-context_init "${1:-help}"
+context_init "${1:-help}" "${2:-}"
 
 
 case "${1:-}" in

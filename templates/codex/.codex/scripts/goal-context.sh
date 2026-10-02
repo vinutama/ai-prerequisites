@@ -125,8 +125,14 @@ context_init() {
   REQUESTED_GOAL_ID="${GOAL_ID:-}"
   # Independent commands such as help/doctor/models need no assignment.
   case "${1:-}" in help|--help|-h|doctor|models|config|selfcheck|codex|complexity) return ;; esac
-  state_ensure_array
-  refresh_goal_idx
+  state_ensure_array || return
+  # Intake must run before an assignment exists. In particular, issues start
+  # resolves and validates its requested number/run/repository itself; do not
+  # bind it to the previous goal or reject the not-yet-created issue.
+  if [ "${1:-}" = issues ]; then
+    case "${2:-}" in list|queue|start) return ;; esac
+  fi
+  refresh_goal_idx || return
   if [ -f "$STATE_FILE" ]; then
     GOAL_ID=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].id // empty' "$STATE_FILE")
     local selected_platform

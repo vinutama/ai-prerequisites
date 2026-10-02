@@ -61,13 +61,38 @@ for agent in codex cursor; do
     ISSUE_LIST_URL=https://github.com/acme/demo/issues
   else
     ISSUE_LIST_URL=https://gitlab.com/acme/demo/-/issues
+    [ "$agent" != codex ] || ISSUE_LIST_URL=https://gitlab.internal/acme/demo/-/issues
   fi
   jq -n --arg url "$ISSUE_LIST_URL" --arg platform "$platform" \
     '{issue_list_url:$url,target_branch:"main",platform:$platform,concurrency:3}' > "$PROJECT/.$agent/goal-config.json"
   SCRIPT="$PROJECT/.$agent/scripts/goal-git.sh"
 
-  PATH="$TEST_BIN:$PATH" GOAL_RUN_ID=run-test "$SCRIPT" issues start 1 --worktree >/dev/null
-  PATH="$TEST_BIN:$PATH" GOAL_RUN_ID=run-test "$SCRIPT" issues start 2 --worktree >/dev/null
+  if [ "$agent" = codex ]; then
+    # Match MAIN's explicit selectors, both before state exists and after the
+    # first issue has become the most recent assignment.
+    for issue in 1 2; do
+      PATH="$TEST_BIN:$PATH" GOAL_ID='' GOAL_RUN_ID=run-test GOAL_ISSUE="$issue" \
+        GOAL_GROUP='' GOAL_TASK='' GOAL_REPO='' GOAL_ISSUE_REPO=acme/demo \
+        "$SCRIPT" issues start "$issue" --url "$ISSUE_LIST_URL" --worktree >/dev/null
+    done
+    for bad_selector in GOAL_ISSUE=99 GOAL_ISSUE_REPO=other/project GOAL_ID=missing-goal GOAL_GROUP=missing-group GOAL_TASK=missing-task; do
+      if env PATH="$TEST_BIN:$PATH" GOAL_ID='' GOAL_RUN_ID=run-test GOAL_ISSUE=1 \
+        GOAL_GROUP='' GOAL_TASK='' GOAL_ISSUE_REPO=acme/demo "$bad_selector" \
+        "$SCRIPT" issues start 1 --url "$ISSUE_LIST_URL" --worktree >/dev/null 2>&1; then
+        echo "codex accepted mismatched issue intake selector: $bad_selector" >&2
+        exit 1
+      fi
+    done
+    CANONICAL_REPO=$(jq -r '.[0].issue.repo' "$PROJECT/state.json")
+    SELECTED_ID=$(PATH="$TEST_BIN:$PATH" GOAL_ISSUE=1 GOAL_RUN_ID=run-test \
+      GOAL_ISSUE_REPO="$CANONICAL_REPO" "$SCRIPT" context --json | jq -r .GOAL_ID)
+    PATH="$TEST_BIN:$PATH" GOAL_ID="$SELECTED_ID" GOAL_ISSUE=1 GOAL_RUN_ID=run-test \
+      GOAL_ISSUE_REPO="$CANONICAL_REPO" "$SCRIPT" issues start 1 --url "$ISSUE_LIST_URL" --worktree >/dev/null
+    echo "PASS: codex/$platform bootstrap selectors, canonical context, guarded mismatches, and exact resume"
+  else
+    PATH="$TEST_BIN:$PATH" GOAL_RUN_ID=run-test "$SCRIPT" issues start 1 --worktree >/dev/null
+    PATH="$TEST_BIN:$PATH" GOAL_RUN_ID=run-test "$SCRIPT" issues start 2 --worktree >/dev/null
+  fi
   test -d "$PROJECT/.worktrees/issue-1"
   test -d "$PROJECT/.worktrees/issue-2"
   test ! -e "$PROJECT/.worktrees/issue-1/state.json"
