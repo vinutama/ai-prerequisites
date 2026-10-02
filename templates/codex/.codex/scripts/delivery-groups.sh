@@ -97,6 +97,7 @@ groups_persist_active() {
               pr_number: ($g.pr_number // .pr_number),
               pr_url: ($g.pr_url // .pr_url // ""),
               harness: ($g.harness // .harness // {}),
+              delivery: $g.delivery, repos:$g.repos, pr_title:$g.pr_title, pr_body:$g.pr_body,
               status: (if .status == "merged" or .status == "completed" then .status
                        elif ($g.harness.phase // "") == "DONE" then "ready"
                        else (.status // "in_progress") end)
@@ -109,6 +110,7 @@ groups_persist_active() {
 
 groups_activate() {
   local gid="$1"
+  [ -z "${GOAL_GROUP:-}" ] || [ "$GOAL_GROUP" = "$gid" ] || { goal_error assignment "Cannot switch away from explicit GOAL_GROUP"; return 1; }
   [ -z "$gid" ] && { err "groups activate requires <group-id>"; return 1; }
   require_active_goal
   refresh_goal_idx
@@ -124,6 +126,10 @@ groups_activate() {
     | .[$idx].worktree = ($group.worktree // "")
     | .[$idx].pr_number = ($group.pr_number // null)
     | .[$idx].pr_url = ($group.pr_url // "")
+    | .[$idx].delivery = $group.delivery
+    | .[$idx].repos = ($group.repos // [{path:".",pr_number:$group.pr_number,pr_url:$group.pr_url,delivery:$group.delivery}])
+    | .[$idx].pr_title = ($group.pr_title // "")
+    | .[$idx].pr_body = ($group.pr_body // "")
     | .[$idx].harness = (if ($group.harness | type) == "object" and ($group.harness | length) > 0
                          then $group.harness
                          else {} end)
@@ -341,7 +347,7 @@ cmd_groups_init() {
           pr_number: ($old.pr_number // null),
           pr_url: ($old.pr_url // ""),
           harness: ($old.harness // {}),
-          pr_title: ($old.pr_title // "")
+          pr_title: ($old.pr_title // ""), pr_body:($old.pr_body // ""), delivery:$old.delivery, repos:$old.repos
         }
     )
   ' <<<"$raw")"
@@ -477,9 +483,9 @@ cmd_groups_start() {
 
   (
     cd "$PROJECT_ROOT"
-    git fetch origin "$base" 2>/dev/null || true
+    git fetch origin "refs/heads/$base:refs/remotes/origin/$base" >&2 || exit 1
     local start_ref="origin/$base"
-    git rev-parse --verify "$start_ref" >/dev/null 2>&1 || start_ref="$base"
+    git rev-parse --verify "$start_ref" >/dev/null || exit 1
     if [ -d "$wt_abs" ]; then
       log "Reusing worktree $wt_rel"
     else
@@ -489,10 +495,11 @@ cmd_groups_start() {
       else
         git worktree add -b "$branch" "$wt_abs" "$start_ref"
       fi
-      sync_worktree_config "$wt_abs"
       harness_event "harness" "group_branch_created" "$branch"
       harness_event "harness" "group_worktree_created" "$wt_rel"
     fi
+    context_assert_branch "$wt_abs" "$branch" || exit 1
+    sync_worktree_config "$wt_abs"
   )
 
   state_mutate --argjson idx "$GOAL_IDX" --arg gid "$gid" --arg branch "$branch" --arg wt "$wt_rel" --arg base "$base" '
@@ -516,60 +523,24 @@ cmd_groups_continue() {
 }
 
 cmd_groups_pr() {
-  require_active_goal
-  require_vcs_cli
-  refresh_goal_idx
-  local gid="${1:-}"
-  [ -z "$gid" ] && { err "groups pr requires <group-id>"; exit 1; }
-  groups_activate "$gid"
-
-  local group root_goal title body tt slug
-  group="$(delivery_group_by_id "$gid")"
-  root_goal="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].goal' "$STATE_FILE")"
-  tt="$(echo "$group" | jq -r .task_type)"
-  slug="$(echo "$group" | jq -r .branch_slug)"
-  title="$(echo "$group" | jq -r --arg tt "$tt" --arg slug "$slug" \
-    '.pr_title // ($tt + "(" + $slug + "): " + .title)')"
-  title="${title:0:250}"
-
-  body="$(GROUP_JSON="$group" ROOT_GOAL="$root_goal" python3 -c '
-import json, os
-g = json.loads(os.environ["GROUP_JSON"])
-root = os.environ.get("ROOT_GOAL", "")
-deps = ", ".join(g.get("depends_on") or []) or "none"
-tasks = ", ".join(g.get("task_ids") or []) or "none"
-checks = "\n".join("- " + c for c in (g.get("acceptance_checks") or [])) or "- (none listed)"
-files = "\n".join("- `" + f + "`" for f in (g.get("files") or [])) or "- (none listed)"
-print("## Root Markdown goal\n" + root + "\n\n## Delivery group `" + str(g.get("id","")) + "`\n" + (g.get("title") or "") +
-      "\n\n**Task type:** " + str(g.get("task_type")) + "\n**Branch:** `" + str(g.get("branch")) +
-      "`\n**Planner tasks:** " + tasks + "\n**Depends on:** " + deps +
-      "\n\n## Scope\n" + files + "\n\n## Acceptance checks\n" + checks +
-      "\n\n## Excluded work\nWork belonging to other delivery groups in this Markdown goal is intentionally out of scope.\n\n## Why this split\n" + (g.get("reason") or "(not provided)"))
-')"
-
-  local branch base
-  branch="$(echo "$group" | jq -r .branch)"
-  base="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].base_branch' "$STATE_FILE")"
-  delivery_assert_branch "$branch" || exit 1
-
-  if [ "$(echo "$group" | jq -r '.pr_number // empty')" != "" ] && [ "$(echo "$group" | jq -r '.pr_number')" != "null" ]; then
-    log "PR already exists for $gid: #$(echo "$group" | jq -r .pr_number)"
-    echo "$group" | jq '{id, pr_number, pr_url}'
-    return 0
-  fi
-
-  create_pr "" "$branch" "$base" "$title" "$body"
-  state_mutate --argjson idx "$GOAL_IDX" --arg gid "$gid" \
-    --argjson pn "$PR_RESULT_NUMBER" --arg url "$PR_RESULT_URL" --arg title "$title" '
-    .[$idx].pr_number = $pn
-    | .[$idx].pr_url = $url
-    | .[$idx].delivery_groups = [
-        .[$idx].delivery_groups[]
-        | if .id == $gid then . + {pr_number: $pn, pr_url: $url, pr_title: $title} else . end
-      ]
-  '
-  harness_event "main" "group_pr_created" "$gid #$PR_RESULT_NUMBER $PR_RESULT_URL"
-  log "Created $gid PR: $PR_RESULT_URL"
+  require_active_goal; require_vcs_cli; refresh_goal_idx
+  local gid="${1:-}" group title branch base
+  [ -n "$gid" ] || { goal_error usage "groups pr requires group ID"; return 1; }
+  shift
+  groups_activate "$gid" || return
+  group=$(delivery_group_by_id "$gid") || return
+  title=$(printf '%s' "$group" | jq -r '.title')
+  pr_metadata_args "$title" "$@" || return
+  branch=$(printf '%s' "$group" | jq -r .branch)
+  base=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].base_branch' "$STATE_FILE")
+  delivery_assert_branch "$branch" || return
+  create_pr . "$branch" "$base" "$PR_TITLE" "$PR_BODY" || return
+  state_mutate --argjson idx "$GOAL_IDX" --argjson n "$PR_RESULT_NUMBER" --arg url "$PR_RESULT_URL" --argjson delivery "$PR_RESULT_DELIVERY" '
+    .[$idx] += {pr_number:$n,pr_url:$url,delivery:$delivery}
+    | .[$idx].repos = [{path:".",pr_number:$n,pr_url:$url,delivery:$delivery}]
+  ' || return
+  groups_persist_active
+  harness_event main group_pr_validated "$gid #$PR_RESULT_NUMBER $PR_RESULT_URL"
 }
 
 cmd_groups_merge() {
@@ -586,13 +557,14 @@ cmd_groups_merge() {
   wt_rel="$(echo "$group" | jq -r '.worktree // empty')"
   [ -n "$pr_number" ] && [ "$pr_number" != "null" ] || { err "No PR for group $gid — run groups pr first"; exit 1; }
 
-  merge_pr "$pr_number" "$pr_url"
+  cmd_harness_done >/dev/null || return
+  delivery_require_complete || return
+  merge_pr "$pr_number" "$pr_url" || return
 
   if [ -n "$wt_rel" ] && [ -d "$PROJECT_ROOT/$wt_rel" ]; then
     (
       cd "$PROJECT_ROOT"
-      git worktree remove "$PROJECT_ROOT/$wt_rel" --force 2>/dev/null \
-        || git worktree remove "$PROJECT_ROOT/$wt_rel"
+      git worktree remove "$PROJECT_ROOT/$wt_rel" || exit 1
     )
     harness_event "harness" "group_worktree_removed" "$wt_rel"
   fi
@@ -614,6 +586,9 @@ cmd_groups_complete() {
   refresh_goal_idx
   local gid="${1:-}"
   [ -z "$gid" ] && { err "groups complete requires <group-id>"; exit 1; }
+  groups_activate "$gid" || return
+  cmd_harness_done >/dev/null || return
+  delivery_require_complete || return
   groups_persist_active
   state_mutate --argjson idx "$GOAL_IDX" --arg gid "$gid" '
     .[$idx].delivery_groups = [
@@ -638,8 +613,7 @@ cmd_groups_cancel() {
   if [ -n "$wt_rel" ] && [ -d "$PROJECT_ROOT/$wt_rel" ]; then
     (
       cd "$PROJECT_ROOT"
-      git worktree remove "$PROJECT_ROOT/$wt_rel" --force 2>/dev/null \
-        || git worktree remove "$PROJECT_ROOT/$wt_rel"
+      git worktree remove "$PROJECT_ROOT/$wt_rel" || exit 1
     )
     harness_event "harness" "group_worktree_removed" "$wt_rel"
   fi
@@ -682,7 +656,7 @@ cmd_groups() {
     start)    cmd_groups_start "${1:-}" ;;
     continue) cmd_groups_continue "${1:-}" ;;
     ready)    cmd_groups_ready ;;
-    pr)       cmd_groups_pr "${1:-}" ;;
+    pr)       cmd_groups_pr "$@" ;;
     merge)    cmd_groups_merge "${1:-}" ;;
     complete) cmd_groups_complete "${1:-}" ;;
     cancel)   cmd_groups_cancel "${1:-}" ;;

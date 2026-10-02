@@ -8,42 +8,51 @@ description: >-
 
 # Goal Architecture Loop Engineering
 
-The executable entry point is `$goal`; follow its `SKILL.md` and relevant
-`references/` for commands and recovery details. MAIN owns orchestration,
-spawns workers directly, waits for their results, and continues the same goal
-thread. No orchestrator subagent or second coordinator is involved.
+Use `$goal` and its relevant references. MAIN directly coordinates workers,
+waits for results, records them serially, and closes completed threads. Builders
+own application edits and staging. MAIN owns workflow state and delivery.
 
 ```text
-$goal → classify → plan? → research? → build → analyze → verify
-      → review? → QA? → visual? → rework as needed → harness done → PR/merge
+intake snapshot → start → classify → plan? → research? → build
+→ reconcile → commit → analyze → verify → review? → QA? → visual?
+→ rework as needed → harness done → local PR/merge
 ```
 
-`state.json` in the project root is the source of truth for the active goal
-and its harness. Use `.codex/scripts/goal-git.sh` for all git, state, model,
-and harness operations; never raw `git`, `gh`, or `glab`. MAIN does not edit
-application source. Builder stages changes and returns a structured handoff;
-MAIN runs `verify run` and owns commit/push/PR. The harness, not an agent's
-judgment, decides whether required gates pass.
+Inline PR publication precedes Reviewer; local publication follows a clean
+harness with idempotent review initialization before Reviewer. PR metadata is
+mandatory: short descriptive single-line title ≤72 characters and body file
+preferably with 100–200 words on actual changes/checks/reference. Empty diff stops.
 
-Always require IMPLEMENTATION, ANALYSIS, and VERIFICATION. PLAN and REVIEW
-are required except when classify says TRIVIAL. Require QA/VISUAL only when
-the harness says so. `verify run` is the only authority for VERIFICATION
-PASS; `analyze` runs once per reconciled batch and does not replace it.
-Never finish before `harness done` exits 0 or while a required finding is
-open. Rework uses a fresh Builder, then analysis, verification, and review.
-Only Reviewer/Visual Reviewer resolve review threads. Escalation and verify
-retry limits hard-stop; clean review is not skipped due to a numeric cap.
+`goal-git.sh` is the sole operational entry. `doctor --json`, `help`, and
+`context --json` provide diagnostics and concrete paths. Carry explicit
+`GOAL_ID`, `GOAL_RUN_ID`, `GOAL_ISSUE`, `GOAL_GROUP`, `GOAL_TASK`, and `GOAL_REPO`
+in every invocation. One root state authority serves isolated worktrees;
+automatic sync copies managed instructions/configuration, never state.
+Workers return milestones/tasks/findings instead of writing workflow state.
 
-Worker models and effort come from `.codex/goal-models.json` `$routing` at
-spawn time. Researcher, Builder Expert, QA, and Visual Reviewer are
-conditional. Expert follows Builder and a real verification failure or
-serious architectural review finding. Visual Reviewer must use a
-vision-capable model. Briefs carry only needed task context, findings, and
-evidence, not full transcripts. Waiting does not justify repeated polling
-turns; `harness progress` is the human timeline.
+Reserve with `harness spawn`, launch using supported live tool fields, then
+`spawn-confirm` with the actual child ID; `spawn-fail` releases failed launches.
+Counters count confirmed launches only. Missing required delegation capability
+is a saved blocker. One targeted launch retry; `recover-spawn` restores the
+original phase only for launch blockers. Never implement in MAIN.
 
-New Markdown goals default to planner delivery groups (`auto`/`task`): one
-typed branch, isolated worktree, harness, and PR per group; no aggregation
-PR. Legacy/single strategy keeps one PR. Issues have one branch and PR each.
-Auto-merge is opt-in; otherwise report ready for manual merge. For multi-repo
-goals, track and verify each repository independently.
+IMPLEMENTATION/ANALYSIS/VERIFICATION are always required. PLAN/REVIEW are
+required except TRIVIAL; QA/VISUAL follow harness requirements. Only `verify run`
+passes VERIFICATION. MAIN records returned Reviewer LGTM as
+`{"verdict":"LGTM","sha":"<commit>"}` under `review_verdict`. All gate evidence
+belongs to current committed SHA/assignment and is invalidated by rework.
+Never complete before `harness done` exits 0. Only Reviewer/Visual Reviewer
+supply evidence for resolving review findings; MAIN applies it serially.
+
+Models/effort come from helper complexity routing. Vision requirements stay
+combined with complexity and `--next` filtering. Expert requires prior Builder
+plus real verify FAIL or serious architectural review defect. New Markdown
+`auto`/`task` goals deliver one typed branch/worktree/harness/PR per group;
+legacy/single retains one PR. Issues retain URL/run/repo identity and one PR
+each. Multi-repo checks and delivery remain separate. Auto-merge is opt-in.
+
+CLI failures use helper structured diagnostics. Stop auth/permission blockers
+with a suggested local command. No automatic browser login/upgrades, web or
+`--web` fallback, or ad hoc forge operations. Read-only CLI help/version is
+allowed; CLI docs lookup is maintenance outside active operations. Researcher
+web for unrelated questions and application browser QA remain available.

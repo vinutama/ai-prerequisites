@@ -49,65 +49,159 @@ claude
 ```bash
 ./init.sh --codex /path/to/your/project
 cd /path/to/your/project
-codex                 # CLI >= 0.138.0; init trusts the project
+codex                 # trusted project; supported live delegation tools required
 $init-goal
 $goal Add a health-check endpoint
 ```
 
-Codex removed custom prompts in 0.117.0. Entry points are skills invoked with
-`$goal`, `$init-goal`, `$init-skills` — not slash commands.
-`$goal` runs the full loop on MAIN, which spawns specialized workers directly;
-there is no Codex orchestrator subagent.
+Codex entry points are skills: `$goal`, `$init-goal`, and `$init-skills`.
+`$goal` runs on MAIN, which directly launches specialized workers and stays
+active through delivery. Builders own application edits/staging; MAIN owns
+workflow state, reconciliation, commits, gates, and PRs. There is no Codex
+orchestrator child. Inspect the live launch schema for role/model/effort support;
+do not blindly prescribe `agent_type` or `fork_turns`. Missing required capability
+is a saved blocker; resume with `$goal --continue` after it is available.
 
-Codex includes an expanded harness (`goal-git.sh harness|verify|route|complexity`),
-model routing from `.codex/goal-models.json` (`$routing` by complexity), Planner
-skip on TRIVIAL, single-issue queue bypass, spawn budgets, evidence-backed gates,
-deterministic `verify run`, vision enforcement for `visual-reviewer`, and
-`researcher` / `qa` agents. Customize models per project in that JSON only.
+#### Codex helper architecture
+
+`goal-git.sh` is the sole operational entry for Git/forge, context, worktrees,
+models, harness, delivery groups, and issue queues. Its sourceable modules are
+internal implementation boundaries; agents do not invoke them directly.
+
+| Module in `.codex/scripts/` | Responsibility |
+|---|---|
+| `goal-git.sh` | Public command dispatch and workflow/harness operations |
+| `goal-context.sh` | Explicit assignment selectors, checkout/branch resolution, source snapshots, managed worktree sync and single state authority |
+| `goal-delegation.sh` | Complexity/vision model routing, launch reservations, confirmation/failure/recovery and run accounting |
+| `goal-evidence.sh` | Committed-SHA evidence invalidation, confirmed worker evidence and review verdict guards |
+| `goal-delivery.sh` | Clean committed HEAD, nonempty diff, PR metadata/identity and current-SHA delivery/gate guards |
+| `forge.sh` | Installed CLI capability probes, explicit forge identity, structured diagnostics and PR/MR reconciliation |
+| `delivery-groups.sh` | Markdown group planning validation, dependencies and per-group lifecycle |
+
+Helpers capability-probe installed CLI help/version and use supported flags.
+Operational failures use structured diagnostics and `doctor --json`; do not
+fall back to web search, browser, `--web`, or ad hoc `gh`/`glab`. Auth/permission
+blockers stop with a suggested local command, without automatic browser login.
+No automatic upgrades. Read-only Git/forge help/version inspection is allowed;
+actual mutations use the helper. CLI docs lookup is maintenance outside active
+operations. Unrelated implementation Researcher web and application browser
+QA/visual checks remain available.
+
+#### Codex context and source commands
+
+Complete source intake before branch/worktree mutations. Prompt snapshots retain
+the full objective, Markdown snapshots retain draft contents/path, and Jira
+snapshots retain the full ticket fetched through actual MCP tools discovered at
+runtime. `start ... --source-file <snapshot.json>` persists a JSON object with
+`type`, `title`, `body`, `reference`, and `acceptance_criteria`. Planner treats Markdown
+as draft input and produces a fresh plan. Issues retain the full issue body,
+list URL override, run ID, and repository identity.
+
+Every helper invocation carries explicit `GOAL_ID`, `GOAL_RUN_ID`, `GOAL_ISSUE`,
+`GOAL_GROUP`, `GOAL_TASK`, and `GOAL_REPO`; empty means inapplicable, not shared
+active selection. `context --json` resolves absolute `WORKFLOW_ROOT`, assigned
+`TARGET_WORKTREE`, and local `GOAL_GIT`. Validate the returned assignment before
+mutations and include all values in worker briefs and shell invocations.
+
+```bash
+# Carry this selector block in every shell invocation, including diagnostics.
+export GOAL_ID="<id>" GOAL_RUN_ID="<run-id>"
+export GOAL_ISSUE="<number-or-empty>" GOAL_GROUP="<group-id-or-empty>"
+export GOAL_TASK="<task-id-or-empty>" GOAL_REPO="<repo-key-or-empty>"
+export GOAL_ISSUE_REPO="<forge-repository-identity-or-empty>"
+GOAL_GIT="<absolute installed helper>"
+"$GOAL_GIT" help
+"$GOAL_GIT" doctor --json
+"$GOAL_GIT" context --json
+```
+
+Before a new goal exists, use empty assignment selectors for intake/help/doctor;
+after start, use the persisted identity. `GOAL_REPO` is a configured repository
+key, not the worktree path or forge identity. For issue assignments also carry
+`GOAL_ISSUE_REPO` (forge URL/host/path), which disambiguates the issue identity
+across repositories. Separate repositories retain per-repo checks and PRs;
+groups use explicit `GOAL_GROUP`, never a shared active-group overlay.
+
+| Command through `GOAL_GIT` | Contract |
+|---|---|
+| `start <title> [ticket] [task-type] --source-file <snapshot.json>` | Persist full source before branch/worktree mutation |
+| `issues list <url> <count>` | Resolve selected forge list without losing explicit URL override |
+| `issues start <n> --url <url> --worktree` | Start isolated issue with carried run/repo identity; one PR per issue |
+| `worktree sync <absolute-path>` | Refresh managed instructions/configuration for an existing worktree |
+| `models <role> --complexity <LEVEL> [--require-multimodal]` | Resolve model and effort from `.codex/goal-models.json` |
+| `models <role> --complexity <LEVEL> --next <failed-model> [--require-multimodal]` | Preserve complexity and vision filtering on fallback |
+| `harness spawn <role> <model> <effort> [--task tN]` | Reserve budget; return `reservation.id`, count no run yet |
+| `harness spawn-confirm <reservation-id> <agent-id>` | Store actual launched child and count the run |
+| `harness spawn-fail <reservation-id> <category> <reason>` | Release a definitively failed launch; preserve uncertain outcomes for reconciliation |
+| `harness spawn-finish <agent-id> completed\|failed --closed` | Record returned result and confirmed thread closure, freeing its live slot |
+| `harness recover-spawn` | Recover launch blockers only, restoring original phase |
+| `pr --title <short-title> --body-file <path>` | Create/update single PR with mandatory metadata |
+| `groups pr <id> --title <short-title> --body-file <path>` | Same metadata contract for a group PR |
+
+Creation/resume automatically copies managed `.codex` scripts/agents/config,
+`.agents` workflow skills, and ignored `AGENTS.md` into isolated worktrees.
+`worktree sync` refreshes when needed; tracked/user-owned files are preserved.
+State, locks, progress/review files, and worker artifacts are never copied.
+The local helper resolves one root `state.json` authority. One Builder owns a
+checkout at a time. Issue concurrency is one global worker cap; multi-repo issue
+queues remain sequential. New Markdown auto/task goals have one typed branch,
+worktree, harness, and PR per group; no aggregation PR. Legacy/single keeps one PR.
 
 #### Codex harness gates
 
-Initialize after Planner routing signals:
+After workers finish, MAIN reconciles and commits staged implementation first,
+then runs ANALYSIS and formal verification/review/QA/visual checks. All gate SHA
+evidence points to the final committed clean HEAD. Rework invalidates evidence
+and repeats commit → analysis → verify → fresh review/checks.
 
-```bash
-.codex/scripts/goal-git.sh harness init \
-  --route <backend|feature|frontend> \
-  --qa <true|false> \
-  --visual <true|false>
+```text
+intake → start → classify → plan? → research? → build → reconcile → commit
+→ analyze → verify run → review? → QA? → visual? → harness done → delivery
 ```
 
 | Gate | PASS evidence |
 |---|---|
-| PLAN | Planner accepted |
-| IMPLEMENTATION | All builder/builder-expert tasks DONE |
-| ANALYSIS | One `analyze` run after the reconciled implementation batch |
-| VERIFICATION | `verify run` only (manual PASS rejected) |
-| REVIEW | `pending` (inline) or `review pending` (local) exit 0 |
-| QA | required + scenarios recorded + `harness qa pending` exit 0 |
-| VISUAL | required + observations + `harness visual pending` exit 0 |
+| PLAN | Accepted Planner plan unless TRIVIAL |
+| IMPLEMENTATION | All assigned Builder/Expert tasks DONE and reconciled source committed |
+| ANALYSIS | One `analyze` on the final committed clean HEAD |
+| VERIFICATION | `verify run` only, bound to that SHA |
+| REVIEW | Actual Reviewer LGTM for that SHA plus zero unresolved inline/local findings |
+| QA | Confirmed QA run, complete recorded required scenarios and clean `harness qa pending` |
+| VISUAL | Confirmed vision worker run, recorded viewport evidence and clean `harness visual pending` |
 
-Definition of DONE: IMPLEMENTATION + ANALYSIS + VERIFICATION always pass.
-PLAN / REVIEW are required except on TRIVIAL goals; QA / VISUAL only when
-harness `requirements` say so.
-`route detect` is a baseline classifier; Planner `### Routing` is authoritative.
+MAIN records returned Reviewer evidence with `harness context put review_verdict
+<file|->`, JSON `{"verdict":"LGTM","sha":"<commit>"}`. Empty pending state alone
+does not prove review occurred. `harness done` must exit 0 before completion.
+IMPLEMENTATION/ANALYSIS/VERIFICATION always pass; PLAN/REVIEW are skipped only
+on TRIVIAL, QA/VISUAL follow requirements. Planner routing is authoritative.
+Unknown/NOT_RUN/PARTIAL checks never pass required gates. Expert requires a
+prior Builder attempt plus real verify FAIL or serious architectural review defect.
 
-#### Codex progress visibility
+Inline review publishes the committed verified diff before Reviewer. Local
+review initializes idempotently before Reviewer, preserving findings, and
+publishes after clean `harness done`. Both PR commands require a descriptive
+single-line title ≤72 characters and body file containing a concise summary, usually 100–200 words, of
+actual changes, checks/results, and source reference. Do not paste the full
+requirements. The usual 100–200 word length is writing guidance, not a
+helper-enforced minimum. Empty diff stops. Auto-merge is opt-in; stop on merge conflict.
 
-While a goal runs, subagent milestones land in `harness.events`. Watch them with:
+#### Codex progress and worker lifecycle
 
-```bash
-.codex/scripts/goal-git.sh harness progress
-# or: $goal --status
-# or: tail -f .codex/goal-progress.log
-```
+MAIN inspects supported launch fields, reserves, launches, and confirms with
+the actual agent ID. A failed launch is released through `spawn-fail`; an
+uncertain outcome stays held until reconciled. Permit one targeted launch
+retry, otherwise save/stop. Missing tools/auth/permissions/network/locks are
+blockers, not permission to implement in MAIN or escalate to Expert.
 
-MAIN emits start/complete around every spawn. Write-capable agents
-emit mid-run `progress` events. Read-only `planner`/`researcher` report a
-`## Milestones` block that MAIN replays. Codex hooks
-(`SubagentStart`/`SubagentStop` in `.codex/hooks.json`) bracket every agent
-automatically once the project `.codex/` layer is trusted. Use Codex `/agent`
-to jump into a live child thread — the parent wait view filters child tokens
-by design.
+Wait for every launched worker, record its result, close the thread with a
+supported tool, then record closure through the helper's spawn lifecycle.
+All workers return milestones/tasks/findings; MAIN records them serially.
+Reviewer/Visual Reviewer supply evidence for resolution and MAIN applies the
+requested actions. Workers never write harness or review state themselves.
+Hooks may bracket lifecycle events, but cannot substitute for confirmed
+launches or worker evidence. Watch recorded progress with `harness progress`,
+`$goal --status`, or `.codex/goal-progress.log`; `/agent` opens a live child.
+Avoid repeated status polling turns.
 
 ### Qoder
 ```bash
@@ -321,14 +415,18 @@ PR bodies include `Closes #N` so merging closes the forge issue.
 ### Inline PR/MR review (`review_mode: inline`, default)
 Reviewers post inline comments on GitHub/GitLab and **must** resolve threads when
 issues are fixed (`goal-git.sh resolve`). The coordinator (MAIN on Cursor/Codex)
-delegates fixes to builders until `pending` returns exit 0.
+delegates fixes to builders until `pending` returns exit 0. For Codex, workers
+return findings/resolution evidence and MAIN applies review actions serially;
+Reviewer LGTM must also match the committed SHA.
 
 ### Local review (`review_mode: local`)
 Reviewers read `goal-git.sh diff` and record findings in gitignored `.goal-review/`
 via `review add` / `review resolve`. No PR is created until review is clean; the
 coordinator (MAIN on Cursor/Codex) commits locally during the fix loop, then `push` + `pr` in DONE.
 Gate: `review pending` exit 0. On Codex/Cursor, `review iterate` is a counter only;
-required re-review continues until findings are clean.
+required re-review continues until findings are clean. Codex MAIN initializes
+local review idempotently, records returned worker findings, and commits before
+analysis/verify/review so all evidence uses the final clean committed HEAD.
 
 ### Auto-merge (opt-in)
 When `auto_merge` is `true` (set via `/init-goal`), the coordinator runs
@@ -409,8 +507,7 @@ classifier; after planning, the Planner's `### Routing` block (`route`,
 "feature" and Visual is not implied by "frontend".
 
 The coordinator delegates automatically (OpenCode `@mentions`, Claude/Qoder
-orchestrator subagent, Cursor MAIN Agent/Task, Codex MAIN `spawn_agent` with
-`agent_type`). Cursor models default to
+orchestrator subagent, Cursor MAIN Agent/Task, Codex MAIN delegation using the supported live tool schema). Cursor models default to
 `inherit`; optional per-role pins live in `.cursor/goal-models.json` (no spawn-time
 model pick).
 
@@ -419,14 +516,14 @@ model pick).
 The loop is the same. These are the harness limits:
 
 - **Codex has no slash commands.** Custom prompts were removed in CLI 0.117.0. Use `$goal`.
-- **Codex CLI 0.138.0+** is required. 0.137.0 hid `agent_type` from `spawn_agent`, which blocks custom-agent delegation.
+- **Codex delegation requires supported live tools.** Inspect role/model/effort capability in the actual launch schema; a version number alone does not prove support. Save/stop if required capability is missing and resume with `$goal --continue`. Never prescribe unsupported `agent_type`/`fork_turns` or implement in MAIN.
 - **Codex `.codex/config.toml` loads only for trusted projects.** `goal-git.sh codex ensure-user-config` writes `trust_level = "trusted"` into `~/.codex/config.toml` without changing an existing global `max_depth`. The project config uses depth 1 because MAIN spawns workers directly. A newly trusted project may need a new Codex session before its config loads; resume with `$goal --continue`.
 - **Codex and Cursor harness** (`harness` / `verify` / `route` / `complexity` / `groups` on `goal-git.sh`) plus `researcher` / `qa` ship on those targets; Claude/OpenCode/Qoder keep the prior six-agent loop. Gates are evidence-backed; `analyze` is not part of `verify`. Models: Codex uses `.codex/goal-models.json` `$routing` at spawn; Cursor defaults to `inherit` with optional per-role frontmatter pins (no spawn-time model override). TRIVIAL skips Planner; spawn budgets cap runaway loops.
 - **Cursor delegation is one level.** `/goal` (MAIN) delegates directly to planner/builder/reviewer/etc. MAIN stays active through all gates. If Cursor withholds the Agent/Task tool, stop with a capability blocker and resume with `/goal --continue`; builders must never spawn subagents.
 - **Codex visual-reviewer** hard-fails rather than downgrading to a text-only model. Vision allowlist is `$capabilities.vision_models` in `goal-models.json` (edit per project).
 - **Codex and Cursor cannot machine-enforce `edit: deny`** on MAIN coordination, `reviewer`, or `visual-reviewer`. MAIN's no-source-edit rule is instruction-enforced. (Claude Code uses a `tools` allowlist; OpenCode uses `permission.edit: deny`.)
 - **Goal-loop installs auto-approve tool prompts** (paths, bash, MCP) on all five targets so agents are not interrupted for permission dialogs. MAIN/planner/reviewer do not edit application source during Cursor/Codex goals.
-- **Model fallback is OpenCode-only** for automatic plugin fallbacks; Codex uses `goal-git.sh models <role> --next` at spawn time (vision-filtered for multimodal roles via `$capabilities.vision_models`).
+- **Model fallback is OpenCode-only** for automatic plugin fallbacks; Codex uses `goal-git.sh models <role> --complexity <LEVEL> --next <failed-model>` at spawn time (vision-filtered for multimodal roles via `$capabilities.vision_models`).
 - **Cursor and Codex have no `$ARGUMENTS` expansion.** Command skills read the text typed after `/goal` or `$goal` from the user message.
 - **Installing `--cursor` and `--codex` together** surfaces the goal skills twice in Cursor, because Cursor also scans `.agents/skills/`.
 ## Requirements
@@ -445,5 +542,5 @@ Per target:
 - **OpenCode**: [OpenCode](https://opencode.ai) with OpenCode Go and Zen credentials; `@razroo/opencode-model-fallback`
 - **Cursor**: Cursor IDE or `cursor-agent` CLI
 - **Claude Code**: `claude` CLI
-- **Codex**: `codex` CLI >= 0.138.0; project must be trusted so `.codex/config.toml` loads
+- **Codex**: trusted project config, Python 3.11+ (or Python with `tomli`), and live delegation support for the required role/model/effort; inspect actual tool capabilities
 - **Qoder**: `qoder` CLI

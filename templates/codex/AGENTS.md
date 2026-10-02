@@ -1,120 +1,133 @@
 # Codex goal workflow
 
-This project uses Goal Architecture Loop Engineering. `$goal` runs on MAIN;
-MAIN coordinates the full goal and directly spawns the specialized workers.
-There is no orchestrator subagent. MAIN stays active through planning,
-implementation, deterministic verification, review, conditional QA/visual
-checks, and delivery. MAIN does not edit application source; builders do.
+`$goal` runs Goal Architecture Loop Engineering on MAIN. MAIN coordinates
+Planner, Researcher, Builder, Builder Expert, Reviewer, QA, and Visual Reviewer
+directly, waits for their results, and owns delivery. MAIN delegates all
+application source edits and rework to builders. There is no orchestrator child.
 
-## Setup and entry points
+## Entry and source intake
 
-Run `$init-goal` once after `init.sh --codex` to choose goal source, target
-branch, git platform, concurrency, review mode, and auto-merge. Configuration
-lives in `.codex/goal-config.json`. `$init-skills` optionally installs curated
-domain skills. Codex uses skills, not custom slash commands:
+After `init.sh --codex`, run `$init-goal` to configure source, target branch,
+forge, concurrency, review mode, optional Figma, and auto-merge. Configuration
+lives in `.codex/goal-config.json`; worker routing lives in `goal-models.json`.
+Use skills: `$goal <objective>`, `$goal --list`, `$goal --status`,
+`$goal --continue [id] [instruction]`, or `$goal --issues [url] [count]`.
+`$create-issues <path.md>` is a separate publishing skill outside the goal loop.
 
-```text
-$goal <objective>
-$goal --list
-$goal --status
-$goal --continue [id] [new instruction]
-$goal --issues [url] [count]
-$create-issues <path.md>  # standalone; outside the goal loop
-```
+Complete source intake before branch/worktree mutations. Persist the full
+prompt objective, Markdown draft contents, or Jira ticket as a source snapshot
+with `type`, `title`, `body`, `reference`, and `acceptance_criteria`, then use
+`start ... --source-file <snapshot.json>`. Discover actual Jira MCP tools at
+runtime and read the full ticket; never invent tool names or start from its
+summary alone. Issues retain the selected list URL, run and repository identity
+through `issues start <n> --url <url> [--worktree]`.
 
-Sources: `prompt` (free text), `markdown` (draft plan input), `jira` (requires
-Atlassian MCP), and `issues` (one branch and PR per issue). New Markdown
-`auto`/`task` goals use planner delivery groups: typed branches, isolated
-worktrees, one PR per group, and no aggregation PR. `single` keeps one PR;
-existing in-progress single-PR Markdown goals stay single-PR.
+New Markdown `auto`/`task` goals use Planner delivery groups: one typed branch,
+isolated worktree, harness, and PR per group. No aggregation PR. `single` and
+legacy in-progress single-PR goals retain one PR. Multi-repo goals preserve
+repository boundaries, explicit repo selectors, separate checks, and per-repo PRs.
 
-`$goal` is the execution contract. Its main skill stays compact and reads
-only the relevant `references/` file for normal execution, Markdown groups,
-or issue queues. Do not load every workflow reference for an unrelated goal.
+## Helper and execution context
 
-## Agent responsibilities and routing
+`.codex/scripts/goal-git.sh` is the sole operational entry for Git, forge,
+worktrees, configuration, models, harness, groups, issues, and workflow state.
+Use `help`, `doctor --json`, and `context --json`. Resolve absolute
+`WORKFLOW_ROOT`, `TARGET_WORKTREE`, and local `GOAL_GIT` from context with
+explicit `GOAL_ID`, `GOAL_RUN_ID`, `GOAL_ISSUE`, `GOAL_GROUP`, `GOAL_TASK`, and
+`GOAL_REPO` selectors. Carry every selector in every invocation; use explicit
+empty values only for inapplicable selectors. For issues also carry
+`GOAL_ISSUE_REPO`, the forge repository identity; `GOAL_REPO` is the configured
+local repo key. These selectors serve different purposes. Never inherit a shared active
+goal/group implicitly. Validate the returned identity before edits or mutations.
+
+Worktree creation/resume automatically syncs managed `.codex` scripts, agents,
+and config, `.agents` workflow skills, and ignored `AGENTS.md` instructions.
+`worktree sync <absolute path>` refreshes existing worktrees when needed. It
+copies instructions/configuration, never workflow state, locks, progress,
+review files, or another worker's artifacts. The local helper resolves the
+single state authority at `WORKFLOW_ROOT`; a worktree has no independent state.
+
+Workers read/edit/check code only in their assigned `TARGET_WORKTREE`. MAIN
+passes concrete paths, all selectors, task scope, source/acceptance criteria,
+relevant context or findings, and expected handoff. Brief values are not shell
+environment exports. Stop and return a context mismatch to MAIN.
+
+## Roles and launch lifecycle
 
 | Role | Responsibility |
 |---|---|
-| MAIN (`$goal`) | Sequence phases, own harness/git/state, spawn and wait for workers, enforce gates, report result |
-| `planner` | Architecture plan and route/QA/visual/research signals; skipped only when classify says TRIVIAL |
-| `researcher` | One concrete unresolved research question; conditional |
-| `builder` | Implement and stage scoped changes; also handles rework |
-| `builder-expert` | Escalation after Builder plus real verify failure or serious architectural review finding |
-| `reviewer` | Diff-first correctness review and thread resolution; skipped when TRIVIAL |
-| `qa` | Acceptance scenarios when `requirements.qa=true` |
-| `visual-reviewer` | Multimodal UI check when `requirements.visual=true` |
+| MAIN | Serial workflow/state writes, launch lifecycle, gates, commits and delivery |
+| Planner | Discovery, tasks, routing and QA/visual/research signals; skipped on TRIVIAL |
+| Researcher | One unresolved technical question; conditional |
+| Builder | Scoped implementation/rework, targeted checks, staging |
+| Builder Expert | Focused escalation after Builder plus real verify FAIL or serious architectural review defect |
+| Reviewer | Independent committed-diff review and evidence for findings/resolutions |
+| QA | Acceptance scenarios when `requirements.qa=true` |
+| Visual Reviewer | Rendered UI evidence when `requirements.visual=true`; vision model required |
 
-MAIN resolves worker model and reasoning effort from `.codex/goal-models.json`
-`$routing` using `goal-git.sh models <role> --complexity <LEVEL>`, then passes
-both values to `harness spawn` and `spawn_agent`. Worker TOMLs do not pin
-models. MAIN's own session model is selected by the user. Visual Reviewer
-requires a model from `models visual-reviewer --require-multimodal` and the
-catalog's `$capabilities.vision_models`; never downgrade to text-only.
+MAIN resolves model/effort with `models <role> --complexity <LEVEL>`; add
+`--require-multimodal` for Visual Reviewer, including `--next <failed-model>`
+on fallback. Inspect the live launch tool schema and use supported fields to
+supply role instructions, model, and effort. Do not prescribe `agent_type` or
+`fork_turns` blindly. Missing required delegation/model/vision capability is a
+saved blocker; never implement in MAIN or substitute a text model.
 
-Use `harness spawn <role> <model> <effort>` before every worker and wait for
-its result. Keep worker briefs small: relevant task/context, diff or findings,
-absolute `WORKFLOW_ROOT`, `TARGET_WORKTREE`, and `GOAL_GIT` paths, assignment
-IDs (including `GOAL_ISSUE` for issues), and expected handoff. Validate the
-helper and worktree before spawning. Brief values are not automatically
-exported into worker shells. Avoid repeated status polling.
-Read live milestones via `goal-git.sh harness progress`, `$goal --status`, or
-`.codex/goal-progress.log`; `/agent` opens a live child thread.
+`harness spawn <role> <model> <effort> [--task tN]` reserves budget and returns
+`reservation.id` without counting a run. After launch succeeds, MAIN calls
+`harness spawn-confirm <reservation-id> <agent-id>` to store the child and count
+it. On launch failure, `harness spawn-fail <reservation-id> <category> <reason>`
+releases a definitively failed reservation; uncertain outcomes remain held for
+reconciliation. Retry a diagnosed launch blocker once; otherwise
+save/stop. `recover-spawn` handles only launch blockers and restores the
+original phase. Wait for every launched worker, record its result, then close
+its thread using the available supported tool, then `harness spawn-finish
+<agent-id> completed|failed --closed`. Resume existing live agents
+without duplicating launches.
 
-All agents follow ponytail full mode: question unnecessary code, reuse
-existing/native code before dependencies, prefer the smallest working diff,
-mark deliberate simplifications with `ponytail:` comments, and leave a
-runnable check for nontrivial logic.
+All workers return milestones, task results, and findings for MAIN to record
+serially. Workers never write harness events/tasks/gates/context or review
+state. Reviewer/Visual Reviewer alone supply evidence that a finding is fixed;
+MAIN executes their requested review actions through the helper.
+`harness progress`, `$goal --status`, and `.codex/goal-progress.log` show recorded
+milestones; `/agent` opens the child thread. Avoid repeated polling turns.
 
-## Harness and definition of DONE
+## Gates and delivery
 
-The project-root `state.json` carries goal history and the active `harness`.
-MAIN manages phases, tasks, retries, evidence, and compact context artifacts
-through `.codex/scripts/goal-git.sh`. `complexity classify` returns TRIVIAL,
-NORMAL, COMPLEX, or ARCHITECTURAL. `route detect` is only a baseline;
-Planner's routing is authoritative when Planner runs.
+IMPLEMENTATION, ANALYSIS, and VERIFICATION are always required. PLAN/REVIEW
+are required unless TRIVIAL; QA/VISUAL follow harness requirements. After each
+reconciled staged implementation batch: MAIN commit, analysis, then formal
+`verify run`, review, and required QA/visual checks. Only `verify run` passes
+VERIFICATION. Evidence is bound to the committed SHA and assignment; rework
+invalidates it and repeats commit → analysis → verify → fresh review/checks.
 
-Always required: IMPLEMENTATION, ANALYSIS, VERIFICATION. PLAN and REVIEW are
-required unless classify says TRIVIAL; QA and VISUAL are required only when
-their harness requirement is true. IMPLEMENTATION needs all builder/expert
-tasks DONE; ANALYSIS is run once after each reconciled implementation batch;
-only `verify run` may pass VERIFICATION. REVIEW needs reviewer verdict and
-zero unresolved inline/local findings. QA needs a spawned QA run and clean
-`harness qa pending`; VISUAL needs a spawned visual run and clean `harness
-visual pending`. `harness done` must exit 0 before `state complete`.
+MAIN records actual Reviewer evidence with `harness context put review_verdict`
+as JSON `{"verdict":"LGTM","sha":"<commit>"}` before passing REVIEW. Zero
+pending findings alone is insufficient. QA/visual need confirmed worker runs,
+recorded scenarios/observations, and clean pending checks. `harness done` must
+exit 0 before completion. Unknown/not-run checks and blocked workers never pass.
 
-On review/QA/visual or real verification failure, MAIN delegates a new
-builder, re-analyzes the reconciled batch, re-runs `verify run`, and spawns a
-fresh Reviewer as required. Rework continues until review is clean; explicit
-escalation and verify-retry limits still stop failures. Only reviewers resolve
-review threads. `analyze` (GitNexus + tooling) is separate from application
-verification. Builders run targeted checks; MAIN runs repository-wide analysis
-once per batch.
+Inline mode publishes before Reviewer. Local mode runs idempotent `review init`
+before Reviewer, preserving existing findings; publish only after a clean
+harness. Every `pr` or `groups pr <id>` requires `--title <short title>
+--body-file <path>`: descriptive single line at most 72 characters, description, preferably 100–200 words, of actual changes, checks, and source reference. Do not paste full
+requirements. Empty diff stops delivery. Merge only with `auto_merge=true`;
+otherwise report ready for manual merge. Stop on merge conflict.
 
-Concurrent independent tasks use isolated worktrees. One Markdown delivery
-group owns one typed branch, worktree, harness, and PR; never put two builders
-in its worktree. Multi-repo work preserves repo boundaries and per-repo PRs.
+## CLI boundary
 
-## Git and state boundary
+All operational failures use helper structured diagnostics and `doctor --json`.
+The helper capability-probes installed CLIs and uses supported flags. Read-only
+`git`/`gh`/`glab` help/version inspection is allowed; actual mutations and forge
+operations use the helper. Never fall back to web search, browser, `--web`, or
+ad hoc `gh`/`glab` operations to complete a failed command. Authentication or
+permission blockers stop with the suggested local command; never launch browser
+login automatically. No automatic upgrades. CLI documentation lookup belongs
+to maintenance outside active operations. Researcher may browse for unrelated
+implementation questions; UI browser checks remain available for application QA.
 
-Never invoke `git`, `gh`, or `glab` directly during a goal. Use
-the absolute `GOAL_GIT` resolved by MAIN and passed in each worker brief for
-start/continue, worktrees, stage/commit, push/PR, pending threads, review findings, merge, harness, groups, issues,
-models, and state. MAIN may commit and publish after Builder stages; builders
-never push. In local review mode, create the PR after clean local review.
-In inline mode, create/update it before Reviewer. Auto-merge is opt-in; when
-off, report "Ready for manual merge." Stop on merge conflict.
-
-Workers run code reads, edits, and tests in `TARGET_WORKTREE`, while the helper
-uses shared runtime/state in `WORKFLOW_ROOT`. Do not assume `.codex/` exists
-in a worktree. Preserve the assigned `GOAL_ISSUE` on every issue helper call;
-MAIN owns delivery-group activation and serializes shared-state mutations.
-
-Project runtime files `.codex/`, `state.json`, `.worktrees/`, and
-`.goal-review/` are gitignored. `design-system/` is durable and tracked when
-UI design guidance is generated. Figma is optional and, when configured, is
-the visual source for Planner, Builder, and Visual Reviewer.
-
-`$create-issues` is separate from `$goal`: it publishes one forge issue per
-task checkbox under a Markdown `### Tasks` heading. It does not use the goal
-harness, branches, or PRs. See `.agents/skills/create-issues/SKILL.md`.
+All roles follow ponytail full mode: reuse existing/native code, keep the
+smallest useful diff, mark deliberate simplifications with `ponytail:` where
+useful, and provide meaningful targeted checks for nontrivial logic.
+Runtime `.codex/`, `state.json`, `.worktrees/`, and `.goal-review/` are ignored;
+`design-system/` is durable tracked UI guidance. Figma is optional.
+Follow `$goal` and its relevant references for detailed commands.

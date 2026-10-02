@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPTS_DIR/../../../.." && pwd)"
 CONFIG_FILE="$PROJECT_ROOT/.codex/goal-config.json"
+# Standalone issue creation shares transport/capabilities, not goal orchestration.
+source "$PROJECT_ROOT/.codex/scripts/forge.sh"
 SKILL_HELP=".agents/skills/create-issues/SKILL.md"
 
 RED='\033[0;31m'
@@ -387,19 +389,33 @@ cmd_parse() {
 }
 
 fetch_existing_titles() {
-  local platform="$1"
-  local repo="${2:-}"
+  local platform="$1" repo="${2:-}" data
   case "$platform" in
     github)
-      local args=(issue list --state all --limit 200 --json title)
-      [ -n "$repo" ] && args+=(--repo "$repo")
-      gh "${args[@]}" | jq -r '.[].title'
+      local endpoint='repos/{owner}/{repo}/issues' host="${GH_HOST:-github.com}"
+      if [ -n "$repo" ]; then
+        forge_api_repo gh "$repo" || return 1
+        endpoint="$FORGE_API_PATH/issues"; host="$FORGE_API_HOST"
+      fi
+      data=$(forge_api_pages gh "$endpoint?state=all&sort=created&direction=asc" "$host") || return 1
+      data=$(printf '%s\n' "$data" | forge_json 'all(.[]; (.title|type)=="string")') || return 1
+      printf '%s\n' "$data" | jq -r '.[] | select(has("pull_request")|not) | .title'
       ;;
     gitlab)
-      local args=(issue list --all --per-page 100 --output json)
-      [ -n "$repo" ] && args+=(--repo "$repo")
-      glab "${args[@]}" | jq -r '.[].title'
+      forge_require_flags glab 'issue list' --all --page --per-page --output --order --sort --repo || return 1
+      forge_repo_args glab "$repo" || return 1
+      local page=1 all='[]'
+      while :; do
+        data=$(forge_run read glab issue list --all --per-page 100 --page "$page" --order created_at --sort asc --output json "${FORGE_REPO_ARGS[@]+"${FORGE_REPO_ARGS[@]}"}") || return 1
+        data=$(printf '%s\n' "$data" | forge_json 'type=="array" and all(.[]; (.title|type)=="string")') || return 1
+        all=$(jq -cn --argjson a "$all" --argjson b "$data" '$a+$b') || return 1
+        [ "$(jq length <<< "$data")" -eq 100 ] || break
+        page=$((page + 1))
+        [ "$page" -le 10000 ] || { forge_error pagination 'Issue pagination did not terminate'; return 1; }
+      done
+      printf '%s\n' "$all" | jq -r '.[].title'
       ;;
+    *) forge_error usage 'Unknown platform'; return 1 ;;
   esac
 }
 
@@ -438,68 +454,37 @@ print_dry_run_issue() {
 }
 
 create_one_issue() {
-  local platform="$1"
-  local title="$2"
-  local body="$3"
-  local repo="${4:-}"
-  local labels_json="$5"
-  local assignees_json="$6"
-  local milestone="${7:-}"
-
-  local -a gh_args=(issue create --title "$title")
-  local -a gl_args=(issue create --title "$title" --yes)
-  local label assignee body_file
-
+  local platform="$1" title="$2" body="$3" repo="${4:-}"
+  local labels_json="$5" assignees_json="$6" milestone="${7:-}"
+  local cli label assignee body_file
+  local -a args=(issue create --title "$title")
+  case "$platform" in
+    github) cli=gh ;;
+    gitlab) cli=glab; forge_require_flags glab 'issue create' --yes || return 1; args+=(--yes) ;;
+    *) forge_error usage 'Unknown platform'; return 1 ;;
+  esac
+  forge_require_flags "$cli" 'issue create' --title --repo || return 1
   body_file=$(mktemp)
   register_tmp "$body_file"
   printf '%s' "$body" > "$body_file"
-
-  case "$platform" in
-    github)
-      gh_args+=(--body-file "$body_file")
-      while IFS= read -r label; do
-        [ -z "$label" ] && continue
-        gh_args+=(--label "$label")
-      done < <(echo "$labels_json" | jq -r '.[]')
-      while IFS= read -r assignee; do
-        [ -z "$assignee" ] && continue
-        gh_args+=(--assignee "$assignee")
-      done < <(echo "$assignees_json" | jq -r '.[]')
-      [ -n "$milestone" ] && gh_args+=(--milestone "$milestone")
-      [ -n "$repo" ] && gh_args+=(--repo "$repo")
-      local url
-      if url=$(gh "${gh_args[@]}" 2>&1); then
-        echo "$url"
-        return 0
-      else
-        err "$url"
-        return 1
-      fi
-      ;;
-    gitlab)
-      local desc
-      desc=$(cat "$body_file")
-      gl_args+=(--description "$desc")
-      while IFS= read -r label; do
-        [ -z "$label" ] && continue
-        gl_args+=(--label "$label")
-      done < <(echo "$labels_json" | jq -r '.[]')
-      while IFS= read -r assignee; do
-        [ -z "$assignee" ] && continue
-        gl_args+=(--assignee "$assignee")
-      done < <(echo "$assignees_json" | jq -r '.[]')
-      [ -n "$milestone" ] && gl_args+=(--milestone "$milestone")
-      [ -n "$repo" ] && gl_args+=(--repo "$repo")
-      local out
-      if out=$(glab "${gl_args[@]}" 2>&1); then
-        echo "$out" | grep -Eo 'https?://[^ ]+' | head -1 || echo "$out"
-        return 0
-      else
-        err "$out"
-        return 1
-      fi
-      ;;
-  esac
+  forge_description_args "$cli" 'issue create' "$body_file" || return 1
+  forge_repo_args "$cli" "$repo" || return 1
+  args+=("${FORGE_DESCRIPTION_ARGS[@]}" "${FORGE_REPO_ARGS[@]+"${FORGE_REPO_ARGS[@]}"}")
+  while IFS= read -r label; do
+    [ -z "$label" ] && continue
+    forge_require_flags "$cli" 'issue create' --label || return 1
+    args+=(--label "$label")
+  done < <(echo "$labels_json" | jq -r '.[]')
+  while IFS= read -r assignee; do
+    [ -z "$assignee" ] && continue
+    forge_require_flags "$cli" 'issue create' --assignee || return 1
+    args+=(--assignee "$assignee")
+  done < <(echo "$assignees_json" | jq -r '.[]')
+  if [ -n "$milestone" ]; then
+    forge_require_flags "$cli" 'issue create' --milestone || return 1
+    args+=(--milestone "$milestone")
+  fi
+  forge_run write "$cli" "${args[@]}"
 }
 
 cmd_create() {
@@ -550,7 +535,10 @@ cmd_create() {
   if [ "$ALLOW_DUPLICATES" = false ] && [ "$DRY_RUN" = false ]; then
     EXISTING_TITLES_FILE=$(mktemp)
     register_tmp "$EXISTING_TITLES_FILE"
-    fetch_existing_titles "$platform" "$repo" > "$EXISTING_TITLES_FILE" || true
+    if ! fetch_existing_titles "$platform" "$repo" > "$EXISTING_TITLES_FILE"; then
+      err "Duplicate lookup failed; refusing to create issues"
+      return 1
+    fi
   fi
 
   local created=0 skipped=0 failed=0
@@ -586,6 +574,9 @@ cmd_create() {
     fi
 
     local url
+    # An attempted write may be accepted even when the CLI reports failure.
+    # Reserve its title locally so this batch cannot repeat that uncertain write.
+    if [ -n "$EXISTING_TITLES_FILE" ]; then printf '%s\n' "$title" >> "$EXISTING_TITLES_FILE"; fi
     if url=$(create_one_issue "$platform" "$title" "$body" "$repo" "$merged_labels" "$assignees_json" "$milestone"); then
       log "created $url"
       created=$((created + 1))
@@ -601,7 +592,8 @@ cmd_create() {
   fi
 
   log "summary: created=$created skipped=$skipped failed=$failed"
-  [ "$failed" -gt 0 ] && exit 1
+  [ "$failed" -gt 0 ] && return 1
+  return 0
 }
 
 cmd_status() {
@@ -629,7 +621,7 @@ cmd_status() {
     github)
       if command -v gh >/dev/null 2>&1; then
         log "gh: installed"
-        if gh auth status >/dev/null 2>&1; then
+        if forge_run read gh auth status >/dev/null 2>&1; then
           log "gh auth: ok"
         else
           warn "gh auth: not authenticated (run: gh auth login)"
@@ -641,7 +633,7 @@ cmd_status() {
     gitlab)
       if command -v glab >/dev/null 2>&1; then
         log "glab: installed"
-        if glab auth status >/dev/null 2>&1; then
+        if forge_run read glab auth status >/dev/null 2>&1; then
           log "glab auth: ok"
         else
           warn "glab auth: not authenticated (run: glab auth login)"

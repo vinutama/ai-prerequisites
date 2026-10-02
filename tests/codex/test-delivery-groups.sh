@@ -155,12 +155,21 @@ setup_proj() {
   local dir="$1" strategy="${2:-auto}"
   rm -rf "$dir"
   mkdir -p "$dir/$AGENT_DIR/scripts" "$dir/bin"
-  cp "$SRC_SCRIPTS/goal-git.sh" "$SRC_SCRIPTS/delivery-groups.sh" "$dir/$AGENT_DIR/scripts/"
+  if [ "$AGENT" = codex ]; then
+    cp "$SRC_SCRIPTS/"*.sh "$dir/$AGENT_DIR/scripts/"
+    cp "$ROOT/templates/codex/.codex/goal-models.json" "$dir/.codex/"
+    cp -R "$ROOT/templates/codex/.codex/agents" "$dir/.codex/"
+  else
+    cp "$SRC_SCRIPTS/goal-git.sh" "$SRC_SCRIPTS/delivery-groups.sh" "$dir/$AGENT_DIR/scripts/"
+  fi
+  printf '.codex/\nstate.json\n.worktrees/\nbin/\nerr*.txt\n' > "$dir/.gitignore"
   chmod +x "$dir/$AGENT_DIR/scripts/goal-git.sh"
 
   cat > "$dir/$AGENT_DIR/goal-config.json" <<EOF
 {
   "goal_source": "markdown",
+  "goal_file": "README.md",
+  "forge_repo": "example/repo",
   "target_branch": "main",
   "platform": "github",
   "concurrency": 1,
@@ -203,6 +212,38 @@ case "${1:-} ${2:-}" in
     ;;
 esac
 EOF
+  if [ "$AGENT" = codex ]; then
+    cat > "$dir/bin/gh" <<'PYMOCK'
+#!/usr/bin/env python3
+import json, pathlib, subprocess, sys
+args=sys.argv[1:];store=pathlib.Path(__file__).parent/'requests.json'
+data=json.loads(store.read_text()) if store.exists() else []
+def value(flag): return args[args.index(flag)+1]
+def persist():store.write_text(json.dumps(data))
+if args==['--version']:print('gh fixture 1.0')
+elif '--help' in args:
+ for flag in ('--head','--base','--title','--body-file','--repo','--state','--json','--limit','--hostname','--method','--input','--merge','--match-head-commit'):
+  print('  '+flag+' value  Fixture flag')
+elif args[:2]==['pr','list']:
+ print(json.dumps([r for r in data if r['headRefName']==value('--head') and r['baseRefName']==value('--base') and r['state']=='OPEN']))
+elif args[:2]==['pr','create']:
+ branch=value('--head');sha=subprocess.check_output(['git','rev-parse',branch],text=True).strip()
+ n=101+len(data);r=dict(number=n,url='https://github.com/example/repo/pull/'+str(n),headRefName=branch,baseRefName=value('--base'),headRefOid=sha,state='OPEN',isCrossRepository=False)
+ data.append(r);persist();print(r['url'])
+elif args[:2]==['pr','view']:
+ print(json.dumps(next(r for r in data if r['number']==int(args[2]))))
+elif args[:2]==['pr','edit']:persist()
+elif args[:2]==['pr','merge']:
+ r=next(r for r in data if r['number']==int(args[2]));assert r['headRefOid']==value('--match-head-commit');r['merged']=True;r['state']='MERGED';persist()
+elif args[0]=='api':
+ endpoint=args[1].split('?')[0]
+ if endpoint=='graphql':print(json.dumps({'data':{'repository':{'pullRequest':{'reviewThreads':{'nodes':[],'pageInfo':{'hasNextPage':False,'endCursor':None}}}}}}))
+ elif endpoint.endswith('/files'):print('[{"filename":"README.md"}]')
+ else:
+  r=next(r for r in data if r['number']==int(endpoint.split('/')[-1]));print(json.dumps(dict(r,head=dict(ref=r['headRefName'],sha=r['headRefOid'],repo=dict(full_name='example/repo')),base=dict(ref=r['baseRefName'],repo=dict(full_name='example/repo')))))
+else:raise SystemExit('Unexpected mock call '+repr(args))
+PYMOCK
+  fi
   chmod +x "$dir/bin/gh"
 
   (
@@ -211,15 +252,24 @@ EOF
     git config user.email "test@example.com"
     git config user.name "Test"
     echo "seed" > README.md
-    git add README.md
+    git add README.md .gitignore
     git commit -m "chore: seed" >/dev/null
+    if [ "$AGENT" = codex ]; then
+      git init -q --bare "$dir/bin/origin.git"
+      git remote add origin "$dir/bin/origin.git"
+      git push -qu origin main
+      printf '%s\n' '## Summary' 'Implement the assigned group and verify its scoped changes.' '## Checks' 'Local Git fixture checks passed.' > "$dir/bin/body.md"
+    fi
   )
 }
 
 G() {
   # Run goal-git.sh inside $PROJ with stubs.
-  env GOAL_PLATFORM=github PATH="$PROJ/bin:$PATH" \
-    "$PROJ/$AGENT_DIR/scripts/goal-git.sh" "$@"
+  if [ "$AGENT" = codex ] && [ "${1:-}" = groups ] && [ "${2:-}" = pr ]; then
+    env GOAL_PLATFORM=github PATH="$PROJ/bin:$PATH" "$PROJ/$AGENT_DIR/scripts/goal-git.sh" "$@" --body-file "$PROJ/bin/body.md"
+  else
+    env GOAL_PLATFORM=github PATH="$PROJ/bin:$PATH" "$PROJ/$AGENT_DIR/scripts/goal-git.sh" "$@"
+  fi
 }
 
 start_markdown() {
@@ -328,7 +378,9 @@ G harness task add builder "two" >/dev/null
 # t1 SPAWNING, t2 SPAWNING — second spawn must fail
 G harness task set t1 SPAWNING >/dev/null
 G harness task set t2 SPAWNING >/dev/null
-if G harness spawn builder dummy-model medium >/dev/null 2>"$PROJ/err-spawn.txt"; then
+spawn_model=dummy-model
+[ "$AGENT" != codex ] || spawn_model=$(G models builder --complexity NORMAL | cut -f1)
+if G harness spawn builder "$spawn_model" medium >/dev/null 2>"$PROJ/err-spawn.txt"; then
   fail "harness spawn allowed two SPAWNING builders in one group worktree"
 else
   assert_contains "$(cat "$PROJ/err-spawn.txt")" "Parallel builders cannot share worktree" \
@@ -351,6 +403,16 @@ PY
 
 echo "== 10 each group creates its own PR/MR"
 G groups persist >/dev/null 2>&1 || true
+if [ "$AGENT" = codex ]; then
+  for gid in g1 g2; do
+    G groups activate "$gid" >/dev/null
+    wt=$(jq -r --arg id "$gid" '.[-1].delivery_groups[] | select(.id==$id) | .worktree' "$PROJ/state.json")
+    printf '%s\n' "$gid implementation" >> "$PROJ/$wt/README.md"
+    git -C "$PROJ/$wt" add README.md
+    git -C "$PROJ/$wt" commit -qm "feat: $gid fixture"
+    G push >/dev/null
+  done
+fi
 G groups pr g1 >/dev/null
 G groups persist >/dev/null 2>&1 || true
 G groups pr g2 >/dev/null
@@ -398,6 +460,16 @@ assert_eq "$p1b" "$p1" "resume does not create a duplicate PR"
 assert_eq "$wt_after" "$wt_before" "resume does not create a duplicate worktree"
 
 echo "== 14 failed groups do not corrupt completed groups"
+if [ "$AGENT" = codex ]; then
+  G groups activate g1 >/dev/null
+  sha=$(git -C "$PROJ/$wt1" rev-parse HEAD)
+  jq --arg sha "$sha" '
+    .[-1].harness = {phase:"DONE",tasks:[],spawn_reservations:[],requirements:{planner:false,reviewer:false,qa:false,visual:false},
+      gates:{IMPLEMENTATION:{status:"PASS"},ANALYSIS:{status:"PASS",sha:$sha},VERIFICATION:{status:"PASS",sha:$sha}}}
+  ' "$PROJ/state.json" > "$PROJ/.codex/seed.json"
+  mv "$PROJ/.codex/seed.json" "$PROJ/state.json"
+  G groups persist >/dev/null
+fi
 G groups merge g1 >/dev/null
 # Simulate g2 failure without touching g1
 python3 - <<PY

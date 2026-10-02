@@ -1,104 +1,108 @@
 # Common goal execution
 
-MAIN owns this state machine and every worker spawn. The harness, not an
-agent's claim, decides completion. Use only the absolute `GOAL_GIT` resolved
-from `WORKFLOW_ROOT` for git/state. Read `state` and `config get` at start and after a resumed phase.
-Preserve `goal_source`, multi-repo paths, `review_mode`, `auto_merge`,
-concurrency, and retry limits. Keep each child brief focused on the relevant
-handoff: `discovery_context`, `implementation_plan`, `research_report`, staged
-diff, review findings, QA findings, or visual findings, plus the execution
-context required by SKILL.md.
+MAIN owns the state machine and every worker launch. Read config/state with
+explicit selectors and follow [commands](commands.md) for context, launch,
+forge diagnostics, and metadata. Preserve source snapshots, multi-repo scope,
+review mode, auto-merge, concurrency, and retry limits on resume.
 
 ## Plan and route
 
-Classify a short title (not a full Markdown spec). For TRIVIAL, run `route
-detect`, then `harness init --route <route> --qa false --visual false
---complexity TRIVIAL --planner-required false --reviewer-required false`, and
-enter BUILDING. For other levels, provisionally `harness init --route feature
---qa false --visual false --complexity <LEVEL> --planner-required true
---reviewer-required true`; resolve/spawn Planner and wait. Give Planner goal,
-source, Markdown path if applicable, continuation instruction, and repo scope.
-Require route, research/QA/visual signals, risks, acceptance criteria, task
-plan, `discovery_context`, and delivery groups for Markdown multi-PR. Replay
-Planner's read-only `## Milestones` into `harness event planner ...`.
+Classify a short title, preserving the full source separately. TRIVIAL uses
+`route detect` and `harness init --route <route> --qa false --visual false
+--complexity TRIVIAL --planner-required false --reviewer-required false`.
+Otherwise initialize provisionally, reserve/launch/confirm Planner, and wait.
+Give Planner the persisted source body/acceptance criteria, continuation,
+and repo scope. Markdown contents are a draft, not an accepted plan. Require
+routing, research/QA/visual signals, risks, numbered Builder tasks, compact
+`discovery_context`, and delivery groups when applicable.
 
-Initialize the final harness from Planner routing signals, then put the compact
-`discovery_context` via `harness context put discovery_context -` and run
-`harness gate PLAN PASS`. Init preserves prior metrics/events/tasks but context
-must be persisted after final init. Research only if Planner gives a concrete
-unresolved question: phase RESEARCHING, spawn Researcher once, save
-`research_report`, replay milestones, then enter BUILDING. Do not repeat repo
-discovery in MAIN.
+MAIN records returned milestones. Initialize final requirements from Planner,
+then `harness context put discovery_context -` and `harness gate PLAN PASS`.
+Persist after final init. Research only a precise unresolved question; enter
+RESEARCHING, launch Researcher, store returned `research_report`, record its
+milestones, and enter BUILDING. MAIN does not repeat repository discovery.
 
 ## Build and escalation
 
-Execute planner tasks in dependency order. With `concurrency>1`, parallelize
-only independent file sets in isolated worktrees and merge them sequentially.
-In an issue queue, count workers across all active issues against this one
-limit; do not grant each issue its own pool of `concurrency` workers.
-Multi-repo tasks carry an explicit repo path and retain per-repo verification.
-For each task: `harness task add builder <title>`, set SPAWNING, resolve worker
-model/effort, `harness spawn`, `spawn_agent`, then set RUNNING. In a parallel
-issue batch, start other ready issue workers before waiting; otherwise wait
-now. On success mark DONE; on failure mark BLOCKED/FAILED. Builders stage changes and
-return a compact handoff; they do not commit or push. A rework Builder is a
-fresh thread with findings + diff + verify summary, not the previous transcript.
+Execute tasks in dependency order. Parallelize independent file sets only in
+isolated worktrees and reconcile serially. A queue's concurrency is a global
+worker cap across issues. Multi-repo tasks select `GOAL_REPO` explicitly and
+retain per-repo checks and PRs. One Builder owns a checkout at a time.
 
-Builder Expert is escalation-only after Builder has attempted the task and
-`verify run` truly FAILs or Reviewer identifies a serious architectural
-defect. Complexity or Planner risk labels alone are not triggers. Use
-`harness retry escalations`, phase ESCALATED, spawn Expert with one focused
-problem, then return to BUILDING. Missing tooling, environment, lock, network,
-or UNKNOWN verification is a blocker, not an expert/model escalation.
+MAIN `harness task add builder <title>`, sets SPAWNING, resolves model/effort,
+reserves `harness spawn ... --task tN`, then launches and confirms the actual
+child ID before RUNNING. Start other ready workers before waiting in a parallel
+batch. Builders stage only scoped changes and return task IDs/results/checks;
+MAIN records DONE/BLOCKED/FAILED and milestones. Builders do not commit/push or
+write workflow state. Rework gets a fresh thread with findings, changed diff,
+and verify summary; omit the full prior transcript.
 
-## Analyze and verify
+Expert is escalation-only after Builder has attempted the task and `verify run`
+truly FAILs or Reviewer identifies a serious architectural defect. Planner risk,
+complexity, or a Builder blocker alone is insufficient. MAIN increments
+`harness retry escalations`, enters ESCALATED, launches Expert for one problem,
+then returns to BUILDING. Missing tooling/auth/permissions/network/locks or
+UNKNOWN verification is a saved blocker, not Expert/model escalation.
 
-After all implementation tasks are DONE and no tasks are pending/running,
-`harness gate IMPLEMENTATION PASS`, run `goal-git.sh analyze` once for the
-reconciled batch, then enter VERIFYING and run `verify run`. Do not create tasks
-or spawn workers in VERIFYING. ANALYSIS must pass first; `analyze` does not
-replace application verification. Only `verify run` may set VERIFICATION PASS.
-On a real FAIL, use Expert if eligible; otherwise increment
-`harness retry verify_retries`, enter REWORK → BUILDING, and spawn Builder.
-After any code change, analyze and verify again. Stop with FAILED when a hard
-retry limit is exhausted; never mark UNKNOWN/NOT_RUN as PASS.
+## Commit, analyze, and verify
+
+After every implementation task is DONE and results are reconciled/staged,
+MAIN commits the reconciled staged source through `commit <message>` first.
+Confirm final committed clean HEAD, capture its SHA from helper evidence, pass
+IMPLEMENTATION, and run `analyze` once on that commit. Then enter VERIFYING
+and run `verify run`. Order: commit → ANALYSIS → formal verification → review/QA/visual.
+All gate SHA evidence must point to this final committed clean HEAD; never run
+ANALYSIS or formal checks on staged-only source and attach them to a later commit.
+Do not create tasks or spawn implementation workers in VERIFYING.
+
+Only `verify run` can pass VERIFICATION; analysis is separate. On real FAIL,
+escalate if eligible or increment `harness retry verify_retries` and enter
+REWORK → BUILDING with a new Builder. Rework invalidates SHA-bound evidence;
+repeat commit/analyze/verify and required review/checks. Hard retry exhaustion
+stops with FAILED. UNKNOWN/NOT_RUN never means PASS.
 
 ## Review, QA, and visual
 
-Use `review_mode` from config. In inline mode, commit/push/create or update
-the PR before review; Reviewer records inline findings and resolves threads
-after confirming fixes. In local mode, `review init` and review the diff
-locally; push/create the PR only after the review gate is clean. Only Reviewer
-or Visual Reviewer may comment on or resolve review threads. When Reviewer is
-required, spawn it for the initial diff and after every rework push; a verdict
-of LGTM plus `pending` or `review pending` exit 0 is needed for REVIEW PASS.
-When reviewer is not required, honor the harness's SKIPPED gate.
+Inline: publish the committed verified diff with mandatory title/body metadata
+before Reviewer. Local: MAIN runs idempotent `review init` before Reviewer,
+preserving prior findings, and publishes only after clean `harness done`.
+An empty diff stops publication. Launch Reviewer when required, on the initial
+committed diff and after every rework commit. Pass the SHA and verification
+report. Reviewer/Visual Reviewer return findings and evidenced resolution
+requests; MAIN applies them serially through the helper. Workers never write
+review or harness state themselves.
 
-Spawn QA only when `requirements.qa=true`; require a QA run, recorded
-acceptance scenarios, `harness qa pending` exit 0, and QA PASS. Spawn Visual
-Reviewer only when `requirements.visual=true`; first resolve a vision-capable
-model with `models visual-reviewer --require-multimodal`, then require a visual
-run, viewport observations, `harness visual pending` exit 0, and VISUAL PASS.
-Use the same viewport key when closing a visual failure. Never forge findings
-or gate evidence after a failed spawn.
+MAIN records actual Reviewer JSON `{"verdict":"LGTM","sha":"<commit>"}` via
+`harness context put review_verdict <file|->`. REVIEW requires matching current
+SHA/assignment and zero unresolved `pending` (inline) or `review pending`
+(local). Empty pending state alone is not LGTM. Honor SKIPPED when TRIVIAL.
 
-On review/QA/visual findings: collect the unresolved items, increment rework,
-enter REWORK → BUILDING, spawn a new Builder with findings and changed diff,
-then analyze → VERIFYING → `verify run` → fresh Reviewer and applicable
-QA/Visual. Review/rework continues until clean; verify-retry and escalation
-limits still hard-stop. A Builder returning FIXES_COMPLETE is a handoff, not
-permission to idle or skip re-review.
+QA runs only for `requirements.qa=true`. MAIN records returned scenario evidence
+with `harness qa add`; PASS requires a confirmed QA run, complete runtime
+evidence for required scenarios, clean `harness qa pending`, and the current SHA.
+Visual runs only for `requirements.visual=true`. Resolve
+`models visual-reviewer --complexity <LEVEL> --require-multimodal`; preserve
+both flags with `--next`. MAIN records returned viewport observations with
+`harness visual add`. PASS needs a confirmed visual run and clean
+`harness visual pending` bound to current SHA. Recheck using the same scenario/
+viewport key; preserve historical failures. Partial/static-only limitations
+must not be presented as completed runtime evidence.
+
+On findings increment rework, enter REWORK → BUILDING, launch a fresh Builder,
+then commit → analyze → VERIFYING → `verify run` → fresh Reviewer and required
+QA/Visual. FIXES_COMPLETE is a handoff to continue the loop. Review iterations
+and spawn caps cannot justify LGTM; explicit verify/escalation limits still stop.
 
 ## Finish and resume
 
-Before completion, run `harness done` (required PLAN unless trivial,
-IMPLEMENTATION, ANALYSIS, VERIFICATION, REVIEW unless trivial, conditional
-QA/VISUAL). In inline mode confirm pending PR threads are clean. In local mode
-push/create the PR after a clean harness. If `auto_merge=true`, merge only
-after clean review and stop on conflict; otherwise report ready for manual
-merge. Run `state complete` after all required delivery work is done.
+Run `harness done` only after all required SHA-bound evidence is current. Inline
+threads must be clean; local publication follows the clean harness. Deliver one
+PR per repo/issue/group using `--title` and `--body-file`. Auto-merge is opt-in;
+stop on conflict, otherwise report ready for manual merge. `state complete`
+follows required delivery, and all groups must be completed/merged/cancelled.
 
-On `$goal --continue`, read the persisted phase/tasks/gates and continue from
-there. `harness recover-spawn` only when FAILED or SPAWNING/BLOCKED state
-needs recovery. Do not rerun accepted planning, completed tasks, or a passed
-verify gate unless new code changed. Reuse existing branch/PR/worktree IDs.
+On continue restore selectors and persisted source, tasks, gates, reservations,
+and live child IDs. Wait/record/close existing workers before duplicating any
+launch. Recover only launch blockers with `harness recover-spawn`, restoring
+the original phase. Reuse accepted planning and current-SHA evidence; new source
+edits/rework invalidate prior evidence. Reuse existing branch/PR/worktree IDs.

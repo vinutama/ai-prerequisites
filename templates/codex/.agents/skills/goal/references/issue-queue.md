@@ -1,51 +1,49 @@
 # Issue goals and queues
 
-Set `GOAL_RUN_ID` for a new invocation; on continue restore the persisted run
-ID. Resolve list URL and count from arguments or config, run `issues list`,
-and retain one branch and one PR per issue. For exactly one issue, run
-`issues start <n>` and the normal goal loop without a queue-level Planner.
+Establish `GOAL_RUN_ID` for a new invocation and restore it on continue. Resolve
+the list URL/count from arguments or config; explicit overrides persist through
+start/resume. Use `issues list <url> <count>` and retain full issue body and
+acceptance criteria before branch mutation. Run `issues start <n> --url <url>
+[--worktree]`, carrying run and repo identity. Do not let configured repository
+or URL silently replace the list override. Exactly one issue bypasses queue-level
+Planner and follows the common execution loop.
 
-For 2+ issues, spawn one queue-level Planner to order dependencies, predict
-file ownership, and form batches of disjoint issues (width at most configured
-`concurrency`). Treat that number as a **global worker limit**, not a limit per
-issue. Multi-repo issue queues remain sequential. If overlap or dependency is
-uncertain, put the issues in different batches.
+For 2+ issues, one queue Planner predicts file ownership, orders dependencies,
+and forms batches of disjoint issues. Width is at most configured `concurrency`,
+a global worker limit across all active issues. Multi-repo queues run one issue
+at a time across selected repos. Unknown overlap/dependencies require different
+batches. Issue worktrees are never merged together; each issue has its own PR.
 
-For a parallel single-repo batch, call `issues start <n> --worktree` for **all**
-ready issues before waiting for one issue to finish. Set `GOAL_RUN_ID` and
-`GOAL_ISSUE_BATCH` consistently; after each start, select it with
-`GOAL_ISSUE=<n>` for every issue-specific command. Initialize each harness,
-then launch independent ready workers in their assigned worktrees up to the
-shared limit. MAIN directly coordinates the interleaved issue loops; do not
-spawn an issue-level orchestrator. When one worker returns, advance only that
-issue's gates and fill a free worker slot. Do not finish issue 1 before
-starting issue 2 merely because issue 1 appears first in the plan. Keep one
-branch and PR/MR per issue; never merge issue worktrees together.
-If actual changed files overlap despite the plan, stop concurrent writes to
-those files and run the affected issues sequentially.
+For a parallel single-repo batch, start every ready issue with
+`issues start <n> --url <url> --worktree` before waiting for issue 1 to finish.
+Preserve `GOAL_RUN_ID` and `GOAL_ISSUE_BATCH`. Explicitly select each goal with
+all context selectors, including `GOAL_ISSUE`, local configured `GOAL_REPO`,
+and forge identity `GOAL_ISSUE_REPO`; resolve
+`context --json` to obtain paths/identity. Initialize that issue's harness and
+reserve/launch/confirm ready workers up to the shared limit. MAIN interleaves
+loops directly. On a worker result, advance that issue alone, record its
+milestones/results/findings serially, close the child thread, and fill a free
+slot. Actual overlapping edits stop concurrency for the affected issues.
 
-Run the absolute `GOAL_GIT` from `WORKFLOW_ROOT` for every state/git command. Its
-`state.json` is the sole queue/harness authority; issue worktrees contain code,
-not independent state copies. Every worker receives concrete
-`WORKFLOW_ROOT`, `TARGET_WORKTREE`, `GOAL_GIT`,
-and `GOAL_ISSUE` values in its brief. Code commands run in its assigned
-worktree; helper commands use the root script and assigned issue selector.
-Workers return milestones and task results for MAIN to record; do not run
-state-changing harness commands independently. Serialize
-state-changing `harness`, `issues`, commit, push, PR, and merge commands in
-MAIN, always with the correct `GOAL_ISSUE`; code edits and read-only checks in
-different worktrees may overlap. Run analyze, verify, review, conditional
-QA/visual checks, and PR delivery separately per issue. Run `issues finish
-<n>` only after that issue's `harness done` and delivery; it refuses to remove
-a dirty worktree.
+Creation/resume automatically syncs managed scripts/agents/config, workflow
+skills, and ignored AGENTS instructions. Refresh with `worktree sync <path>`
+when needed. The local helper resolves one `WORKFLOW_ROOT/state.json` queue
+and harness authority. Never copy state/locks/progress/reviews into worktrees.
+Workers use their local absolute `GOAL_GIT`, carry every selector each invocation,
+and edit/check only assigned `TARGET_WORKTREE`. No worker writes workflow state.
 
-Persist the compact queue plan once after the first issue harness is initialized
-using `harness context put queue_plan -`; its root `.codex/queue-plan.json`
-mirror is available for resume. On `--continue`, read `issues queue` and the
-persisted plan, restore the run ID, skip completed issues, reuse existing
-worktrees/PRs, and resume each incomplete issue from its own phase. Start only
-missing issues in the current batch; do not spawn another queue Planner or
-rebuild finished issue context. Begin the next batch only when its dependencies
-are delivered. If the agent delegation tool cannot run concurrent workers,
-report the capability limit and run the batch sequentially without sharing a
-checkout.
+Serialize harness/issues/review mutations, reconciliation/commit, analysis,
+push/PR/merge in MAIN with the correct identity. Use commit → analyze → verify
+and SHA-bound review/QA/visual evidence separately per issue/repo. Require PR
+metadata from [commands](commands.md). `issues finish <n>` follows that issue's
+clean `harness done` and delivery; it must refuse dirty worktree removal.
+
+Persist the compact queue plan once after the first issue harness init via
+`harness context put queue_plan -`. Any `.codex/queue-plan.json` mirror is a
+resume artifact, never a second authority. On continue read `issues queue` and
+persisted plan; restore run ID, URL, repo, and issue selectors, skip completed
+issues, and reuse worktrees/PRs/child IDs. Start only missing issues in the
+current batch. Do not recreate queue planning or finished context. Begin the
+next batch after dependencies are delivered. If parallel delegation is unavailable,
+report the limit and run sequentially in isolated checkouts. If delegation itself
+is unavailable, save/stop; never implement in MAIN.
