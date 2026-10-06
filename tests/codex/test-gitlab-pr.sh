@@ -1,9 +1,27 @@
 #!/usr/bin/env bash
 # Public-helper GitLab delivery with real commits and a local bare transport.
+# Usage: AGENT=codex|cursor bash tests/codex/test-gitlab-pr.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-TEST_ROOT="$(mktemp -d /tmp/codex-gitlab-pr.XXXXXX)"
+AGENT="${AGENT:-${PLATFORM:-codex}}"
+case "$AGENT" in
+  codex)
+    SRC_SCRIPTS="$ROOT/templates/codex/.codex/scripts"
+    AGENT_DIR=".codex"
+    ;;
+  cursor)
+    SRC_SCRIPTS="$ROOT/templates/cursor/.cursor/scripts"
+    AGENT_DIR=".cursor"
+    ;;
+  *)
+    echo "Unknown AGENT=$AGENT (expected codex|cursor)" >&2
+    exit 1
+    ;;
+esac
+export TMPDIR="${TMPDIR:-$ROOT/.tmp-tests}"
+mkdir -p "$TMPDIR"
+TEST_ROOT="$(mktemp -d "$TMPDIR/${AGENT}-gitlab-pr.XXXXXX")"
 trap 'rc=$?; if [ "$rc" -ne 0 ] && [ -n "${CASE_DIR:-}" ]; then cat "$CASE_DIR/output" 2>/dev/null || true; cat "$CASE_DIR/calls" 2>/dev/null || true; fi; rm -rf "$TEST_ROOT"' EXIT
 mkdir -p "$TEST_ROOT/bin"
 
@@ -97,15 +115,15 @@ for scenario in new existing read-reconciliation accepted-failure read-uncertain
   PROJECT="$CASE_DIR/workflow root"
   REMOTE="$CASE_DIR/remote.git"
   WORKTREE="$PROJECT/.worktrees/issue-90"
-  mkdir -p "$PROJECT/.codex/scripts"
-  cp "$ROOT/templates/codex/.codex/scripts/"*.sh "$PROJECT/.codex/scripts/"
+  mkdir -p "$PROJECT/$AGENT_DIR/scripts"
+  cp "$SRC_SCRIPTS/"*.sh "$PROJECT/$AGENT_DIR/scripts/"
   git init --bare -q "$REMOTE"
   git init -q -b development "$PROJECT"
   git -C "$PROJECT" config user.name 'Delivery Test'
   git -C "$PROJECT" config user.email 'delivery-test@example.invalid'
   git -C "$PROJECT" config commit.gpgsign false
   git -C "$PROJECT" config core.hooksPath /dev/null
-  printf '.codex/\n.agents/\nstate.json\n.worktrees/\n.goal-review/\n' > "$PROJECT/.gitignore"
+  printf '%s/\n.agents/\nstate.json\n.worktrees/\n.goal-review/\n' "$AGENT_DIR" > "$PROJECT/.gitignore"
   printf 'base\n' > "$PROJECT/base.txt"
   git -C "$PROJECT" add .gitignore base.txt
   git -C "$PROJECT" commit -qm 'chore: seed development'
@@ -130,10 +148,10 @@ for scenario in new existing read-reconciliation accepted-failure read-uncertain
     wrong-branch) git -C "$WORKTREE" checkout -qb unrelated ;;
   esac
   # The fixture mirrors managed sync without invoking internal modules.
-  mkdir -p "$WORKTREE/.codex/scripts"
-  cp "$PROJECT/.codex/scripts/"*.sh "$WORKTREE/.codex/scripts/"
-  printf '%s\n' "$PROJECT" > "$WORKTREE/.codex/workflow-root"
-  printf '%s\n' '{"platform":"gitlab","forge_repo":"https://gitlab.com/team/repo","repos":[]}' > "$PROJECT/.codex/goal-config.json"
+  mkdir -p "$WORKTREE/$AGENT_DIR/scripts"
+  cp "$PROJECT/$AGENT_DIR/scripts/"*.sh "$WORKTREE/$AGENT_DIR/scripts/"
+  printf '%s\n' "$PROJECT" > "$WORKTREE/$AGENT_DIR/workflow-root"
+  printf '%s\n' '{"platform":"gitlab","forge_repo":"https://gitlab.com/team/repo","repos":[]}' > "$PROJECT/$AGENT_DIR/goal-config.json"
   jq -n '[
     {id:"goal-88",run_id:"prior-run",issue:{number:88,repo:"https://gitlab.com/team/repo"},
      branch:"feat/issue-88",pr_number:null,status:"in_progress"},
@@ -164,9 +182,9 @@ BODY
     export GOAL_ID=goal-90 GOAL_RUN_ID=test-run GOAL_ISSUE=90
     export GOAL_ISSUE_REPO=https://gitlab.com/team/repo GOAL_GROUP='' GOAL_TASK='' GOAL_REPO=.
     if [ "$scenario" = missing-body ]; then
-      bash "$WORKTREE/.codex/scripts/goal-git.sh" pr --title "$title"
+      bash "$WORKTREE/$AGENT_DIR/scripts/goal-git.sh" pr --title "$title"
     else
-      bash "$WORKTREE/.codex/scripts/goal-git.sh" pr --title "$title" --body-file "$CASE_DIR/body.md"
+      bash "$WORKTREE/$AGENT_DIR/scripts/goal-git.sh" pr --title "$title" --body-file "$CASE_DIR/body.md"
     fi
   ) > "$CASE_DIR/output" 2>&1 || result=$?
 
@@ -231,7 +249,7 @@ PY_ASSERT
       export FORGE_RETRY_WAIT_OVERRIDE=0 GOAL_METADATA_RETRY_DELAY=0
       export GOAL_ID=goal-90 GOAL_RUN_ID=test-run GOAL_ISSUE=90
       export GOAL_ISSUE_REPO=https://gitlab.com/team/repo GOAL_GROUP='' GOAL_TASK='' GOAL_REPO=.
-      bash "$WORKTREE/.codex/scripts/goal-git.sh" pr --title "$MOCK_TITLE" --body-file "$CASE_DIR/body.md"
+      bash "$WORKTREE/$AGENT_DIR/scripts/goal-git.sh" pr --title "$MOCK_TITLE" --body-file "$CASE_DIR/body.md"
     ) >> "$CASE_DIR/output" 2>&1
     jq -e --arg sha "$MOCK_SHA" '.[1].repos[0].delivery |
       .validated==true and .verified_sha==$sha' "$PROJECT/state.json" >/dev/null

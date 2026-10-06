@@ -1,14 +1,36 @@
 #!/usr/bin/env bash
 # Queue Planner bootstrap: plan before any issue goal/branch exists.
+# Usage: AGENT=codex|cursor bash tests/codex/test-issue-queue-plan.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+AGENT="${AGENT:-${PLATFORM:-codex}}"
+case "$AGENT" in
+  codex)
+    SRC_SCRIPTS="$ROOT/templates/codex/.codex/scripts"
+    SRC_AGENTS="$ROOT/templates/codex/.codex/agents"
+    SRC_MODELS="$ROOT/templates/codex/.codex/goal-models.json"
+    AGENT_DIR=".codex"
+    AGENTS_GLOB="*.toml"
+    ;;
+  cursor)
+    SRC_SCRIPTS="$ROOT/templates/cursor/.cursor/scripts"
+    SRC_AGENTS="$ROOT/templates/cursor/.cursor/agents"
+    SRC_MODELS="$ROOT/templates/cursor/.cursor/goal-models.json"
+    AGENT_DIR=".cursor"
+    AGENTS_GLOB="*.md"
+    ;;
+  *)
+    echo "Unknown AGENT=$AGENT (expected codex|cursor)" >&2
+    exit 1
+    ;;
+esac
 export TMPDIR="${TMPDIR:-$ROOT/.tmp-tests}"
 mkdir -p "$TMPDIR"
-TEST_ROOT="$(mktemp -d "$TMPDIR/codex-queue-plan.XXXXXX")"
+TEST_ROOT="$(mktemp -d "$TMPDIR/${AGENT}-queue-plan.XXXXXX")"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 PROJECT="$TEST_ROOT/project"
 REMOTE="$TEST_ROOT/remote.git"
-mkdir -p "$PROJECT/.codex/scripts" "$PROJECT/.codex/agents" "$TEST_ROOT/bin"
+mkdir -p "$PROJECT/$AGENT_DIR/scripts" "$PROJECT/$AGENT_DIR/agents" "$TEST_ROOT/bin"
 git init -q -b main "$PROJECT"
 # Avoid sandbox hook permission issues
 rm -rf "$PROJECT/.git/hooks"
@@ -19,11 +41,11 @@ rm -rf "$REMOTE/hooks"
 mkdir -p "$REMOTE/hooks"
 git -C "$PROJECT" remote add origin "$REMOTE"
 git -C "$PROJECT" push -qu origin main
-printf '%s\n' '.codex/' 'state.json' '.worktrees/' > "$PROJECT/.git/info/exclude"
+printf '%s\n' "$AGENT_DIR/" 'state.json' '.worktrees/' > "$PROJECT/.git/info/exclude"
 
-cp "$ROOT/templates/codex/.codex/scripts/"*.sh "$PROJECT/.codex/scripts/"
-cp "$ROOT/templates/codex/.codex/agents/"*.toml "$PROJECT/.codex/agents/"
-cp "$ROOT/templates/codex/.codex/goal-models.json" "$PROJECT/.codex/goal-models.json"
+cp "$SRC_SCRIPTS/"*.sh "$PROJECT/$AGENT_DIR/scripts/"
+cp "$SRC_AGENTS/"$AGENTS_GLOB "$PROJECT/$AGENT_DIR/agents/"
+cp "$SRC_MODELS" "$PROJECT/$AGENT_DIR/goal-models.json"
 jq -n '{
   platform:"github",
   goal_source:"issues",
@@ -32,7 +54,7 @@ jq -n '{
   issue_limit:2,
   concurrency:2,
   forge_repo:"team/app"
-}' > "$PROJECT/.codex/goal-config.json"
+}' > "$PROJECT/$AGENT_DIR/goal-config.json"
 
 cat > "$TEST_ROOT/bin/gh" <<'PY'
 #!/usr/bin/env python3
@@ -59,7 +81,7 @@ chmod +x "$TEST_ROOT/bin/gh"
 cp "$TEST_ROOT/bin/gh" "$TEST_ROOT/bin/glab"
 export PATH="$TEST_ROOT/bin:$PATH" GOAL_PLATFORM=github
 
-G() { bash "$PROJECT/.codex/scripts/goal-git.sh" "$@"; }
+G() { bash "$PROJECT/$AGENT_DIR/scripts/goal-git.sh" "$@"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 
@@ -79,8 +101,8 @@ echo "$BEGIN2" | jq -e '.goal_id == "queue-run-queue-fixture"' >/dev/null || fai
 pass "issues plan begin on empty project"
 
 export GOAL_ID=queue-run-queue-fixture
-PLANNER="$(jq -r '."$routing".planner.NORMAL.model' "$PROJECT/.codex/goal-models.json")"
-BUILDER="$(jq -r '."$routing".builder.NORMAL.model' "$PROJECT/.codex/goal-models.json")"
+PLANNER="$(jq -r '."$routing".planner.NORMAL.model' "$PROJECT/$AGENT_DIR/goal-models.json")"
+BUILDER="$(jq -r '."$routing".builder.NORMAL.model' "$PROJECT/$AGENT_DIR/goal-models.json")"
 
 SPAWN=$(G harness spawn planner "$PLANNER" medium)
 echo "$SPAWN" | jq -e '.reservation.role == "planner"' >/dev/null || { echo "$SPAWN"; fail "planner spawn"; }
@@ -113,8 +135,8 @@ printf '%s\n' '{"batches":[{"issues":[91,92],"parallel":true}],"concurrency":2}'
 DONE=$(G issues plan done)
 echo "$DONE" | jq -e '.status == "planned" and .queue_plan.concurrency == 2' >/dev/null \
   || { echo "$DONE"; fail "issues plan done"; }
-[ -f "$PROJECT/.codex/queue-plans/run-queue-fixture.json" ] || fail "per-run plan file"
-[ -f "$PROJECT/.codex/queue-plan.json" ] || fail "plan mirror"
+[ -f "$PROJECT/$AGENT_DIR/queue-plans/run-queue-fixture.json" ] || fail "per-run plan file"
+[ -f "$PROJECT/$AGENT_DIR/queue-plan.json" ] || fail "plan mirror"
 SHOW=$(G issues plan show)
 echo "$SHOW" | jq -e '.status == "planned"' >/dev/null || fail "plan show"
 pass "context put queue_plan + plan done"
@@ -131,4 +153,4 @@ jq -e '[.[] | select((.kind // "") != "queue" and .issue.number == 91)] | length
   || fail "issue goal after plan"
 pass "issues start creates normal issue goal after plan"
 
-echo "All queue planner bootstrap checks passed."
+echo "All queue planner bootstrap checks passed (AGENT=$AGENT)."

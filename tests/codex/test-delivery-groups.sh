@@ -4,21 +4,29 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-AGENT="${AGENT:-codex}"
+AGENT="${AGENT:-${PLATFORM:-codex}}"
 case "$AGENT" in
   codex)
     SRC_SCRIPTS="$ROOT/templates/codex/.codex/scripts"
+    SRC_AGENTS="$ROOT/templates/codex/.codex/agents"
+    SRC_MODELS="$ROOT/templates/codex/.codex/goal-models.json"
     AGENT_DIR=".codex"
+    AGENTS_GLOB="*.toml"
     ;;
   cursor)
     SRC_SCRIPTS="$ROOT/templates/cursor/.cursor/scripts"
+    SRC_AGENTS="$ROOT/templates/cursor/.cursor/agents"
+    SRC_MODELS="$ROOT/templates/cursor/.cursor/goal-models.json"
     AGENT_DIR=".cursor"
+    AGENTS_GLOB="*.md"
     ;;
   *)
     echo "Unknown AGENT=$AGENT (expected codex|cursor)" >&2
     exit 1
     ;;
 esac
+export TMPDIR="${TMPDIR:-$ROOT/.tmp-tests}"
+mkdir -p "$TMPDIR"
 PASS=0
 FAIL=0
 
@@ -154,15 +162,11 @@ BUGFIX_JSON='{
 setup_proj() {
   local dir="$1" strategy="${2:-auto}"
   rm -rf "$dir"
-  mkdir -p "$dir/$AGENT_DIR/scripts" "$dir/bin"
-  if [ "$AGENT" = codex ]; then
-    cp "$SRC_SCRIPTS/"*.sh "$dir/$AGENT_DIR/scripts/"
-    cp "$ROOT/templates/codex/.codex/goal-models.json" "$dir/.codex/"
-    cp -R "$ROOT/templates/codex/.codex/agents" "$dir/.codex/"
-  else
-    cp "$SRC_SCRIPTS/goal-git.sh" "$SRC_SCRIPTS/delivery-groups.sh" "$dir/$AGENT_DIR/scripts/"
-  fi
-  printf '.codex/\nstate.json\n.worktrees/\nbin/\nerr*.txt\n' > "$dir/.gitignore"
+  mkdir -p "$dir/$AGENT_DIR/scripts" "$dir/$AGENT_DIR/agents" "$dir/bin"
+  cp "$SRC_SCRIPTS/"*.sh "$dir/$AGENT_DIR/scripts/"
+  cp "$SRC_MODELS" "$dir/$AGENT_DIR/goal-models.json"
+  cp "$SRC_AGENTS/"$AGENTS_GLOB "$dir/$AGENT_DIR/agents/"
+  printf '%s/\nstate.json\n.worktrees/\nbin/\nerr*.txt\n' "$AGENT_DIR" > "$dir/.gitignore"
   chmod +x "$dir/$AGENT_DIR/scripts/goal-git.sh"
 
   cat > "$dir/$AGENT_DIR/goal-config.json" <<EOF
@@ -188,32 +192,8 @@ setup_proj() {
 }
 EOF
 
-  cat > "$dir/bin/gh" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-COUNTER="$(dirname "$0")/.gh-pr-counter"
-[ -f "$COUNTER" ] || echo 100 > "$COUNTER"
-case "${1:-} ${2:-}" in
-  "pr create")
-    n=$(cat "$COUNTER")
-    n=$((n + 1))
-    echo "$n" > "$COUNTER"
-    echo "https://github.com/example/repo/pull/$n"
-    ;;
-  "pr view")
-    n=$(cat "$COUNTER")
-    echo "{\"url\":\"https://github.com/example/repo/pull/$n\",\"number\":$n}"
-    ;;
-  "pr merge")
-    exit 0
-    ;;
-  *)
-    exit 0
-    ;;
-esac
-EOF
-  if [ "$AGENT" = codex ]; then
-    cat > "$dir/bin/gh" <<'PYMOCK'
+  # Full forge fixture: shared scripts validate SHA/base/files before claiming delivery.
+  cat > "$dir/bin/gh" <<'PYMOCK'
 #!/usr/bin/env python3
 import json, pathlib, subprocess, sys
 args=sys.argv[1:];store=pathlib.Path(__file__).parent/'requests.json'
@@ -243,7 +223,6 @@ elif args[0]=='api':
   r=next(r for r in data if r['number']==int(endpoint.split('/')[-1]));print(json.dumps(dict(r,head=dict(ref=r['headRefName'],sha=r['headRefOid'],repo=dict(full_name='example/repo')),base=dict(ref=r['baseRefName'],repo=dict(full_name='example/repo')))))
 else:raise SystemExit('Unexpected mock call '+repr(args))
 PYMOCK
-  fi
   chmod +x "$dir/bin/gh"
 
   (
@@ -254,18 +233,16 @@ PYMOCK
     echo "seed" > README.md
     git add README.md .gitignore
     git commit -m "chore: seed" >/dev/null
-    if [ "$AGENT" = codex ]; then
-      git init -q --bare "$dir/bin/origin.git"
-      git remote add origin "$dir/bin/origin.git"
-      git push -qu origin main
-      printf '%s\n' '## Summary' 'Implement the assigned group and verify its scoped changes.' '## Checks' 'Local Git fixture checks passed.' > "$dir/bin/body.md"
-    fi
+    git init -q --bare "$dir/bin/origin.git"
+    git remote add origin "$dir/bin/origin.git"
+    git push -qu origin main
+    printf '%s\n' '## Summary' 'Implement the assigned group and verify its scoped changes.' '## Checks' 'Local Git fixture checks passed.' > "$dir/bin/body.md"
   )
 }
 
 G() {
   # Run goal-git.sh inside $PROJ with stubs.
-  if [ "$AGENT" = codex ] && [ "${1:-}" = groups ] && [ "${2:-}" = pr ]; then
+  if [ "${1:-}" = groups ] && [ "${2:-}" = pr ]; then
     env GOAL_PLATFORM=github PATH="$PROJ/bin:$PATH" "$PROJ/$AGENT_DIR/scripts/goal-git.sh" "$@" --body-file "$PROJ/bin/body.md"
   else
     env GOAL_PLATFORM=github PATH="$PROJ/bin:$PATH" "$PROJ/$AGENT_DIR/scripts/goal-git.sh" "$@"
@@ -285,7 +262,7 @@ else
 fi
 
 # --- Fixture project used by most cases ---
-PROJ="$(mktemp -d /tmp/delivery-groups.XXXXXX)"
+PROJ="$(mktemp -d "$TMPDIR/delivery-groups.XXXXXX")"
 setup_proj "$PROJ" auto
 trap 'rm -rf "$PROJ"' EXIT
 
@@ -298,7 +275,7 @@ mode=$(jq -r '.[-1].delivery_mode' "$PROJ/state.json")
 assert_eq "$mode" "multi-pr" "delivery_mode=multi-pr"
 
 echo "== 2 coupled impl/migration/tests/docs stay together"
-PROJ2="$(mktemp -d /tmp/delivery-coupled.XXXXXX)"
+PROJ2="$(mktemp -d "$TMPDIR/delivery-coupled.XXXXXX")"
 setup_proj "$PROJ2" auto
 (
   PROJ="$PROJ2"
@@ -320,7 +297,7 @@ types=$(jq -r '.[-1].delivery_groups | map(.task_type) | join(",")' "$PROJ/state
 assert_eq "$types" "fix,feat,feat,feat,docs" "mixed feat/fix/docs types"
 
 echo "== 4 bugfix normalizes to fix"
-PROJ3="$(mktemp -d /tmp/delivery-bugfix.XXXXXX)"
+PROJ3="$(mktemp -d "$TMPDIR/delivery-bugfix.XXXXXX")"
 setup_proj "$PROJ3" auto
 (
   PROJ="$PROJ3"
@@ -378,8 +355,7 @@ G harness task add builder "two" >/dev/null
 # t1 SPAWNING, t2 SPAWNING — second spawn must fail
 G harness task set t1 SPAWNING >/dev/null
 G harness task set t2 SPAWNING >/dev/null
-spawn_model=dummy-model
-[ "$AGENT" != codex ] || spawn_model=$(G models builder --complexity NORMAL | cut -f1)
+spawn_model=$(G models builder --complexity NORMAL | cut -f1)
 if G harness spawn builder "$spawn_model" medium >/dev/null 2>"$PROJ/err-spawn.txt"; then
   fail "harness spawn allowed two SPAWNING builders in one group worktree"
 else
@@ -403,16 +379,14 @@ PY
 
 echo "== 10 each group creates its own PR/MR"
 G groups persist >/dev/null 2>&1 || true
-if [ "$AGENT" = codex ]; then
-  for gid in g1 g2; do
-    G groups activate "$gid" >/dev/null
-    wt=$(jq -r --arg id "$gid" '.[-1].delivery_groups[] | select(.id==$id) | .worktree' "$PROJ/state.json")
-    printf '%s\n' "$gid implementation" >> "$PROJ/$wt/README.md"
-    git -C "$PROJ/$wt" add README.md
-    git -C "$PROJ/$wt" commit -qm "feat: $gid fixture"
-    G push >/dev/null
-  done
-fi
+for gid in g1 g2; do
+  G groups activate "$gid" >/dev/null
+  wt=$(jq -r --arg id "$gid" '.[-1].delivery_groups[] | select(.id==$id) | .worktree' "$PROJ/state.json")
+  printf '%s\n' "$gid implementation" >> "$PROJ/$wt/README.md"
+  git -C "$PROJ/$wt" add README.md
+  git -C "$PROJ/$wt" commit -qm "feat: $gid fixture"
+  G push >/dev/null
+done
 body1=$(mktemp); body2=$(mktemp)
 printf '%s\n' "## Summary" "" "Implements group g1 fixture changes." "" "## Changes" "" "- README update" "" "## Verification" "" "- fixture checks" "" "## References" "" "Markdown multi-PR fixture" > "$body1"
 printf '%s\n' "## Summary" "" "Implements group g2 fixture changes." "" "## Changes" "" "- README update" "" "## Verification" "" "- fixture checks" "" "## References" "" "Markdown multi-PR fixture" > "$body2"
@@ -464,16 +438,14 @@ assert_eq "$p1b" "$p1" "resume does not create a duplicate PR"
 assert_eq "$wt_after" "$wt_before" "resume does not create a duplicate worktree"
 
 echo "== 14 failed groups do not corrupt completed groups"
-if [ "$AGENT" = codex ]; then
-  G groups activate g1 >/dev/null
-  sha=$(git -C "$PROJ/$wt1" rev-parse HEAD)
-  jq --arg sha "$sha" '
-    .[-1].harness = {phase:"DONE",tasks:[],spawn_reservations:[],requirements:{planner:false,reviewer:false,qa:false,visual:false},
-      gates:{IMPLEMENTATION:{status:"PASS"},ANALYSIS:{status:"PASS",sha:$sha},VERIFICATION:{status:"PASS",sha:$sha}}}
-  ' "$PROJ/state.json" > "$PROJ/.codex/seed.json"
-  mv "$PROJ/.codex/seed.json" "$PROJ/state.json"
-  G groups persist >/dev/null
-fi
+G groups activate g1 >/dev/null
+sha=$(git -C "$PROJ/$wt1" rev-parse HEAD)
+jq --arg sha "$sha" '
+  .[-1].harness = {phase:"DONE",tasks:[],spawn_reservations:[],requirements:{planner:false,reviewer:false,qa:false,visual:false},
+    gates:{IMPLEMENTATION:{status:"PASS"},ANALYSIS:{status:"PASS",sha:$sha},VERIFICATION:{status:"PASS",sha:$sha}}}
+' "$PROJ/state.json" > "$PROJ/$AGENT_DIR/seed.json"
+mv "$PROJ/$AGENT_DIR/seed.json" "$PROJ/state.json"
+G groups persist >/dev/null
 G groups merge g1 >/dev/null
 # Simulate g2 failure without touching g1
 python3 - <<PY
@@ -501,7 +473,7 @@ else
 fi
 
 echo "== 16 existing state files migrate or continue safely"
-PROJ4="$(mktemp -d /tmp/delivery-legacy.XXXXXX)"
+PROJ4="$(mktemp -d "$TMPDIR/delivery-legacy.XXXXXX")"
 setup_proj "$PROJ4" auto
 (
   PROJ="$PROJ4"
@@ -526,7 +498,7 @@ EOF
 rm -rf "$PROJ4"
 
 echo "== 17 markdown_pr_strategy=single preserves one-PR behavior"
-PROJ5="$(mktemp -d /tmp/delivery-single.XXXXXX)"
+PROJ5="$(mktemp -d "$TMPDIR/delivery-single.XXXXXX")"
 setup_proj "$PROJ5" single
 (
   PROJ="$PROJ5"
@@ -577,7 +549,7 @@ OVERLAP='{
     {"id":"g2","task_type":"fix","title":"B","branch_slug":"b","task_ids":["t2"],"depends_on":[],"files":["src/api/foo.ts"],"acceptance_checks":[],"reason":"b"}
   ]
 }'
-PROJ6="$(mktemp -d /tmp/delivery-overlap.XXXXXX)"
+PROJ6="$(mktemp -d "$TMPDIR/delivery-overlap.XXXXXX")"
 setup_proj "$PROJ6" auto
 (
   PROJ="$PROJ6"
@@ -596,7 +568,7 @@ else
 fi
 
 TASK_TWO='{"delivery_groups":[{"id":"g1","task_type":"feat","title":"x","branch_slug":"x","task_ids":["t1","t2"],"depends_on":[],"files":["a"],"acceptance_checks":[],"reason":"x"}]}'
-PROJ7="$(mktemp -d /tmp/delivery-task.XXXXXX)"
+PROJ7="$(mktemp -d "$TMPDIR/delivery-task.XXXXXX")"
 setup_proj "$PROJ7" task
 (
   PROJ="$PROJ7"

@@ -1,31 +1,27 @@
 # Markdown delivery groups
 
-Read only for Markdown goals with `delivery_mode=multi-pr` (new `auto` or
-`task` strategy). An in-progress legacy Markdown goal with single delivery
-mode keeps its one-PR flow. Planner still runs unless classify returned
-TRIVIAL. For TRIVIAL, synthesize one inseparable delivery group with a reason.
+For Markdown `delivery_mode=multi-pr` (`auto`/`task`). Legacy single-PR keeps one PR.
 
-Validate Planner's `delivery_groups` JSON using `groups validate -`, persist
-with `groups init -`, and emit a grouping event. No `goal/` aggregation PR.
-Use `groups list`/`groups ready` and `max_parallel_prs` to start independent
-groups in separate worktrees. Dependencies must be merged or otherwise on
-the intended base before their groups start. Use `groups start <id>` for a
-new group or idempotent `groups continue <id>` on resume; never `worktree add`
-for a group and never put two builders in the same group worktree.
+## Recipe
 
-For each group, activate its typed branch/worktree, initialize its own harness
-from Planner signals, persist discovery context, pass PLAN, enter BUILDING,
-and `groups persist`. Run the common build/analyze/verify/review/conditional
-QA/visual loop only for its tasks/files. Every builder brief names that group
-worktree. One group's PASS gates never clear another's. In inline review
-mode, push and run `groups pr <id>` before Reviewer so it can review that
-group's PR. In local review mode, do so only after the clean `harness done`
-gate. Report one PR URL per group. If auto-merge is on, `groups merge <id>`
-and then start newly unblocked groups from the updated base. On conflict,
-stop. If auto-merge is off, report ready for manual merge and do not start
-a dependent group until its prerequisite is available.
+1. Intake persists full Markdown draft before mutations
+2. Planner returns discovery + `delivery_groups` (+ optional conventional `pr_title` per group)
+3. `groups validate -` then `groups init -`
+4. `groups ready` / `max_parallel_prs` for independent groups
+5. Per group:
 
-On continue, reconcile persisted groups, worktrees, PRs, and harness phases;
-resume incomplete groups and start newly unblocked ones without recreation.
-Root `state complete` waits until every required group is merged, completed,
-or cancelled. Never create a final combined PR.
+```bash
+export GOAL_GROUP=<id>   # with all other selectors
+"$GOAL_GIT" groups start <id>    # typed branch + worktree; installs excludes
+"$GOAL_GIT" context --json
+# common loop: plan → build → commit → analyze → verify → review
+# Inline: push; pr draft --group <id>; edit Summary; groups pr <id> --title … --body-file …
+# Local: review init; harness done; then publish
+"$GOAL_GIT" groups merge <id>    # if auto_merge; else report ready
+```
+
+No aggregation PR. Evidence is per-group SHA. Context mismatch stops before edits.
+`worktree add` is not used for groups. One Builder per group checkout.
+
+On continue: restore `GOAL_GROUP` + identities; reuse current-SHA evidence.
+Root `state complete` waits for every required group merged/completed/cancelled.

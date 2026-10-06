@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-AGENT=cursor exec bash "$ROOT/tests/codex/test-issue-queue-plan.sh"
+AGENT=cursor exec bash "$ROOT/tests/codex/test-gitlab-pr.sh"

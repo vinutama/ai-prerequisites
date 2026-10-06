@@ -1,15 +1,39 @@
 #!/usr/bin/env bash
 # Local integration fixtures for the sourced delegation module. No network.
+# Usage: AGENT=codex|cursor bash tests/codex/test-delegation.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-TEST_ROOT="$(mktemp -d /tmp/codex-delegation.XXXXXX)"
+AGENT="${AGENT:-${PLATFORM:-codex}}"
+case "$AGENT" in
+  codex)
+    SRC_SCRIPTS="$ROOT/templates/codex/.codex/scripts"
+    SRC_AGENTS="$ROOT/templates/codex/.codex/agents"
+    SRC_MODELS="$ROOT/templates/codex/.codex/goal-models.json"
+    AGENT_DIR=".codex"
+    AGENTS_GLOB="*.toml"
+    ;;
+  cursor)
+    SRC_SCRIPTS="$ROOT/templates/cursor/.cursor/scripts"
+    SRC_AGENTS="$ROOT/templates/cursor/.cursor/agents"
+    SRC_MODELS="$ROOT/templates/cursor/.cursor/goal-models.json"
+    AGENT_DIR=".cursor"
+    AGENTS_GLOB="*.md"
+    ;;
+  *)
+    echo "Unknown AGENT=$AGENT (expected codex|cursor)" >&2
+    exit 1
+    ;;
+esac
+export TMPDIR="${TMPDIR:-$ROOT/.tmp-tests}"
+mkdir -p "$TMPDIR"
+TEST_ROOT="$(mktemp -d "$TMPDIR/codex-delegation.XXXXXX")"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 PROJECT="$TEST_ROOT/project"
-mkdir -p "$PROJECT/.codex/scripts" "$PROJECT/.codex/agents" "$TEST_ROOT/bin"
+mkdir -p "$PROJECT/$AGENT_DIR/scripts" "$PROJECT/$AGENT_DIR/agents" "$TEST_ROOT/bin"
 git init -q "$PROJECT"
 git -C "$PROJECT" -c user.name=Fixture -c user.email=fixture@example.test -c commit.gpgsign=false commit -qm fixture --allow-empty
 git -C "$PROJECT" checkout -qb fixture
-printf '%s\n' '.codex/' 'state.json' '.worktrees/' > "$PROJECT/.git/info/exclude"
+printf '%s\n' "$AGENT_DIR/" 'state.json' '.worktrees/' > "$PROJECT/.git/info/exclude"
 mkdir -p "$PROJECT/.worktrees"
 git -C "$PROJECT" worktree add -q -b issue-one "$PROJECT/.worktrees/issue-one"
 git -C "$PROJECT" worktree add -q -b issue-two "$PROJECT/.worktrees/issue-two"
@@ -19,12 +43,12 @@ for cli in gh glab; do
   chmod +x "$TEST_ROOT/bin/$cli"
 done
 export PATH="$TEST_ROOT/bin:$PATH" GOAL_PLATFORM=github
-cp "$ROOT/templates/codex/.codex/agents/"*.toml "$PROJECT/.codex/agents/"
-cp "$ROOT/templates/codex/.codex/goal-models.json" "$PROJECT/.codex/goal-models.json"
-cp "$ROOT/templates/codex/.codex/scripts/"*.sh "$PROJECT/.codex/scripts/"
+cp "$SRC_AGENTS/"$AGENTS_GLOB "$PROJECT/$AGENT_DIR/agents/"
+cp "$SRC_MODELS" "$PROJECT/$AGENT_DIR/goal-models.json"
+cp "$SRC_SCRIPTS/"*.sh "$PROJECT/$AGENT_DIR/scripts/"
 # Load real main definitions without its dispatcher; override the four moving
 # functions by sourcing the module. This also runs before main wires it in.
-python3 - "$ROOT/templates/codex/.codex/scripts/goal-git.sh" "$PROJECT/.codex/scripts/fixture.sh" <<'PY'
+python3 - "$SRC_SCRIPTS/goal-git.sh" "$PROJECT/$AGENT_DIR/scripts/fixture.sh" <<'PY'
 import pathlib, sys
 text = pathlib.Path(sys.argv[1]).read_text()
 marker = '\ncase "${1:-}" in\n'
@@ -49,7 +73,7 @@ case "${1:-}" in
 esac
 ''')
 PY
-RUNNER="$PROJECT/.codex/scripts/fixture.sh"
+RUNNER="$PROJECT/$AGENT_DIR/scripts/fixture.sh"
 run() { bash "$RUNNER" "$@"; }
 check() { jq -e "$1" "$PROJECT/state.json" >/dev/null || { echo "Assertion failed: $1" >&2; exit 1; }; }
 reject() {
@@ -70,7 +94,7 @@ reset_fixture() { cp "$TEST_ROOT/baseline.json" "$PROJECT/state.json"; }
 id_of() { jq -er '.reservation.id' "$1"; }
 reserve() { run harness spawn "$@" > "$TEST_ROOT/reserved.json"; id_of "$TEST_ROOT/reserved.json"; }
 
-printf '%s\n' '{"concurrency":2,"platform":"github"}' > "$PROJECT/.codex/goal-config.json"
+printf '%s\n' '{"concurrency":2,"platform":"github"}' > "$PROJECT/$AGENT_DIR/goal-config.json"
 printf '%s\n' '[{"goal":"Delegation fixture","branch":"fixture","status":"active","issue":{"number":1}}]' > "$PROJECT/state.json"
 run harness init --complexity NORMAL --route feature --qa false --visual false > "$TEST_ROOT/init.json"
 # Only assignment/phase fixtures are seeded. No gate is ever forged to PASS.
@@ -79,7 +103,8 @@ mutate_fixture '.[0].harness.phase = "BUILDING" | .[0].harness.tasks = [
  {id:"t2",role:"builder",title:"two",state:"PENDING",attempts:0}]
  | .[0].harness.budget.max_total_spawns = 4'
 cp "$PROJECT/state.json" "$TEST_ROOT/baseline.json"
-BUILDER="$(jq -r '."$routing".builder.NORMAL.model' "$PROJECT/.codex/goal-models.json")"
+# Cursor routing uses inherit; Codex uses catalog models from goal-models.json.
+BUILDER="$(jq -r '."$routing".builder.NORMAL.model' "$PROJECT/$AGENT_DIR/goal-models.json")"
 
 # Reservations do not count; definitive failure/recovery makes retries safe.
 id="$(reserve builder "$BUILDER" medium --task t1)"
@@ -274,8 +299,8 @@ unset GOAL_GROUP GOAL_ISSUE
 printf '%s\n' 'PASS: inactive group projection preserves shared state, root ledger and active overlay'
 
 # Composable routing: routed/legacy chains, intrinsic vision and effort remain TSV.
-cp "$PROJECT/.codex/goal-models.json" "$TEST_ROOT/original-models.json"
-cat > "$PROJECT/.codex/goal-models.json" <<'JSON'
+cp "$PROJECT/$AGENT_DIR/goal-models.json" "$TEST_ROOT/original-models.json"
+cat > "$PROJECT/$AGENT_DIR/goal-models.json" <<'JSON'
 {
  "$capabilities":{"vision_models":["vision-one","vision-two"]},
  "$routing":{
@@ -314,31 +339,57 @@ reject 'conflicts' models builder --require-multimodal vision-one --next text-on
 reject 'requires' models builder --next
 reject 'Invalid complexity' models builder --complexity HUGE
 reject 'Unknown models argument' models builder --unknown
-cp "$TEST_ROOT/original-models.json" "$PROJECT/.codex/goal-models.json"
+cp "$TEST_ROOT/original-models.json" "$PROJECT/$AGENT_DIR/goal-models.json"
 if run models planner --complexity TRIVIAL > /dev/null 2>&1; then exit 1; else rc=$?; test "$rc" = 2; fi
 expect_models "$(printf '%s\tmedium\t' "$BUILDER")" visual-reviewer --complexity NORMAL --require-multimodal
 printf '%s\n' 'PASS: routing/legacy fallback chains, composable multimodal/next flags and consistent TSV'
 
-# Role TOML is parsed, instructions/name required, pins rejected, custom roles supported.
+# Role config is parsed; custom roles supported. Codex rejects TOML pins; Cursor
+# allows frontmatter model pins (session/frontmatter owns the real model).
 reset_fixture
-cat > "$PROJECT/.codex/agents/custom.toml" <<'TOML'
+if [ "$AGENT" = cursor ]; then
+  cat > "$PROJECT/$AGENT_DIR/agents/custom.md" <<'MD'
+---
+name: custom
+description: Fixture custom role
+mode: subagent
+model: inherit
+---
+
+Perform only the assigned fixture task.
+MD
+  jq --arg model "$BUILDER" '.custom = {model:$model,effort:"medium"}' "$PROJECT/$AGENT_DIR/goal-models.json" > "$TEST_ROOT/models.tmp"
+  mv "$TEST_ROOT/models.tmp" "$PROJECT/$AGENT_DIR/goal-models.json"
+  id="$(reserve custom "$BUILDER" medium)"
+  run harness spawn-confirm "$id" custom-agent > /dev/null
+  check '.[0].harness.metrics.custom_runs == 1'
+  run harness spawn-finish custom-agent completed --closed > /dev/null
+  printf '%s\n' '---' 'name: different' '---' 'ok' > "$PROJECT/$AGENT_DIR/agents/custom.md"
+  reject 'name must match' harness spawn custom "$BUILDER" medium
+  printf '%s\n' '---' 'name: custom' '---' > "$PROJECT/$AGENT_DIR/agents/custom.md"
+  reject 'body after frontmatter must be nonempty' harness spawn custom "$BUILDER" medium
+  printf '%s\n' 'name: custom' 'no delimiters' > "$PROJECT/$AGENT_DIR/agents/custom.md"
+  reject 'Invalid role markdown' harness spawn custom "$BUILDER" medium
+else
+  cat > "$PROJECT/$AGENT_DIR/agents/custom.toml" <<'TOML'
 name = "custom"
 developer_instructions = "Perform only the assigned fixture task."
 TOML
-jq --arg model "$BUILDER" '.custom = {model:$model,effort:"medium"}' "$PROJECT/.codex/goal-models.json" > "$TEST_ROOT/models.tmp"
-mv "$TEST_ROOT/models.tmp" "$PROJECT/.codex/goal-models.json"
-id="$(reserve custom "$BUILDER" medium)"
-run harness spawn-confirm "$id" custom-agent > /dev/null
-check '.[0].harness.metrics.custom_runs == 1'
-run harness spawn-finish custom-agent completed --closed > /dev/null
-printf '%s\n' 'model = "hidden-pin"' >> "$PROJECT/.codex/agents/custom.toml"
-reject 'conflicts with runtime routing' harness spawn custom "$BUILDER" medium
-printf '%s\n' 'name = "different"' 'developer_instructions = "ok"' > "$PROJECT/.codex/agents/custom.toml"
-reject 'name must match' harness spawn custom "$BUILDER" medium
-printf '%s\n' 'name = "custom"' > "$PROJECT/.codex/agents/custom.toml"
-reject 'developer_instructions' harness spawn custom "$BUILDER" medium
-printf '%s\n' 'name = "custom"' 'invalid [ TOML' > "$PROJECT/.codex/agents/custom.toml"
-reject 'Invalid role TOML' harness spawn custom "$BUILDER" medium
+  jq --arg model "$BUILDER" '.custom = {model:$model,effort:"medium"}' "$PROJECT/$AGENT_DIR/goal-models.json" > "$TEST_ROOT/models.tmp"
+  mv "$TEST_ROOT/models.tmp" "$PROJECT/$AGENT_DIR/goal-models.json"
+  id="$(reserve custom "$BUILDER" medium)"
+  run harness spawn-confirm "$id" custom-agent > /dev/null
+  check '.[0].harness.metrics.custom_runs == 1'
+  run harness spawn-finish custom-agent completed --closed > /dev/null
+  printf '%s\n' 'model = "hidden-pin"' >> "$PROJECT/$AGENT_DIR/agents/custom.toml"
+  reject 'conflicts with runtime routing' harness spawn custom "$BUILDER" medium
+  printf '%s\n' 'name = "different"' 'developer_instructions = "ok"' > "$PROJECT/$AGENT_DIR/agents/custom.toml"
+  reject 'name must match' harness spawn custom "$BUILDER" medium
+  printf '%s\n' 'name = "custom"' > "$PROJECT/$AGENT_DIR/agents/custom.toml"
+  reject 'developer_instructions' harness spawn custom "$BUILDER" medium
+  printf '%s\n' 'name = "custom"' 'invalid [ TOML' > "$PROJECT/$AGENT_DIR/agents/custom.toml"
+  reject 'Invalid role TOML' harness spawn custom "$BUILDER" medium
+fi
 reject 'Invalid role name' harness spawn ../builder "$BUILDER" medium
 reject 'outside the authorized' harness spawn builder unapproved-model medium --task t1
 reject 'Invalid effort' harness spawn builder "$BUILDER" nonsense --task t1
@@ -349,7 +400,7 @@ id="$(reserve visual-reviewer "$BUILDER" medium)"
 check '.[0].harness.metrics.visual_runs == 0'
 run harness spawn-confirm "$id" visual-agent > /dev/null
 check '.[0].harness.metrics.visual_runs == 1'
-printf '%s\n' 'PASS: custom TOML, conflicting pins, explicit model/effort and intrinsic visual capability'
+printf '%s\n' 'PASS: custom role config, conflicting pins, explicit model/effort and intrinsic visual capability'
 
 # Two simultaneous callers compete under the real main shared state lock.
 reset_fixture
@@ -368,7 +419,7 @@ printf '%s\n' 'PASS: concurrent reservation race accepts exactly one launch'
 # Legal phase auto-advance on spawn (researcher from PLANNED → RESEARCHING).
 reset_fixture
 mutate_fixture '.[0].harness.phase = "PLANNED" | .[0].harness.budget.max_researcher_runs = 2'
-RESEARCHER="$(jq -r '."$routing".researcher.NORMAL.model' "$PROJECT/.codex/goal-models.json")"
+RESEARCHER="$(jq -r '."$routing".researcher.NORMAL.model' "$PROJECT/$AGENT_DIR/goal-models.json")"
 id="$(reserve researcher "$RESEARCHER" medium)"
 check '.[0].harness.phase == "RESEARCHING"'
 jq -e --arg id "$id" '.reservation.phase == "RESEARCHING"' "$TEST_ROOT/reserved.json" >/dev/null
@@ -382,4 +433,4 @@ rg -q "GOAL_TASK='t1'" "$brief_path"
 rg -q 'TARGET_WORKTREE' "$brief_path"
 printf '%s\n' 'PASS: harness brief writes worker brief file'
 
-printf '%s\n' 'PASS: delegation fixture suite'
+printf '%s\n' "PASS: delegation fixture suite (AGENT=$AGENT)"

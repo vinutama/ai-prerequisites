@@ -3,21 +3,27 @@ set -euo pipefail
 
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUNTIME_ROOT="$(cd "$SCRIPTS_DIR/../.." && pwd)"
+AGENT_CONFIG_DIR="$(basename "$(cd "$SCRIPTS_DIR/.." && pwd)")"   # .codex | .cursor
+case "$AGENT_CONFIG_DIR" in
+  .codex) AGENT_PLATFORM=codex ;;
+  .cursor) AGENT_PLATFORM=cursor ;;
+  *) printf '%s\n' "Unsupported agent config dir: $AGENT_CONFIG_DIR (expected .codex or .cursor)" >&2; exit 1 ;;
+esac
 PROJECT_ROOT="$RUNTIME_ROOT"
-if [ -f "$RUNTIME_ROOT/.codex/workflow-root" ]; then
-  IFS= read -r PROJECT_ROOT < "$RUNTIME_ROOT/.codex/workflow-root"
-  [ -d "$PROJECT_ROOT/.codex/scripts" ] || { printf '%s\n' 'Shared workflow root is missing' >&2; exit 1; }
+if [ -f "$RUNTIME_ROOT/$AGENT_CONFIG_DIR/workflow-root" ]; then
+  IFS= read -r PROJECT_ROOT < "$RUNTIME_ROOT/$AGENT_CONFIG_DIR/workflow-root"
+  [ -d "$PROJECT_ROOT/$AGENT_CONFIG_DIR/scripts" ] || { printf '%s\n' 'Shared workflow root is missing' >&2; exit 1; }
   PROJECT_ROOT="$(cd "$PROJECT_ROOT" && pwd)"
 fi
 STATE_FILE="$PROJECT_ROOT/state.json"
-STATE_LOCK_DIR="$PROJECT_ROOT/.codex/.state.lock"
-PROGRESS_LOG="$PROJECT_ROOT/.codex/goal-progress.log"
-CONFIG_FILE="$PROJECT_ROOT/.codex/goal-config.json"
-FIGMA_ENV_FILE="$PROJECT_ROOT/.codex/figma.env"
-MCP_JSON="$PROJECT_ROOT/.codex/mcp.json"
+STATE_LOCK_DIR="$PROJECT_ROOT/$AGENT_CONFIG_DIR/.state.lock"
+PROGRESS_LOG="$PROJECT_ROOT/$AGENT_CONFIG_DIR/goal-progress.log"
+CONFIG_FILE="$PROJECT_ROOT/$AGENT_CONFIG_DIR/goal-config.json"
+FIGMA_ENV_FILE="$PROJECT_ROOT/$AGENT_CONFIG_DIR/figma.env"
+MCP_JSON="$PROJECT_ROOT/$AGENT_CONFIG_DIR/mcp.json"
 WORKTREES_DIR="$PROJECT_ROOT/.worktrees"
 REVIEW_DIR="$PROJECT_ROOT/.goal-review"
-AGENT_CONFIG_DIR=".codex"
+CODEX_TOML="$PROJECT_ROOT/$AGENT_CONFIG_DIR/config.toml"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -130,9 +136,12 @@ Commands:
   worktree add <task-slug|tN>  Create isolated git worktree for parallel task
   worktree list             List active task worktrees
   worktree sync [path]      Install shared excludes; clean old copied workflow files
+  reset runtime [--force] [--yes]
+                            Fresh runtime for this platform only (goals, reviews,
+                            worktrees, progress). Keeps the other platform and config.
   worktree merge <task-slug|tN>  Merge worktree branch into goal branch
   worktree remove <task-slug|tN> Remove worktree without merging
-  figma setup <token>       Store Figma PAT and enable figma MCP in .codex/mcp.json
+  figma setup <token>       Store Figma PAT and enable figma MCP in agent config dir (mcp.json / config.toml)
   figma design set <url>    Set default Figma design link in goal-config.json
   figma disable             Disable Figma integration
   figma status              Show Figma integration status
@@ -225,7 +234,7 @@ case "$platform" in
   github|gitlab) ;;
   *)
     case "${1:-}" in
-      help|--help|-h|doctor|models|config|context|selfcheck|codex|complexity|issues) ;;
+      help|--help|-h|doctor|models|config|context|selfcheck|codex|complexity|issues|reset) ;;
       *) err "Cannot detect platform. Run '/init-goal' or set GOAL_PLATFORM=github|gitlab"; exit 1 ;;
     esac
     ;;
@@ -543,8 +552,9 @@ cmd_start() {
     --arg strategy "$strategy" \
     --arg user_tt "$user_task_type" \
     --argjson repos "$repos_json" \
+    --arg agent_platform "$AGENT_PLATFORM" \
     '{
-      id: $id, platform:$platform, source: $snapshot, goal: $goal,
+      id: $id, platform:$platform, agent_platform:$agent_platform, source: $snapshot, goal: $goal,
       branch: $branch,
       base_branch: $base,
       pr_number: null,
@@ -813,7 +823,36 @@ parse_figma_url() {
 
 merge_figma_mcp() {
   local enabled="${1:-true}"
-  local config_toml="$PROJECT_ROOT/.codex/config.toml"
+  if [ "$AGENT_PLATFORM" = "cursor" ]; then
+    require_cmd jq
+    local mcp_json="$MCP_JSON"
+    local figma_block
+    figma_block=$(jq -n --arg key '${FIGMA_API_KEY}' '{
+      command: "npx",
+      args: ["-y", "figma-developer-mcp", "--stdio"],
+      env: {FIGMA_API_KEY: $key}
+    }')
+    if [ "$enabled" != "true" ]; then
+      if [ -f "$mcp_json" ]; then
+        jq 'if .mcpServers.figma then del(.mcpServers.figma) else . end' \
+          "$mcp_json" > "$mcp_json.tmp" && mv "$mcp_json.tmp" "$mcp_json"
+      fi
+      return
+    fi
+    mkdir -p "$(dirname "$mcp_json")"
+    if [ -f "$mcp_json" ]; then
+      jq --argjson figma "$figma_block" \
+        '.mcpServers = ((.mcpServers // {}) * {figma: $figma})' \
+        "$mcp_json" > "$mcp_json.tmp" && mv "$mcp_json.tmp" "$mcp_json"
+    else
+      jq -n --argjson figma "$figma_block" \
+        '{mcpServers: {figma: $figma}}' \
+        > "$mcp_json"
+    fi
+    return
+  fi
+
+  local config_toml="$CODEX_TOML"
   local start="# >>> goal-loop figma >>>"
   local end="# <<< goal-loop figma <<<"
   mkdir -p "$(dirname "$config_toml")"
@@ -884,9 +923,15 @@ cmd_figma_setup() {
   jq '.figma_enabled = true' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
 
   log "Figma PAT saved to $FIGMA_ENV_FILE"
-  log "Figma MCP enabled in $CODEX_TOML"
-  warn "Load secrets before Codex: set -a && source .codex/figma.env && set +a && codex"
-  warn "Or use: .codex/scripts/run-codex.sh"
+  if [ "$AGENT_PLATFORM" = "cursor" ]; then
+    log "Figma MCP enabled in $MCP_JSON"
+    warn "Load secrets before Cursor: set -a && source $AGENT_CONFIG_DIR/figma.env && set +a && cursor-agent"
+    warn "Or use: $AGENT_CONFIG_DIR/scripts/run-cursor.sh"
+  else
+    log "Figma MCP enabled in $CODEX_TOML"
+    warn "Load secrets before Codex: set -a && source $AGENT_CONFIG_DIR/figma.env && set +a && codex"
+    warn "Or use: $AGENT_CONFIG_DIR/scripts/run-codex.sh"
+  fi
 }
 
 cmd_figma_design_set() {
@@ -954,10 +999,18 @@ cmd_figma_status() {
   else
     warn "  figma.env: missing"
   fi
-  if [ -f "$CODEX_TOML" ] && grep -q '^\[mcp_servers.figma\]' "$CODEX_TOML"; then
-    log "  .codex/config.toml [mcp_servers.figma]: configured"
+  if [ "$AGENT_PLATFORM" = "cursor" ]; then
+    if [ -f "$MCP_JSON" ] && jq -e '.mcpServers.figma' "$MCP_JSON" >/dev/null 2>&1; then
+      log "  $AGENT_CONFIG_DIR/mcp.json mcpServers.figma: configured"
+    else
+      warn "  $AGENT_CONFIG_DIR/mcp.json mcpServers.figma: not configured"
+    fi
   else
-    warn "  .codex/config.toml [mcp_servers.figma]: not configured"
+    if [ -f "$CODEX_TOML" ] && grep -q '^\[mcp_servers.figma\]' "$CODEX_TOML"; then
+      log "  $AGENT_CONFIG_DIR/config.toml [mcp_servers.figma]: configured"
+    else
+      warn "  $AGENT_CONFIG_DIR/config.toml [mcp_servers.figma]: not configured"
+    fi
   fi
 }
 
@@ -1574,8 +1627,10 @@ cmd_issues_plan_begin() {
     --arg run_id "$run_id" \
     --argjson issues "$issues_json" \
     --argjson harness "$harness" \
+    --arg agent_platform "$AGENT_PLATFORM" \
     '{
       id: $id,
+      agent_platform: $agent_platform,
       kind: "queue",
       goal_source: "issues",
       source: {
@@ -1622,9 +1677,9 @@ cmd_issues_plan_done() {
   else
     state_mutate --argjson idx "$GOAL_IDX" '.[$idx].status = "planned"' || return
   fi
-  mkdir -p "$PROJECT_ROOT/.codex/queue-plans"
-  printf '%s\n' "$plan" > "$PROJECT_ROOT/.codex/queue-plans/${run_id}.json"
-  printf '%s\n' "$plan" > "$PROJECT_ROOT/.codex/queue-plan.json"
+  mkdir -p "$PROJECT_ROOT/$AGENT_CONFIG_DIR/queue-plans"
+  printf '%s\n' "$plan" > "$PROJECT_ROOT/$AGENT_CONFIG_DIR/queue-plans/${run_id}.json"
+  printf '%s\n' "$plan" > "$PROJECT_ROOT/$AGENT_CONFIG_DIR/queue-plan.json"
   log "Queue plan done for run $run_id"
   jq -n --arg rid "$run_id" --argjson plan "$plan" \
     '{run_id:$rid, status:"planned", queue_plan:$plan}'
@@ -1813,8 +1868,9 @@ ${body}"
     --arg issue_url "$issue_url" \
     --arg issue_title "$title" \
     --argjson repos "$repos_json" \
+    --arg agent_platform "$AGENT_PLATFORM" \
     '{
-      id:$id, goal_source:"issues", source:{type:"issues",platform:$platform,repo:$repo,host:$host,title:$issue_title,body:$body,reference:$issue_url,acceptance_criteria:[]},
+      id:$id, agent_platform:$agent_platform, goal_source:"issues", source:{type:"issues",platform:$platform,repo:$repo,host:$host,title:$issue_title,body:$body,reference:$issue_url,acceptance_criteria:[]},
       goal: $goal,
       branch: $branch,
       base_branch: $base,
@@ -2077,6 +2133,8 @@ models_vision_list() {
 models_is_vision() {
   local models_file="$1" model="$2"
   [ -z "$model" ] && return 1
+  # Cursor catalogs use inherit; session/frontmatter owns the real model.
+  [ "$model" = "inherit" ] && return 0
   models_vision_list "$models_file" | grep -Fxq "$model"
 }
 
@@ -3285,6 +3343,10 @@ cmd_harness_progress() {
 
 cmd_harness_hook() {
   # Read Codex hook JSON from stdin. Emit START/END event. Print JSON for SubagentStop.
+  if [ "$AGENT_PLATFORM" = "cursor" ]; then
+    echo '{"continue":true,"note":"harness hook not applicable on cursor"}'
+    return 0
+  fi
   require_cmd jq
   local payload
   payload="$(cat)"
@@ -3437,11 +3499,11 @@ cmd_harness_context_put() {
   fi
 
   # Mirror well-known handoffs for resume convenience
-  mkdir -p "$PROJECT_ROOT/.codex"
+  mkdir -p "$PROJECT_ROOT/$AGENT_CONFIG_DIR"
   case "$name" in
-    discovery_context) printf '%s\n' "$payload" > "$PROJECT_ROOT/.codex/discovery-context.json" ;;
-    repo_context) printf '%s\n' "$payload" > "$PROJECT_ROOT/.codex/repo-context.json" ;;
-    queue_plan) printf '%s\n' "$payload" > "$PROJECT_ROOT/.codex/queue-plan.json" ;;
+    discovery_context) printf '%s\n' "$payload" > "$PROJECT_ROOT/$AGENT_CONFIG_DIR/discovery-context.json" ;;
+    repo_context) printf '%s\n' "$payload" > "$PROJECT_ROOT/$AGENT_CONFIG_DIR/repo-context.json" ;;
+    queue_plan) printf '%s\n' "$payload" > "$PROJECT_ROOT/$AGENT_CONFIG_DIR/queue-plan.json" ;;
   esac
 
   state_mutate --argjson idx "$GOAL_IDX" --arg repo "${GOAL_REPO:-.}" --arg name "$name" --argjson payload "$payload" \
@@ -3500,11 +3562,12 @@ cmd_harness_brief() {
       '((.[$idx].harness.tasks // []) | map(select(.id == $task)) | .[0]) // null' "$STATE_FILE")
   fi
 
-  local briefs_dir slug out is_queue=false issues_json
-  briefs_dir="$PROJECT_ROOT/.codex/briefs"
+  local briefs_dir slug out is_queue=false issues_json goal_git_path
+  briefs_dir="$PROJECT_ROOT/$AGENT_CONFIG_DIR/briefs"
   mkdir -p "$briefs_dir"
   slug="$(slugify "${goal_id}-${role}-${task:-root}")"
   out="$briefs_dir/${slug}.md"
+  goal_git_path="$PROJECT_ROOT/$AGENT_CONFIG_DIR/scripts/goal-git.sh"
   if jq -e --argjson idx "$GOAL_IDX" '.[$idx].kind == "queue"' "$STATE_FILE" >/dev/null 2>&1; then
     is_queue=true
     issues_json=$(jq -c --argjson idx "$GOAL_IDX" '.[$idx].issues // []' "$STATE_FILE")
@@ -3521,12 +3584,12 @@ cmd_harness_brief() {
     printf "export GOAL_TASK='%s'\n" "${task}"
     printf "export GOAL_REPO='%s'\n" "$repo"
     printf "export GOAL_ISSUE_REPO='%s'\n" "$issue_repo"
-    printf "GOAL_GIT='%s'\n" "$PROJECT_ROOT/.codex/scripts/goal-git.sh"
+    printf "GOAL_GIT='%s'\n" "$goal_git_path"
     printf '```\n\n'
     printf '## Paths\n\n'
     printf -- '- WORKFLOW_ROOT: `%s`\n' "$PROJECT_ROOT"
     printf -- '- TARGET_WORKTREE: `%s`\n' "$wd"
-    printf -- '- GOAL_GIT: `%s`\n' "$PROJECT_ROOT/.codex/scripts/goal-git.sh"
+    printf -- '- GOAL_GIT: `%s`\n' "$goal_git_path"
     if [ "$is_queue" = true ]; then
       printf -- '- Queue planning: no issue branch yet — do not mutate branches or worktrees.\n\n'
     else
@@ -3542,7 +3605,7 @@ cmd_harness_brief() {
       printf -- '- Edit/check only TARGET_WORKTREE. Do not write harness/review/state.\n'
     fi
     printf -- '- Never run raw gh/glab or web search for forge operations.\n'
-    printf -- '- Never edit `.codex/scripts` during a run.\n\n'
+    printf -- '- Never edit `%s/scripts` during a run.\n\n' "$AGENT_CONFIG_DIR"
     printf '## Source\n\n```json\n'
     printf '%s\n' "$source_json" | jq .
     printf '```\n\n'
@@ -3575,6 +3638,12 @@ cmd_harness_brief() {
     else
       printf 'Return ## Agent output, ## Milestones, and ## Handoff with task_id, task_result,\n'
       printf 'status, files_staged, checks_run, findings_addressed, decisions, notes, next_action.\n'
+    fi
+    printf '\n## Launch\n\n'
+    if [ "$AGENT_PLATFORM" = "cursor" ]; then
+      printf 'Launch with the Agent/Task tool: subagent `%s`, prompt `Read and follow your brief: %s`\n' "$role" "$out"
+    else
+      printf 'spawn_agent({agent_type, model, reasoning_effort, fork_context:false, message:"Read and follow your brief: %s"})\n' "$out"
     fi
     printf '\n## Notes from MAIN\n\n'
     printf '(MAIN may append rework findings below this line.)\n'
@@ -3970,6 +4039,10 @@ cmd_route() {
 }
 
 cmd_codex_ensure_user_config() {
+  if [ "$AGENT_PLATFORM" != "codex" ]; then
+    log "codex ensure-user-config: not applicable on $AGENT_PLATFORM"
+    return 0
+  fi
   local codex_home="${CODEX_HOME:-$HOME/.codex}"
   local cfg="$codex_home/config.toml"
   mkdir -p "$codex_home"
@@ -4020,6 +4093,218 @@ for module in forge goal-context delivery-groups goal-delivery goal-delegation g
 done
 context_init "${1:-help}" "${2:-}"
 
+# Ownership of a goal in the shared state.json. New goals set agent_platform.
+# Older goals are inferred from spawn models: inherit is Cursor, any other
+# model name is Codex, and a goal with no reservations stays unknown.
+goal_platform_program() {
+  cat <<'EOF'
+def goal_platform:
+  if (.agent_platform == "cursor" or .agent_platform == "codex") then .agent_platform
+  else
+    (
+      ((.spawn_reservations // []) | map(.model // empty))
+      + ((.harness.spawn_reservations // []) | map(.model // empty))
+      + (((.delivery_groups // []) | map(.harness.spawn_reservations // []) | add) // [] | map(.model // empty))
+    ) as $models
+    | if ($models | length) == 0 then "unknown"
+      elif any($models[]; . == "inherit") then "cursor"
+      else "codex"
+      end
+  end;
+EOF
+}
+
+reset_worktree_abs() {
+  local rel="$1" path
+  [ -n "$rel" ] || return 0
+  case "$rel" in
+    /*) path="$rel" ;;
+    *) path="$PROJECT_ROOT/$rel" ;;
+  esac
+  if [ -d "$path" ]; then
+    path="$(cd "$path" && pwd)"
+  fi
+  [ "$path" = "$PROJECT_ROOT" ] && return 0
+  printf '%s\n' "$path"
+}
+
+reset_worktree_dirty() {
+  local path="$1"
+  [ -d "$path" ] || return 1
+  [ -n "$(git -C "$path" status --porcelain 2>/dev/null || true)" ]
+}
+
+reset_remove_worktree() {
+  local path="$1" force="$2"
+  [ -n "$path" ] && [ "$path" != "$PROJECT_ROOT" ] || return 0
+  if git -C "$PROJECT_ROOT" worktree list --porcelain | grep -qxF "worktree $path"; then
+    if [ "$force" = true ]; then
+      git -C "$PROJECT_ROOT" worktree remove --force "$path" >&2 || return 1
+    else
+      git -C "$PROJECT_ROOT" worktree remove "$path" >&2 || return 1
+    fi
+  fi
+  rm -rf "$path"
+}
+
+cmd_reset() {
+  local scope="${1:-}" force=false yes=false answer=""
+  [ "$scope" = runtime ] || { err "reset subcommand must be runtime"; exit 1; }
+  shift || true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) force=true ;;
+      --yes|-y) yes=true ;;
+      *) err "Unknown reset argument: $1"; exit 1 ;;
+    esac
+    shift
+  done
+  require_cmd jq git
+  if [ -d "$STATE_LOCK_DIR" ]; then
+    err "State lock exists ($STATE_LOCK_DIR); a run may be active. Reset refused."
+    exit 1
+  fi
+
+  local prog owned removed_ids kept_ids unknown_ids
+  prog="$(goal_platform_program)"
+  if [ -f "$STATE_FILE" ]; then
+    owned="$(jq -c --arg platform "$AGENT_PLATFORM" "$prog
+      [.[] | select(goal_platform == \$platform)]
+    " "$STATE_FILE")" || return 1
+    removed_ids="$(jq -r --arg platform "$AGENT_PLATFORM" "$prog
+      [.[] | select(goal_platform == \$platform) | .id] | join(\" \")
+    " "$STATE_FILE")"
+    kept_ids="$(jq -r --arg platform "$AGENT_PLATFORM" "$prog
+      [.[] | select(goal_platform != \$platform and goal_platform != \"unknown\") | .id] | join(\" \")
+    " "$STATE_FILE")"
+    unknown_ids="$(jq -r --arg platform "$AGENT_PLATFORM" "$prog
+      [.[] | select(goal_platform == \"unknown\") | .id] | join(\" \")
+    " "$STATE_FILE")"
+  else
+    owned='[]'
+    removed_ids="" kept_ids="" unknown_ids=""
+  fi
+
+  local paths_file split_branches split_paths rel branch slug extra
+  split_branches="$(mktemp)"
+  split_paths="$(mktemp)"
+  paths_file="$(mktemp)"
+  if [ "$owned" != "[]" ]; then
+    jq -r '.[] | [.worktree, ((.delivery_groups // [])[] | .worktree)] | .[] | select(type == "string" and length > 0)' <<<"$owned" \
+      | while IFS= read -r rel; do
+          reset_worktree_abs "$rel"
+        done > "$paths_file"
+    jq -r '.[] | [.branch, ((.delivery_groups // [])[] | .branch)] | .[] | select(type == "string" and length > 0)' <<<"$owned" \
+      > "$split_branches"
+    while IFS= read -r branch; do
+      slug="$(slugify "$branch")"
+      [ -n "$slug" ] || continue
+      if [ -d "$WORKTREES_DIR/$slug" ]; then
+        reset_worktree_abs "$WORKTREES_DIR/$slug"
+      fi
+      for extra in "$WORKTREES_DIR/${slug}--"*; do
+        [ -e "$extra" ] || continue
+        reset_worktree_abs "$extra"
+      done
+    done < "$split_branches" >> "$paths_file"
+  fi
+  sort -u "$paths_file" -o "$split_paths"
+  sort -u "$split_branches" -o "$split_branches"
+
+  local path
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if reset_worktree_dirty "$path" && [ "$force" != true ]; then
+      err "Worktree has uncommitted changes: $path"
+      err "Re-run with --force to discard them, or commit/clean the worktree first."
+      rm -f "$paths_file" "$split_branches" "$split_paths"
+      exit 1
+    fi
+  done < "$split_paths"
+
+  log "Reset $AGENT_PLATFORM runtime"
+  log "  remove goals: ${removed_ids:-<none>}"
+  log "  keep goals: ${kept_ids:-<none>}"
+  [ -n "$unknown_ids" ] && log "  keep unknown-owner goals: $unknown_ids"
+  if [ "$yes" != true ]; then
+    if [ ! -r /dev/tty ]; then
+      err "reset runtime requires --yes when there is no terminal"
+      rm -f "$paths_file" "$split_branches" "$split_paths"
+      exit 1
+    fi
+    printf 'Continue? [y/N] ' >/dev/tty
+    IFS= read -r answer </dev/tty || answer=""
+    case "$answer" in
+      y|Y|yes|YES) ;;
+      *) log "Reset cancelled"; rm -f "$paths_file" "$split_branches" "$split_paths"; exit 1 ;;
+    esac
+  fi
+
+  local config_dir="$PROJECT_ROOT/$AGENT_CONFIG_DIR" backup=""
+  if [ -f "$STATE_FILE" ]; then
+    mkdir -p "$config_dir/backups"
+    backup="$config_dir/backups/state-$(date +%Y%m%dT%H%M%S).json"
+    if [ -e "$backup" ]; then
+      backup="$config_dir/backups/state-$(date +%Y%m%dT%H%M%S)-$$.json"
+    fi
+    cp "$STATE_FILE" "$backup"
+    log "Backed up state.json to $backup"
+    unset GOAL_ID GOAL_GROUP GROUP_STATE_VIEW
+    state_mutate --arg platform "$AGENT_PLATFORM" "$prog map(select(goal_platform != \$platform))" || {
+      rm -f "$paths_file" "$split_branches" "$split_paths"
+      return 1
+    }
+    if jq -e 'length == 0' "$STATE_FILE" >/dev/null; then
+      rm -f "$STATE_FILE"
+      log "Removed empty state.json"
+    fi
+  fi
+
+  local branch key
+  while IFS= read -r branch; do
+    [ -n "$branch" ] || continue
+    key="$(slugify "$branch")"
+    [ -n "$key" ] || continue
+    rm -f "$REVIEW_DIR/${key}.json"
+    rm -f "$REVIEW_DIR/${key}__"*.json
+  done < "$split_branches"
+  rmdir "$REVIEW_DIR" 2>/dev/null || true
+
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    reset_remove_worktree "$path" "$force" || {
+      rm -f "$paths_file" "$split_branches" "$split_paths"
+      return 1
+    }
+  done < "$split_paths"
+  git -C "$PROJECT_ROOT" worktree prune >&2 || true
+  rmdir "$WORKTREES_DIR" 2>/dev/null || true
+
+  rm -f \
+    "$config_dir/goal-progress.log" \
+    "$config_dir/queue-plan.json" \
+    "$config_dir/discovery-context.json" \
+    "$config_dir/repo-context.json" \
+    "$config_dir/workflow-root" \
+    "$config_dir/workflow-manifest"
+  rm -rf "$config_dir/briefs" "$config_dir/pr-drafts" "$config_dir/queue-plans" "$config_dir/cache/forge"
+  rmdir "$config_dir/cache" 2>/dev/null || true
+
+  worktree_install_excludes || true
+  rm -f "$paths_file" "$split_branches" "$split_paths"
+
+  jq -n \
+    --arg platform "$AGENT_PLATFORM" \
+    --arg backup "${backup:-}" \
+    --arg removed "$removed_ids" \
+    --arg kept "$kept_ids" \
+    --arg unknown "$unknown_ids" \
+    '{platform:$platform, backup:(if $backup == "" then null else $backup end),
+      removed:($removed | split(" ") | map(select(length > 0))),
+      kept:($kept | split(" ") | map(select(length > 0))),
+      unknown:($unknown | split(" ") | map(select(length > 0)))}'
+  log "Reset complete for $AGENT_PLATFORM"
+}
 
 case "${1:-}" in
   help|--help|-h) usage ;;
@@ -4074,6 +4359,7 @@ case "${1:-}" in
       *)      err "worktree subcommand must be add, list, sync, merge, or remove"; exit 1 ;;
     esac
     ;;
+  reset)    shift; cmd_reset "$@" ;;
   selfcheck) cmd_selfcheck ;;
   models)   shift; cmd_models "$@" ;;
   complexity)

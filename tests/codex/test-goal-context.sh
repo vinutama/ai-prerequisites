@@ -1,15 +1,26 @@
 #!/usr/bin/env bash
 # Public-command integration tests with real local repositories and no network.
+# Usage: AGENT=codex|cursor bash tests/codex/test-goal-context.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+AGENT="${AGENT:-${PLATFORM:-codex}}"
+case "$AGENT" in
+  codex|cursor) ;;
+  *)
+    echo "Unknown AGENT=$AGENT (expected codex|cursor)" >&2
+    exit 1
+    ;;
+esac
 # Keep fixtures inside the workspace so sandboxed agents can run the suite.
 export TMPDIR="${TMPDIR:-$ROOT/.tmp-tests}"
 mkdir -p "$TMPDIR"
-python3 - "$ROOT" <<'PY'
+python3 - "$ROOT" "$AGENT" <<'PY'
 import json, os, pathlib, shutil, subprocess, sys, tempfile
 
-root = pathlib.Path(sys.argv[1]); count = 0
-with tempfile.TemporaryDirectory(prefix='codex-context-') as tmp:
+root = pathlib.Path(sys.argv[1]); agent = sys.argv[2]; count = 0
+agent_dir = '.codex' if agent == 'codex' else '.cursor'
+src_agent = root / 'templates' / agent / agent_dir
+with tempfile.TemporaryDirectory(prefix=f'{agent}-context-') as tmp:
     tmp = pathlib.Path(tmp); project = tmp/'project with spaces'; project.mkdir()
     remote = tmp/'remote.git'
     def git(*args, cwd=project):
@@ -18,14 +29,16 @@ with tempfile.TemporaryDirectory(prefix='codex-context-') as tmp:
     git('config','user.name','Fixture'); git('config','user.email','fixture@example.test')
     git('remote','add','origin',str(remote))
     (project/'README.md').write_text('seed\n')
-    (project/'.gitignore').write_text('.codex/\n.agents/\nAGENTS.md\nstate.json\n.worktrees/\n.goal-review/\nbin/\n')
+    ignore = f'{agent_dir}/\n.agents/\nAGENTS.md\nstate.json\n.worktrees/\n.goal-review/\nbin/\n'
+    (project/'.gitignore').write_text(ignore)
     git('add','.gitignore','README.md'); git('commit','-qm','seed'); git('push','-u','origin','main')
-    shutil.copytree(root/'templates/codex/.codex',project/'.codex')
-    shutil.copytree(root/'templates/codex/.agents',project/'.agents')
-    shutil.copy(root/'templates/codex/AGENTS.md',project/'AGENTS.md')
+    shutil.copytree(src_agent, project/agent_dir)
+    if agent == 'codex':
+        shutil.copytree(root/'templates/codex/.agents', project/'.agents')
+    shutil.copy(root/f'templates/{agent}/AGENTS.md', project/'AGENTS.md')
     config = dict(platform='github',goal_source='prompt',target_branch='main',repos=['.'],
                   forge_repo='team/app',review_mode='local',verify_commands=[dict(name='syntax',cmd='git diff --check')])
-    config_path=project/'.codex/goal-config.json'
+    config_path=project/agent_dir/'goal-config.json'
     def set_config(**values):
         config.update(values); config_path.write_text(json.dumps(config))
     set_config()
@@ -44,7 +57,7 @@ else:raise SystemExit('unexpected forge call '+repr(args))
     for name in ('gh','glab'):
         f=mock_dir/name;f.write_text(mock);f.chmod(0o755)
     env=dict(os.environ,PATH=str(mock_dir)+':'+os.environ['PATH'],CALL_FILE=str(tmp/'calls'))
-    helper=project/'.codex/scripts/goal-git.sh'
+    helper=project/agent_dir/'scripts'/'goal-git.sh'
     def run(*args, selectors=None, success=True, local=None):
         current=dict(env);current.update(selectors or {})
         result=subprocess.run(['bash',str(local or helper),*args],env=current,text=True,capture_output=True,timeout=15)
@@ -60,6 +73,7 @@ else:raise SystemExit('unexpected forge call '+repr(args))
     check(run('help').returncode==0,'help works before state exists')
     run('start','Fix intake routing')
     check(state()[-1]['source']['body']=='Fix intake routing','prompt persists full source snapshot')
+    check(state()[-1].get('agent_platform')==agent,'new goals record the platform that created them')
     first_id=state()[-1]['id']
     git('checkout','main')
     set_config(goal_source='jira')
@@ -77,11 +91,16 @@ else:raise SystemExit('unexpected forge call '+repr(args))
     check(state()[-1]['issue']['number']==91 and state()[-1]['run_id']=='run-a','explicit new issue selectors bypass unrelated prompt/Jira/Markdown state')
     selected={'GOAL_ISSUE':'91','GOAL_RUN_ID':'run-a'}
     wt=project/state()[-1]['worktree']
-    # Worktrees stay clean: shared info/exclude, no copied .codex tree required.
+    # Worktrees stay clean: shared info/exclude, no copied agent tree required.
     dirty=subprocess.check_output(['git','-C',str(wt),'status','--porcelain'],text=True).strip()
     check(dirty=='','issue worktree is clean immediately after start --worktree')
     exclude=(project/'.git/info/exclude').read_text()
-    check('.codex/' in exclude and 'goal-workflow excludes' in exclude,'shared info/exclude installed for worktrees')
+    check(f'{agent_dir}/' in exclude and 'goal-workflow excludes' in exclude,'shared info/exclude installed for worktrees')
+    other = '.cursor' if agent == 'codex' else '.codex'
+    (project/other).mkdir(exist_ok=True)
+    run('worktree','sync',str(project),selectors=selected)
+    exclude=(project/'.git/info/exclude').read_text()
+    check('.codex/' in exclude and '.cursor/' in exclude,'exclude block lists every installed platform')
     context=json.loads(run('context',selectors=selected).stdout)
     check(context['TARGET_WORKTREE']==str(wt) and context['WORKFLOW_ROOT']==str(project),'root resolves selected issue worktree')
     check(context['GOAL_GIT']==str(helper),'context always returns the root helper')
@@ -104,13 +123,14 @@ else:raise SystemExit('unexpected forge call '+repr(args))
     run('review','init',selectors=selected)
     check(len(json.loads(run('review','list',selectors=selected).stdout))==1,'review resume preserves existing findings')
     # sync cleans old copies if present; preserves user-owned files only when not in manifest
-    (wt/'.codex').mkdir(exist_ok=True)
-    (wt/'.codex/workflow-manifest').write_text('.codex/stale.txt\n')
-    (wt/'.codex/stale.txt').write_text('old copy')
-    (wt/'.codex/user-settings.txt').write_text('owned by user')
+    managed = wt/agent_dir
+    managed.mkdir(exist_ok=True)
+    (managed/'workflow-manifest').write_text(f'{agent_dir}/stale.txt\n')
+    (managed/'stale.txt').write_text('old copy')
+    (managed/'user-settings.txt').write_text('owned by user')
     run('worktree','sync',str(wt),selectors=selected)
-    check(not (wt/'.codex/stale.txt').exists(),'sync removes previously copied managed files')
-    check((wt/'.codex/user-settings.txt').read_text()=='owned by user','sync preserves non-manifest user files')
+    check(not (managed/'stale.txt').exists(),'sync removes previously copied managed files')
+    check((managed/'user-settings.txt').read_text()=='owned by user','sync preserves non-manifest user files')
     check(json.loads(run('issues','queue',selectors={'GOAL_RUN_ID':'run-a'}).stdout)[0]['issue']['number']==91,'queue reads state without blocking on stdin')
     run('commit','fix: intake routing',selectors=selected)
     report=json.loads(run('verify','run',selectors=selected).stdout)
@@ -198,5 +218,5 @@ else:raise SystemExit('unexpected forge call '+repr(args))
     run('stage','README.md');run('commit','chore: tooling fixture')
     unknown=json.loads(run('verify','run',success=False).stdout)
     check(unknown['overall']=='UNKNOWN' and unknown['results'][0]['status']=='UNKNOWN','missing tooling behind failing exit is UNKNOWN not FAIL')
-print(str(count)+' context assertions passed')
+print(str(count)+f' context assertions passed (AGENT={agent})')
 PY

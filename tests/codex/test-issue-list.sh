@@ -1,12 +1,30 @@
 #!/usr/bin/env bash
 # Guard machine-readable issue lists against CLI deprecation banners and bad JSON.
+# Usage: AGENT=codex|cursor bash tests/codex/test-issue-list.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-TEST_ROOT="$(mktemp -d /tmp/codex-issue-list.XXXXXX)"
+AGENT="${AGENT:-${PLATFORM:-codex}}"
+case "$AGENT" in
+  codex)
+    SRC_SCRIPTS="$ROOT/templates/codex/.codex/scripts"
+    AGENT_DIR=".codex"
+    ;;
+  cursor)
+    SRC_SCRIPTS="$ROOT/templates/cursor/.cursor/scripts"
+    AGENT_DIR=".cursor"
+    ;;
+  *)
+    echo "Unknown AGENT=$AGENT (expected codex|cursor)" >&2
+    exit 1
+    ;;
+esac
+export TMPDIR="${TMPDIR:-$ROOT/.tmp-tests}"
+mkdir -p "$TMPDIR"
+TEST_ROOT="$(mktemp -d "$TMPDIR/${AGENT}-issue-list.XXXXXX")"
 trap 'rm -rf "$TEST_ROOT"' EXIT
-mkdir -p "$TEST_ROOT/project/.codex/scripts" "$TEST_ROOT/bin"
-cp "$ROOT/templates/codex/.codex/scripts/"*.sh "$TEST_ROOT/project/.codex/scripts/"
+mkdir -p "$TEST_ROOT/project/$AGENT_DIR/scripts" "$TEST_ROOT/bin"
+cp "$SRC_SCRIPTS/"*.sh "$TEST_ROOT/project/$AGENT_DIR/scripts/"
 
 cat > "$TEST_ROOT/bin/glab" <<'PY'
 #!/usr/bin/env python3
@@ -50,11 +68,11 @@ for platform in gitlab github; do
   fi
   jq -n --arg platform "$platform" --arg url "$url" \
     '{platform:$platform,issue_list_url:$url,issue_limit:3}' \
-    > "$TEST_ROOT/project/.codex/goal-config.json"
+    > "$TEST_ROOT/project/$AGENT_DIR/goal-config.json"
   for scenario in valid empty warning object multiple no-output failure; do
     result=0
     PATH="$TEST_ROOT/bin:$PATH" MOCK_SCENARIO="$scenario" \
-      bash "$TEST_ROOT/project/.codex/scripts/goal-git.sh" issues list \
+      bash "$TEST_ROOT/project/$AGENT_DIR/scripts/goal-git.sh" issues list \
       > "$TEST_ROOT/output" 2> "$TEST_ROOT/error" || result=$?
     case "$scenario" in
       valid)
@@ -84,6 +102,6 @@ PY
         rg -q 'Issue list command returned invalid JSON or a non-array response' "$TEST_ROOT/error"
         ;;
     esac
-    echo "PASS: $platform/$scenario"
+    echo "PASS: $AGENT/$platform/$scenario"
   done
 done

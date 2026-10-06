@@ -19,17 +19,17 @@ not apply. `GOAL_REPO` is a configured local key (`.` or a service path).
 Worktrees share `.git/info/exclude` (installed by `issues start --worktree`,
 `worktree add`, `groups start`, `start`). Never copy `state.json` / locks /
 progress / reviews into a worktree. `worktree sync [path]` installs excludes and
-removes obsolete copied workflow files.
+removes obsolete copied workflow files. Never copy `.cursor` into worktrees;
+never edit `.cursor/scripts` during a run.
 
 ## Launch
 
 ```text
 models <role> --complexity <LEVEL> [--require-multimodal]
-harness spawn <role> <model> <effort> [--task tN]
+harness spawn <role> <model|inherit> <effort> [--task tN]
 harness brief <role> [--task tN]          # prints absolute brief path
-# spawn_agent({agent_type, model, reasoning_effort, fork_context:false,
-#              message:"Read and follow your brief: <path>"})
-harness spawn-confirm <reservation-id> <agent-id>
+# Agent/Task(subagent=<role>, prompt="Read and follow your brief: <path>")
+harness spawn-confirm <reservation-id> <task-agent-id or cursor-<reservation>>
 # on failure:
 harness spawn-fail <reservation-id> <category> <reason>
 models <role> --complexity <LEVEL> --next <failed-model> [...]
@@ -37,8 +37,11 @@ models <role> --complexity <LEVEL> --next <failed-model> [...]
 harness spawn-finish <agent-id> completed|failed --closed
 ```
 
-If the phase is wrong, spawn auto-advances when legal; otherwise the error names
-`harness phase <EXPECTED>`. One targeted launch retry only.
+Cursor worker frontmatter owns the actual model (`inherit` by default). The
+catalog route feeds `harness spawn` for audit. If Agent/Task is unavailable,
+save a capability blocker and resume with `/goal --continue` — never implement
+in MAIN. If the phase is wrong, spawn auto-advances when legal; otherwise the
+error names `harness phase <EXPECTED>`. One targeted launch retry only.
 
 ## Review evidence and PR metadata
 
@@ -62,6 +65,8 @@ worktrees, and runtime logs. It does not touch the other platform, config, or
 branches. Older untagged goals are inferred from spawn models (`inherit` is
 Cursor). A goal with no reservations is kept. `--yes` skips the confirmation
 prompt. `--force` discards uncommitted worktree changes.
+
+From the prerequisites repo: `./init.sh --reset --cursor <project>`.
 
 ## Diagnostics
 

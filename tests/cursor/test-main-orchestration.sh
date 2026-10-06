@@ -3,7 +3,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-TEST_ROOT="$(mktemp -d /tmp/cursor-main-goal.XXXXXX)"
+export TMPDIR="${TMPDIR:-$ROOT/.tmp-tests}"
+mkdir -p "$TMPDIR"
+TEST_ROOT="$(mktemp -d "$TMPDIR/cursor-main-goal.XXXXXX")"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 PROJECT="$TEST_ROOT/project"
 mkdir -p "$PROJECT/.cursor/agents"
@@ -18,8 +20,20 @@ test -f "$PROJECT/.cursor/skills/goal/SKILL.md"
 test -f "$PROJECT/.cursor/skills/goal/references/execution.md"
 test -f "$PROJECT/.cursor/skills/goal/references/delivery-groups.md"
 test -f "$PROJECT/.cursor/skills/goal/references/issue-queue.md"
-rg -q 'MAIN and the only workflow' "$PROJECT/.cursor/skills/goal/SKILL.md"
-rg -q 'Cursor.*Agent/Task|Agent/Task delegation' "$PROJECT/.cursor/skills/goal/SKILL.md"
+test -f "$PROJECT/.cursor/skills/goal/references/commands.md"
+test -f "$PROJECT/AGENTS.md"
+
+rg -q 'sole coordinator|You are the sole coordinator' "$PROJECT/.cursor/skills/goal/SKILL.md"
+rg -q 'Agent/Task' "$PROJECT/.cursor/skills/goal/SKILL.md" "$PROJECT/AGENTS.md"
+rg -q 'harness brief' "$PROJECT/.cursor/skills/goal/SKILL.md" "$PROJECT/.cursor/skills/goal/references/commands.md" "$PROJECT/AGENTS.md"
+rg -q 'spawn-confirm' "$PROJECT/.cursor/skills/goal/SKILL.md" "$PROJECT/.cursor/skills/goal/references/commands.md" "$PROJECT/AGENTS.md"
+rg -q 'harness brief' "$PROJECT/.cursor/skills/goal/references/commands.md"
+rg -q 'spawn-confirm' "$PROJECT/.cursor/skills/goal/references/commands.md"
+
+for script in goal-context.sh goal-delegation.sh forge.sh goal-delivery.sh goal-evidence.sh; do
+  test -f "$PROJECT/.cursor/scripts/$script"
+done
+
 test ! -e "$PROJECT/.cursor/agents/orchestrator.md"
 test -f "$PROJECT/.cursor/agents/orchestrator.md.disabled"
 rg -q 'custom legacy coordinator content' "$PROJECT/.cursor/agents/orchestrator.md.disabled"
@@ -42,7 +56,11 @@ if GOAL_PLATFORM=github "$PROJECT/.cursor/scripts/goal-git.sh" models orchestrat
   exit 1
 fi
 GOAL_PLATFORM=github "$PROJECT/.cursor/scripts/goal-git.sh" models builder --complexity NORMAL >/dev/null
+builder_model="$(GOAL_PLATFORM=github "$PROJECT/.cursor/scripts/goal-git.sh" models builder --complexity NORMAL | cut -f1)"
+test "$builder_model" = "inherit"
 
 echo 'PASS: MAIN skill and conditional references installed'
+echo 'PASS: brief / spawn-confirm / Agent/Task launch recipe present'
+echo 'PASS: shared scripts and commands.md installed'
 echo 'PASS: orchestrator role/model removed; legacy agent backed up'
-echo 'PASS: worker handoffs use MAIN; worker routing still resolves'
+echo 'PASS: worker handoffs use MAIN; worker routing resolves to inherit'

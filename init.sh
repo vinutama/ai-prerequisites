@@ -19,6 +19,7 @@ ALL_AGENTS=(opencode cursor claude codex qoder)
 usage() {
   cat <<EOF
 Usage: init.sh --opencode|--cursor|--claude|--codex|--qoder|--all [--clean] <target-project-path>
+       init.sh --reset --cursor|--codex [--force] <target-project-path>
 
 Scaffold Goal Architecture Loop Engineering into an existing project.
 A target flag is required.
@@ -30,12 +31,16 @@ A target flag is required.
   --qoder      Qoder     (.qoder/ + AGENTS.md). Invoke /goal-arch
   --all        All five targets
   --clean      Remove the selected target(s) from a project
+  --reset      Fresh runtime for one platform (cursor or codex), then reinstall
+               its scripts. Keeps that platform's config and the other platform.
+  --force      With --reset, discard uncommitted worktree changes
 
 Examples:
   ./init.sh --opencode /path/to/project
   ./init.sh --cursor --claude /path/to/project
   ./init.sh --all /path/to/parent
   ./init.sh --clean --cursor /path/to/project
+  ./init.sh --reset --cursor /path/to/project
 EOF
   exit 1
 }
@@ -44,6 +49,8 @@ EOF
 
 TARGETS=()
 CLEAN_MODE=false
+RESET_MODE=false
+RESET_FORCE=false
 TARGET_PATH=""
 WROTE_AGENTS_MD=false
 
@@ -57,6 +64,8 @@ parse_args() {
       --qoder)    TARGETS+=("qoder") ;;
       --all)      TARGETS=(opencode cursor claude codex qoder) ;;
       --clean)    CLEAN_MODE=true ;;
+      --reset)    RESET_MODE=true ;;
+      --force)    RESET_FORCE=true ;;
       -h|--help)  usage ;;
       --*)        err "Unknown flag: $1"; usage ;;
       *)
@@ -90,6 +99,21 @@ parse_args() {
   if [ -z "$TARGET_PATH" ]; then
     err "Missing target project path."
     usage
+  fi
+
+  if [ "$RESET_MODE" = true ] && [ "$CLEAN_MODE" = true ]; then
+    err "--reset cannot be combined with --clean"
+    exit 1
+  fi
+  if [ "$RESET_FORCE" = true ] && [ "$RESET_MODE" != true ]; then
+    err "--force requires --reset"
+    exit 1
+  fi
+  if [ "$RESET_MODE" = true ]; then
+    if [ ${#TARGETS[@]} -ne 1 ] || { [ "${TARGETS[0]}" != cursor ] && [ "${TARGETS[0]}" != codex ]; }; then
+      err "--reset requires exactly one of --cursor or --codex"
+      exit 1
+    fi
   fi
 }
 
@@ -170,6 +194,53 @@ install_target() {
     [ -f "$script" ] || continue
     chmod +x "$script"
   done
+}
+
+# Fresh runtime for one platform, then reinstall its templates.
+# Shared state.json is filtered to that platform's goals. The other platform,
+# goal-config.json, figma.env, and mcp.json stay. A customized goal-models.json
+# is copied to goal-models.json.bak before the template overwrites it.
+# AGENTS.md is left in place when the other platform is still installed,
+# because both platforms share that file.
+reinstall_for_reset() {
+  local name="$1" dest="$2"
+  local dir other root_doc models template_models helper saved=""
+  dir="$(agent_dir "$name")"
+  [ -d "$dest/$dir/scripts" ] || {
+    err "No $name install in $dest. Run ./init.sh --$name $dest first."
+    exit 1
+  }
+  models="$dest/$dir/goal-models.json"
+  template_models="$TEMPLATES_DIR/$name/$dir/goal-models.json"
+  if [ -f "$models" ] && [ -f "$template_models" ] && ! cmp -s "$models" "$template_models"; then
+    cp "$models" "$models.bak"
+    log "Backed up customized goal-models.json to $models.bak"
+  fi
+
+  other="codex"
+  [ "$name" = "codex" ] && other="cursor"
+  root_doc="$(agent_root_doc "$name")"
+  if [ -f "$dest/$root_doc" ] && [ -d "$dest/$(agent_dir "$other")" ]; then
+    saved="$(mktemp)"
+    cp "$dest/$root_doc" "$saved"
+  fi
+
+  install_target "$name" "$dest"
+  if [ "$name" = "cursor" ]; then
+    disable_legacy_cursor_orchestrator "$dest"
+  fi
+  if [ -n "$saved" ]; then
+    cp "$saved" "$dest/$root_doc"
+    rm -f "$saved"
+    log "Kept existing $root_doc ($other is still installed)"
+  fi
+
+  helper="$dest/$dir/scripts/goal-git.sh"
+  local reset_args=(reset runtime --yes)
+  [ "$RESET_FORCE" = true ] && reset_args+=(--force)
+  env -u GOAL_ID -u GOAL_RUN_ID -u GOAL_ISSUE -u GOAL_GROUP -u GOAL_TASK \
+    -u GOAL_REPO -u GOAL_ISSUE_REPO \
+    "$helper" "${reset_args[@]}"
 }
 
 disable_legacy_cursor_orchestrator() {
@@ -908,7 +979,9 @@ print_tree() {
       echo "└── .cursor/            (gitignored)"
       echo "    ├── agents/         (7 specialized workers; MAIN coordinates)"
       echo "    ├── skills/         (/goal, /init-goal, /init-skills, /create-issues, goal-loop)"
-      echo "    ├── scripts/        (goal-git.sh harness/verify/groups, delivery-groups.sh, run-cursor.sh)"
+      echo "    ├── scripts/        (shared harness modules with Codex: goal-git.sh, goal-context.sh,"
+      echo "    │                    goal-delegation.sh, goal-delivery.sh, goal-evidence.sh,"
+      echo "    │                    forge.sh, delivery-groups.sh, run-cursor.sh)"
       echo "    └── goal-models.json"
       ;;
     claude)
@@ -961,6 +1034,12 @@ fi
 
 if [ "$CLEAN_MODE" = true ]; then
   cmd_clean "$TARGET" "${TARGETS[@]}"
+  exit 0
+fi
+
+if [ "$RESET_MODE" = true ]; then
+  reinstall_for_reset "${TARGETS[0]}" "$TARGET"
+  log "Reset complete."
   exit 0
 fi
 
