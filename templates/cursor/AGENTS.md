@@ -1,7 +1,7 @@
 # Cursor goal workflow
 
 `/goal` runs on MAIN. MAIN coordinates Planner, Researcher, Builder, Builder Expert,
-Reviewer, QA, and Visual Reviewer directly. There is no orchestrator child.
+Reviewer, and Visual Reviewer directly. There is no orchestrator child.
 MAIN never edits application source and never edits `.cursor/scripts` during a run.
 
 ## Entry
@@ -45,7 +45,7 @@ ops. `issues list` only.
 
 ## Gates and delivery
 
-Commit → analyze → `verify run` → review/QA/visual. Evidence is SHA-bound.
+Commit → analyze → `verify run` → review/visual. Evidence is SHA-bound.
 `harness context put` accepts any snake_case name; `review_verdict` needs
 `{"verdict":"LGTM","sha":"…"}`.
 
@@ -62,6 +62,6 @@ Title form: `feat(scope): subject` (subject not Capitalized). Empty diff stops d
 | Builder | Scoped implement/rework + stage |
 | Builder Expert | Escalation after Builder + verify FAIL |
 | Reviewer | Committed-diff review |
-| QA / Visual Reviewer | Conditional acceptance / UI evidence |
+| Visual Reviewer | Conditional UI evidence |
 
 Follow `/goal` and its references for recipes. Ponytail full mode: smallest useful diff.

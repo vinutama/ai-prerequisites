@@ -92,7 +92,7 @@ blockers stop with a suggested local command, without automatic browser login.
 No automatic upgrades. Read-only Git/forge help/version inspection is allowed;
 actual mutations use the helper. CLI docs lookup is maintenance outside active
 operations. Unrelated implementation Researcher web and application browser
-QA/visual checks remain available.
+visual checks remain available.
 
 #### Codex context and source commands
 
@@ -157,13 +157,13 @@ worktree, harness, and PR per group; no aggregation PR. Legacy/single keeps one 
 #### Codex harness gates
 
 After workers finish, MAIN reconciles and commits staged implementation first,
-then runs ANALYSIS and formal verification/review/QA/visual checks. All gate SHA
+then runs ANALYSIS and formal verification/review/visual checks. All gate SHA
 evidence points to the final committed clean HEAD. Rework invalidates evidence
 and repeats commit → analysis → verify → fresh review/checks.
 
 ```text
 intake → start → classify → plan? → research? → build → reconcile → commit
-→ analyze → verify run → review? → QA? → visual? → harness done → delivery
+→ analyze → verify run → review? → visual? → harness done → delivery
 ```
 
 | Gate | PASS evidence |
@@ -173,14 +173,13 @@ intake → start → classify → plan? → research? → build → reconcile �
 | ANALYSIS | One `analyze` on the final committed clean HEAD |
 | VERIFICATION | `verify run` only, bound to that SHA |
 | REVIEW | Actual Reviewer LGTM for that SHA plus zero unresolved inline/local findings |
-| QA | Confirmed QA run, complete recorded required scenarios and clean `harness qa pending` |
 | VISUAL | Confirmed vision worker run, recorded viewport evidence and clean `harness visual pending` |
 
 MAIN records returned Reviewer evidence with `harness context put review_verdict
 <file|->`, JSON `{"verdict":"LGTM","sha":"<commit>"}`. Empty pending state alone
 does not prove review occurred. `harness done` must exit 0 before completion.
 IMPLEMENTATION/ANALYSIS/VERIFICATION always pass; PLAN/REVIEW are skipped only
-on TRIVIAL, QA/VISUAL follow requirements. Planner routing is authoritative.
+on TRIVIAL, VISUAL follows requirements. Planner routing is authoritative.
 Unknown/NOT_RUN/PARTIAL checks never pass required gates. Expert requires a
 prior Builder attempt plus real verify FAIL or serious architectural review defect.
 
@@ -258,8 +257,8 @@ Each tree includes core worker agents (`planner`, `builder`, `builder-expert`,
 `reviewer`, `visual-reviewer`), `goal-git.sh`, `goal-models.json`, and the
 `goal-loop` skill. OpenCode, Claude, and Qoder retain an `orchestrator`
 agent; Cursor and Codex use MAIN.
-**Codex** and **Cursor** also ship `researcher` and
-`qa`, plus `harness` / `verify` / `route` / `groups` on their `goal-git.sh`.
+**Codex** and **Cursor** also ship `researcher`, plus
+`harness` / `verify` / `route` / `groups` on their `goal-git.sh`.
 The harness (not the coordinator's judgment) is the completion authority for
 those targets.
 
@@ -524,7 +523,6 @@ filter: `safe,none`.
 | `builder` | Routine execution (CRUD, UI, refactors, config, tests) | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | see `goal-models.json` `$routing` | efficient |
 | `builder-expert` | Complex execution (escalation-only on Codex/Cursor) | `opencode-go/kimi-k2.7-code` | `opus` | inherit | see `goal-models.json` | performance |
 | `reviewer` | Code review + inline PR comments | `opencode-go/deepseek-v4-pro` | `opus` | inherit | see `goal-models.json` `$routing` | performance |
-| `qa` | Behavior/business QA (Codex + Cursor, conditional) | — | — | inherit | see `goal-models.json` | — |
 | Workflow coordinator | Goal-loop manager | `orchestrator` | `orchestrator` | MAIN (`/goal`) | MAIN (`$goal`) | `orchestrator` |
 | `visual-reviewer` | UI/multimodal review + inline PR comments | `opencode-go/mimo-v2.5-pro` | `sonnet` | inherit | see `goal-models.json` + vision allowlist | inherit |
 
@@ -533,11 +531,10 @@ Every agent operates in `/ponytail full` mode.
 ### Delegation
 On most platforms the planner tags every task `@builder` or `@builder-expert`.
 **Codex** and **Cursor** tag implementation tasks `@builder` only; `@builder-expert`
-is an escalation path, and `@researcher` / `@qa` are conditional. Verification
+is an escalation path, and `@researcher` is conditional. Verification
 is deterministic (`goal-git.sh verify run`). `route detect` is only a baseline
 classifier; after planning, the Planner's `### Routing` block (`route`,
-`qa_required`, `visual_required`) is authoritative — QA is not implied by
-"feature" and Visual is not implied by "frontend".
+`visual_required`) is authoritative — Visual is not implied by "frontend".
 
 The coordinator delegates automatically (OpenCode `@mentions`, Claude/Qoder
 orchestrator subagent, Cursor MAIN Agent/Task with brief/spawn-confirm
@@ -553,7 +550,7 @@ The loop is the same. These are the harness limits:
 - **Codex has no slash commands.** Custom prompts were removed in CLI 0.117.0. Use `$goal`.
 - **Codex delegation requires supported live tools.** Inspect role/model/effort capability in the actual launch schema; a version number alone does not prove support. Save/stop if required capability is missing and resume with `$goal --continue`. Never prescribe unsupported `agent_type`/`fork_turns` or implement in MAIN.
 - **Codex `.codex/config.toml` loads only for trusted projects.** `goal-git.sh codex ensure-user-config` writes `trust_level = "trusted"` into `~/.codex/config.toml` without changing an existing global `max_depth`. The project config uses depth 1 because MAIN spawns workers directly. A newly trusted project may need a new Codex session before its config loads; resume with `$goal --continue`.
-- **Codex and Cursor harness** (`harness` / `verify` / `route` / `complexity` / `groups` on `goal-git.sh`) plus `researcher` / `qa` ship on those targets; Claude/OpenCode/Qoder keep the prior six-agent loop. Both share the same helper module layout under `.codex/scripts/` or `.cursor/scripts/`. Gates are evidence-backed; `analyze` is not part of `verify`. Models: Codex uses `.codex/goal-models.json` `$routing` at spawn; Cursor defaults to `inherit` with optional per-role frontmatter pins (catalog route audits `harness spawn`). TRIVIAL skips Planner; spawn budgets cap runaway loops.
+- **Codex and Cursor harness** (`harness` / `verify` / `route` / `complexity` / `groups` on `goal-git.sh`) plus `researcher` ship on those targets; Claude/OpenCode/Qoder keep the prior six-agent loop. Both share the same helper module layout under `.codex/scripts/` or `.cursor/scripts/`. Gates are evidence-backed; `analyze` is not part of `verify`. Models: Codex uses `.codex/goal-models.json` `$routing` at spawn; Cursor defaults to `inherit` with optional per-role frontmatter pins (catalog route audits `harness spawn`). TRIVIAL skips Planner; spawn budgets cap runaway loops.
 - **Cursor delegation is one level.** `/goal` (MAIN) uses `harness spawn` → `harness brief` → Agent/Task → `spawn-confirm` / `spawn-finish` (or `spawn-fail`). MAIN stays active through all gates. If Cursor withholds the Agent/Task tool, stop with a capability blocker and resume with `/goal --continue`; builders must never spawn subagents.
 - **Codex visual-reviewer** hard-fails rather than downgrading to a text-only model. Vision allowlist is `$capabilities.vision_models` in `goal-models.json` (edit per project).
 - **Codex and Cursor cannot machine-enforce `edit: deny`** on MAIN coordination, `reviewer`, or `visual-reviewer`. MAIN's no-source-edit rule is instruction-enforced. (Claude Code uses a `tools` allowlist; OpenCode uses `permission.edit: deny`.)

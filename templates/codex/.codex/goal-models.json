@@ -92,24 +92,6 @@
         "model_reasoning_effort": "high"
       }
     },
-    "qa": {
-      "TRIVIAL": {
-        "model": "gpt-5.6-terra",
-        "model_reasoning_effort": "medium"
-      },
-      "NORMAL": {
-        "model": "gpt-5.6-terra",
-        "model_reasoning_effort": "medium"
-      },
-      "COMPLEX": {
-        "model": "gpt-5.6-terra",
-        "model_reasoning_effort": "medium"
-      },
-      "ARCHITECTURAL": {
-        "model": "gpt-5.6-terra",
-        "model_reasoning_effort": "medium"
-      }
-    },
     "visual-reviewer": {
       "TRIVIAL": {
         "model": "gpt-5.6-terra",

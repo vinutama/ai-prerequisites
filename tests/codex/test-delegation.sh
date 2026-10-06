@@ -96,7 +96,7 @@ reserve() { run harness spawn "$@" > "$TEST_ROOT/reserved.json"; id_of "$TEST_RO
 
 printf '%s\n' '{"concurrency":2,"platform":"github"}' > "$PROJECT/$AGENT_DIR/goal-config.json"
 printf '%s\n' '[{"goal":"Delegation fixture","branch":"fixture","status":"active","issue":{"number":1}}]' > "$PROJECT/state.json"
-run harness init --complexity NORMAL --route feature --qa false --visual false > "$TEST_ROOT/init.json"
+run harness init --complexity NORMAL --route feature --visual false > "$TEST_ROOT/init.json"
 # Only assignment/phase fixtures are seeded. No gate is ever forged to PASS.
 mutate_fixture '.[0].harness.phase = "BUILDING" | .[0].harness.tasks = [
  {id:"t1",role:"builder",title:"one",state:"PENDING",attempts:0},
@@ -205,8 +205,8 @@ run harness spawn-finish budget-agent completed --closed > /dev/null
 reject 'Spawn budget exceeded' harness spawn builder "$BUILDER" medium --task t2
 check '.[0].harness.budget.max_total_spawns == 1 and .[0].harness.metrics.agent_spawns == 1'
 reset_fixture
-mutate_fixture '.[0].harness.requirements.qa = true | .[0].harness.requirements.visual = true | .[0].harness.budget.max_total_spawns = 2'
-reject 'required QA/Visual' harness spawn builder "$BUILDER" medium --task t1
+mutate_fixture '.[0].harness.requirements.visual = true | .[0].harness.budget.max_total_spawns = 1'
+reject 'required Visual' harness spawn builder "$BUILDER" medium --task t1
 check '.[0].harness.metrics.agent_spawns == 0 and (.[0].spawn_reservations // [] | length) == 0'
 reset_fixture
 mutate_fixture '.[0].harness.phase = "REVIEWING" | .[0].harness.budget.max_reviewer_runs = 1'
@@ -218,7 +218,7 @@ check '.[0].harness.budget.max_reviewer_runs == 1 and .[0].harness.metrics.revie
 reset_fixture
 mutate_fixture '.[0].harness.phase = "VERIFYING"'
 reject 'Spawn rejected' harness spawn builder "$BUILDER" medium --task t1
-printf '%s\n' 'PASS: cumulative budgets, required QA/Visual slots and phase gates are enforced'
+printf '%s\n' 'PASS: cumulative budgets, required Visual slots and phase gates are enforced'
 
 # Shared-state global concurrency covers issues and inactive group ledgers.
 reset_fixture

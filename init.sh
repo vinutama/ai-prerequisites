@@ -194,6 +194,31 @@ install_target() {
     [ -f "$script" ] || continue
     chmod +x "$script"
   done
+
+  # Remove obsolete scaffold files a plain cp -R never deletes.
+  case "$name" in
+    codex)
+      if [ -f "$dest/$dir/agents/qa.toml" ]; then
+        rm -f "$dest/$dir/agents/qa.toml"
+        log "Removed obsolete $dir/agents/qa.toml"
+      fi
+      ;;
+    cursor)
+      if [ -f "$dest/$dir/agents/qa.md" ]; then
+        rm -f "$dest/$dir/agents/qa.md"
+        log "Removed obsolete $dir/agents/qa.md"
+      fi
+      ;;
+  esac
+
+  # Strip retired qa_mode from an existing project config (created by /init-goal).
+  if [ -f "$dest/$dir/goal-config.json" ] && command -v jq >/dev/null 2>&1; then
+    if jq -e 'has("qa_mode")' "$dest/$dir/goal-config.json" >/dev/null 2>&1; then
+      jq 'del(.qa_mode)' "$dest/$dir/goal-config.json" > "$dest/$dir/goal-config.json.tmp" \
+        && mv "$dest/$dir/goal-config.json.tmp" "$dest/$dir/goal-config.json"
+      log "Removed qa_mode from $dir/goal-config.json"
+    fi
+  fi
 }
 
 # Fresh runtime for one platform, then reinstall its templates.
@@ -977,7 +1002,7 @@ print_tree() {
       echo "├── state.json          (gitignored, created at runtime; includes harness)"
       echo "├── AGENTS.md           (gitignored)"
       echo "└── .cursor/            (gitignored)"
-      echo "    ├── agents/         (7 specialized workers; MAIN coordinates)"
+      echo "    ├── agents/         (6 specialized workers; MAIN coordinates)"
       echo "    ├── skills/         (/goal, /init-goal, /init-skills, /create-issues, goal-loop)"
       echo "    ├── scripts/        (shared harness modules with Codex: goal-git.sh, goal-context.sh,"
       echo "    │                    goal-delegation.sh, goal-delivery.sh, goal-evidence.sh,"
@@ -1000,7 +1025,7 @@ print_tree() {
       echo "├── AGENTS.md           (gitignored)"
       echo "├── .agents/skills/     (\$goal, \$init-goal, \$init-skills, \$create-issues, goal-loop)"
       echo "└── .codex/             (gitignored)"
-      echo "    ├── agents/         (8 specialized agents, TOML)"
+      echo "    ├── agents/         (6 specialized agents, TOML)"
       echo "    ├── scripts/        (goal-git.sh harness/verify/route, run-codex.sh)"
       echo "    ├── hooks.json      (SubagentStart/Stop → harness events)"
       echo "    ├── config.toml     (agents + hooks + multi_agent_v2, Figma MCP)"

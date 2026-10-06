@@ -3,7 +3,7 @@ name: goal-loop
 description: >-
   Goal Architecture Loop Engineering for Codex: MAIN coordinates specialized
   workers through evidence-backed plan, build, verification, review, and
-  conditional QA/visual gates until the PR is clean.
+  conditional visual gates until the PR is clean.
 ---
 
 # Goal Architecture Loop Engineering
@@ -14,7 +14,7 @@ own application edits and staging. MAIN owns workflow state and delivery.
 
 ```text
 intake snapshot → start → classify → plan? → research? → build
-→ reconcile → commit → analyze → verify → review? → QA? → visual?
+→ reconcile → commit → analyze → verify → review? → visual?
 → rework as needed → harness done → local PR/merge
 ```
 
@@ -37,7 +37,7 @@ is a saved blocker. One targeted launch retry; `recover-spawn` restores the
 original phase only for launch blockers. Never implement in MAIN.
 
 IMPLEMENTATION/ANALYSIS/VERIFICATION are always required. PLAN/REVIEW are
-required except TRIVIAL; QA/VISUAL follow harness requirements. Only `verify run`
+required except TRIVIAL; VISUAL follows harness requirements. Only `verify run`
 passes VERIFICATION. MAIN records returned Reviewer LGTM as
 `{"verdict":"LGTM","sha":"<commit>"}` under `review_verdict`. All gate evidence
 belongs to current committed SHA/assignment and is invalidated by rework.
@@ -55,4 +55,4 @@ CLI failures use helper structured diagnostics. Stop auth/permission blockers
 with a suggested local command. No automatic browser login/upgrades, web or
 `--web` fallback, or ad hoc forge operations. Read-only CLI help/version is
 allowed; CLI docs lookup is maintenance outside active operations. Researcher
-web for unrelated questions and application browser QA remain available.
+web for unrelated questions and application browser testing remain available.

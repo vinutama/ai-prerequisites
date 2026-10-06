@@ -36,12 +36,24 @@ test "$(sed -n 's/^max_depth = //p' "$CODEX_TEST_HOME/config.toml")" = 4
 test "$(sed -n 's/^max_depth = //p' "$PROJECT/.codex/config.toml")" = 1
 rg -q 'trust_level = "trusted"' "$CODEX_TEST_HOME/config.toml"
 test -f "$PROJECT/.codex/agents/orchestrator.toml" # legacy file is preserved but inert
-for role in planner researcher builder builder-expert reviewer qa visual-reviewer; do
+for role in planner researcher builder builder-expert reviewer visual-reviewer; do
   if rg -qi 'orchestrator' "$PROJECT/.codex/agents/$role.toml"; then
     echo "$role still refers to the removed coordinator" >&2
     exit 1
   fi
 done
+test ! -e "$PROJECT/.codex/agents/qa.toml"
+if GOAL_PLATFORM=github "$PROJECT/.codex/scripts/goal-git.sh" models qa --complexity NORMAL > "$TEST_ROOT/qa.out" 2>&1; then
+  echo 'removed qa still resolves as a worker model' >&2
+  exit 1
+fi
+
+# Reinstall must delete leftover QA agent files and strip qa_mode from config.
+printf '%s\n' 'name = "qa"' > "$PROJECT/.codex/agents/qa.toml"
+printf '%s\n' '{"platform":"github","qa_mode":"auto"}' > "$PROJECT/.codex/goal-config.json"
+CODEX_HOME="$CODEX_TEST_HOME" bash "$ROOT/init.sh" --codex "$PROJECT" > "$TEST_ROOT/reinit-qa.log"
+test ! -e "$PROJECT/.codex/agents/qa.toml"
+jq -e 'has("qa_mode") | not' "$PROJECT/.codex/goal-config.json" >/dev/null
 
 builder_default="$(jq -r '.["$routing"].builder.NORMAL.model' "$PROJECT/.codex/goal-models.json")"
 rg -q "^default_subagent_model = \"$builder_default\"$" "$PROJECT/.codex/config.toml"
@@ -54,6 +66,7 @@ GOAL_PLATFORM=github "$PROJECT/.codex/scripts/goal-git.sh" models builder --comp
 echo 'PASS: MAIN skill and conditional references installed'
 echo 'PASS: orchestrator role/model removed; worker handoffs use MAIN; legacy file inert'
 echo 'PASS: worker routing works; user global depth preserved'
+echo 'PASS: reinstall removes leftover qa.toml and strips qa_mode'
 
 # Exercise MAIN's public dispatcher with real local child processes and actual
 # Git commits. Analyzer/forge boundaries are local mocks; gates are never seeded
@@ -87,7 +100,7 @@ GOAL_GIT="$PROJECT/.codex/scripts/goal-git.sh"
 for module in forge goal-context delivery-groups goal-delivery goal-delegation goal-evidence; do
   test -f "$PROJECT/.codex/scripts/$module.sh"
 done
-for role in planner builder reviewer qa; do
+for role in planner builder reviewer visual-reviewer; do
   test -s "$PROJECT/.codex/agents/$role.toml"
 done
 
@@ -148,11 +161,12 @@ case "$2" in
   builder)
     printf '%s\n' '#!/usr/bin/env bash' "printf '%s\\n' delegated" > implementation.sh
     printf '%s\n' delegated > expected.txt ;;
-  reviewer|qa) bash verify-fixture.sh ;;
+  reviewer) bash verify-fixture.sh ;;
   *) exit 97 ;;
 esac
 WORKER
-main_run harness init --complexity NORMAL --route feature --qa true --visual false > /dev/null
+main_reject 'QA was removed' harness init --complexity NORMAL --route feature --qa true --visual false
+main_run harness init --complexity NORMAL --route feature --qa false --visual false > /dev/null
 planner_id="$(main_reserve planner)"
 bash "$TEST_ROOT/worker.sh" "$PROJECT" planner > "$TEST_ROOT/discovery.json" & child=$!
 main_run harness spawn-confirm "$planner_id" "local-$child" > /dev/null
@@ -218,18 +232,11 @@ jq -n --arg sha "$implementation_sha" '{verdict:"LGTM",sha:$sha}' > "$TEST_ROOT/
 main_run harness context put review_verdict "$TEST_ROOT/verdict.json" > /dev/null
 main_run harness gate REVIEW PASS > /dev/null
 cp "$PROJECT/state.json" "$TEST_ROOT/review-checkpoint.json"
-main_run harness phase QA > /dev/null
-main_reject 'missing_agent|confirmed' harness gate QA PASS
-qa_id="$(main_reserve qa)"
-bash "$TEST_ROOT/worker.sh" "$PROJECT" qa & child=$!
-main_run harness spawn-confirm "$qa_id" "local-$child" > /dev/null
-wait "$child"
-main_run harness qa add greeting PASS 'Actual fixture output equals the acceptance text' > /dev/null
-main_reject 'missing_agent|completed' harness gate QA PASS
-main_run harness spawn-finish "local-$child" completed --closed > /dev/null
-main_run harness gate QA PASS > /dev/null
+main_reject 'QA was removed' harness phase QA
+main_reject 'QA was removed' harness qa add greeting PASS 'Actual fixture output equals the acceptance text'
+main_reject 'QA was removed' harness gate QA PASS
 main_run harness done > /dev/null
-main_check '.[0].harness.phase == "DONE" and .[0].harness.metrics.agent_spawns == 4 and
+main_check '.[0].harness.phase == "DONE" and .[0].harness.metrics.agent_spawns == 3 and
  all(.[0].spawn_reservations[]; .state == "completed" and .closed == true and .agent_id != null)'
 # An external commit must make previously valid evidence stale even when it
 # bypassed helper invalidation. This is fixture setup, not another gate PASS.
@@ -245,5 +252,6 @@ main_check '.[0].harness.gates.ANALYSIS.status == "NOT_RUN" and
  .[0].harness.gates.VERIFICATION.status == "NOT_RUN" and .[0].harness.gates.REVIEW.status == "NOT_RUN" and
  .[0].harness.context.review_verdict == null and .[0].harness.context.verification_report == null'
 echo 'PASS: confirmed local child lifecycle; RUNNING/DONE and evidence reject unconfirmed workers'
-echo 'PASS: commit → analysis → verification; review/QA evidence tied to the current SHA'
+echo 'PASS: commit → analysis → verification; review evidence tied to the current SHA'
+echo 'PASS: QA phase/gate/commands rejected; --qa true rejected and --qa false ignored'
 echo 'PASS: completion/closure required, stale external commits rejected, rework invalidates evidence'

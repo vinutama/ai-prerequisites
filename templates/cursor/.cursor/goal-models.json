@@ -33,12 +33,6 @@
       "COMPLEX": { "model": "inherit" },
       "ARCHITECTURAL": { "model": "inherit" }
     },
-    "qa": {
-      "TRIVIAL": { "model": "inherit" },
-      "NORMAL": { "model": "inherit" },
-      "COMPLEX": { "model": "inherit" },
-      "ARCHITECTURAL": { "model": "inherit" }
-    },
     "visual-reviewer": {
       "TRIVIAL": { "model": "inherit" },
       "NORMAL": { "model": "inherit" },
@@ -91,17 +85,6 @@
     }
   },
   "reviewer": {
-    "model": "inherit",
-    "readonly": false,
-    "capabilities": {
-      "multimodal": false,
-      "modalities": {
-        "input": ["text"],
-        "output": ["text"]
-      }
-    }
-  },
-  "qa": {
     "model": "inherit",
     "readonly": false,
     "capabilities": {

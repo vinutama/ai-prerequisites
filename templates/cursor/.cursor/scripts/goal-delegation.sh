@@ -169,11 +169,11 @@ delegation_jq() {
       | reduce .[] as $r ([]; if any(.[]; .id == $r.id) then . else . + [$r] end);
     def metric($role):
       {planner:"planner_runs", researcher:"researcher_runs", builder:"builder_runs",
-       "builder-expert":"expert_runs", reviewer:"reviewer_runs", qa:"qa_runs",
+       "builder-expert":"expert_runs", reviewer:"reviewer_runs",
        "visual-reviewer":"visual_runs"}[$role] // ($role + "_runs");
     def cap($role):
       {planner:"max_planner_runs", researcher:"max_researcher_runs", builder:"max_builder_runs",
-       "builder-expert":"max_builder_expert_runs", reviewer:"max_reviewer_runs", qa:"max_qa_runs",
+       "builder-expert":"max_builder_expert_runs", reviewer:"max_reviewer_runs",
        "visual-reviewer":"max_visual_runs"}[$role] // ("max_" + $role + "_runs");
     def commit($idx):
       .[$idx] as $g
@@ -208,6 +208,10 @@ delegation_reserve() {
   [ $# -ge 3 ] && [ -n "$model" ] && [ -n "$effort" ] || {
     err 'harness spawn requires <role> <model> <effort> [--task tN]'; return 1;
   }
+  if [ "$role" = "qa" ]; then
+    err "QA was removed from the goal workflow"
+    return 1
+  fi
   shift 3
   if [ $# -gt 0 ]; then
     [ $# -eq 2 ] && [ "$1" = --task ] && [ -n "$2" ] || { err 'Expected --task tN'; return 1; }
@@ -249,7 +253,7 @@ delegation_reserve() {
   local expected_phase
   expected_phase=$(jq -nr --arg role "$role" '
     {planner:"PLANNED", researcher:"RESEARCHING", builder:"BUILDING", "builder-expert":"BUILDING",
-     reviewer:"REVIEWING", qa:"QA", "visual-reviewer":"VISUAL_REVIEW"}[$role] // "BUILDING"')
+     reviewer:"REVIEWING", "visual-reviewer":"VISUAL_REVIEW"}[$role] // "BUILDING"')
   if [ "$phase" != "$expected_phase" ] && \
      { [ "$role" != "builder-expert" ] || [ "$phase" != "ESCALATED" ]; }; then
     if [ "$role" = "builder-expert" ] && [ "$phase" = "ESCALATED" ]; then
@@ -267,7 +271,7 @@ delegation_reserve() {
   # Evidence workers inspect a committed, clean implementation. This is a
   # readonly check; an isolated module host may omit the fingerprint helper.
   case "$role" in
-    reviewer|qa|visual-reviewer)
+    reviewer|visual-reviewer)
       if declare -F implementation_fingerprint >/dev/null; then
         sha="$(implementation_fingerprint)" || return 1
         [ -n "$sha" ] || { err 'Evidence launch requires a committed implementation SHA'; return 1; }
@@ -292,7 +296,7 @@ delegation_reserve() {
     .[$idx] as $g | $g.harness as $h | ledger as $all
     | if $h.phase != $phase or ($h.complexity // "NORMAL") != $complexity then error("Harness changed; resolve routing and retry") else . end
     | ({planner:"PLANNED", researcher:"RESEARCHING", builder:"BUILDING", "builder-expert":"BUILDING",
-        reviewer:"REVIEWING", qa:"QA", "visual-reviewer":"VISUAL_REVIEW"}[$role] // "BUILDING") as $expected
+        reviewer:"REVIEWING", "visual-reviewer":"VISUAL_REVIEW"}[$role] // "BUILDING") as $expected
     | if $phase != $expected and ($role != "builder-expert" or $phase != "ESCALATED") then
         error("Spawn rejected: role " + $role + " during " + $phase + "; expected " + $expected + ". Run: harness phase " + $expected)
       else . end
@@ -317,11 +321,9 @@ delegation_reserve() {
       then error("Parallel builders cannot share worktree " + $worktree) else . end
     | ($h.metrics.agent_spawns // 0) as $total
     | (($h.budget.max_total_spawns // 10)) as $max
-    | ((if $h.requirements.qa == true and ($h.metrics.qa_runs // 0) == 0 and $role != "qa" and
-          (any($pending[]; .role == "qa") | not) then 1 else 0 end) +
-       (if $h.requirements.visual == true and ($h.metrics.visual_runs // 0) == 0 and $role != "visual-reviewer" and
+    | ((if $h.requirements.visual == true and ($h.metrics.visual_runs // 0) == 0 and $role != "visual-reviewer" and
           (any($pending[]; .role == "visual-reviewer") | not) then 1 else 0 end)) as $required
-    | if $total + ($pending | length) + 1 + $required > $max then error("Spawn budget exceeded (confirmed + reservations + required QA/Visual); raise max_total_spawns explicitly") else . end
+    | if $total + ($pending | length) + 1 + $required > $max then error("Spawn budget exceeded (confirmed + reservations + required Visual); raise max_total_spawns explicitly") else . end
     | cap($role) as $cap | metric($role) as $metric
     | ($h.budget[$cap] // (if $role == "builder" or ($expected == "BUILDING" and $role != "builder-expert") then $max else 0 end)) as $limit
     | if ($h.metrics[$metric] // 0) + ([$pending[] | select(.role == $role)] | length) >= $limit
@@ -456,7 +458,7 @@ harness_role_completed() { delegation_shared delegation_role_completed "$@"; }
 delegation_role_completed() {
   local role="${1:-}" sha=""
   [ $# -eq 1 ] && [ -n "$role" ] || return 1
-  case "$role" in reviewer|qa|visual-reviewer)
+  case "$role" in reviewer|visual-reviewer)
     if declare -F implementation_fingerprint >/dev/null; then sha="$(implementation_fingerprint)" || return 1; fi ;;
   esac
   jq -e --argjson idx "$GOAL_IDX" --arg role "$role" --arg sha "$sha" '

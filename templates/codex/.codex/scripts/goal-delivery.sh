@@ -268,7 +268,6 @@ cmd_pr_draft() {
   review_bits=$(jq -r --argjson idx "$GOAL_IDX" '
     .[$idx].harness as $h |
     "- REVIEW: \($h.gates.REVIEW.status // "NOT_RUN")\n" +
-    "- QA: \($h.gates.QA.status // "SKIPPED / NOT_RUN")\n" +
     "- VISUAL: \($h.gates.VISUAL.status // "SKIPPED / NOT_RUN")"
   ' "$STATE_FILE")
   refs=$(jq -r --argjson idx "$GOAL_IDX" '
@@ -405,7 +404,7 @@ harness_require_current_evidence() {
   local sha required repo wd multiple=false
   required=$(jq -c --argjson idx "$GOAL_IDX" '.[$idx].harness.requirements |
     ["ANALYSIS","VERIFICATION"] + (if .reviewer == false then [] else ["REVIEW"] end)
-    + (if .qa == true then ["QA"] else [] end) + (if .visual == true then ["VISUAL"] else [] end)' "$STATE_FILE")
+    + (if .visual == true then ["VISUAL"] else [] end)' "$STATE_FILE")
   is_multi_repo && multiple=true
   while IFS= read -r repo; do
     wd=$(repo_dir "$repo") || return

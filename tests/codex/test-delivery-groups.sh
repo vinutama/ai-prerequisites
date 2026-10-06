@@ -183,7 +183,6 @@ setup_proj() {
   "max_rework": 3,
   "max_escalations": 2,
   "max_verify_retries": 3,
-  "qa_mode": "auto",
   "visual_mode": "auto",
   "markdown_pr_strategy": "$strategy",
   "max_tasks_per_pr": 3,
@@ -348,7 +347,7 @@ wt2=$(jq -r '.[-1].delivery_groups[] | select(.id=="g2") | .worktree' "$PROJ/sta
 
 echo "== 9 parallel builders never share a worktree"
 G groups activate g1 >/dev/null
-G harness init --route backend --qa false --visual false --complexity NORMAL >/dev/null
+G harness init --route backend --visual false --complexity NORMAL >/dev/null
 G harness phase BUILDING >/dev/null
 G harness task add builder "one" >/dev/null
 G harness task add builder "two" >/dev/null
@@ -441,7 +440,7 @@ echo "== 14 failed groups do not corrupt completed groups"
 G groups activate g1 >/dev/null
 sha=$(git -C "$PROJ/$wt1" rev-parse HEAD)
 jq --arg sha "$sha" '
-  .[-1].harness = {phase:"DONE",tasks:[],spawn_reservations:[],requirements:{planner:false,reviewer:false,qa:false,visual:false},
+  .[-1].harness = {phase:"DONE",tasks:[],spawn_reservations:[],requirements:{planner:false,reviewer:false,visual:false},
     gates:{IMPLEMENTATION:{status:"PASS"},ANALYSIS:{status:"PASS",sha:$sha},VERIFICATION:{status:"PASS",sha:$sha}}}
 ' "$PROJ/state.json" > "$PROJ/$AGENT_DIR/seed.json"
 mv "$PROJ/$AGENT_DIR/seed.json" "$PROJ/state.json"

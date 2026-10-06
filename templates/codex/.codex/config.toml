@@ -36,10 +36,6 @@ config_file = "./agents/builder-expert.toml"
 description = "Code review for correctness, security, performance, and tests."
 config_file = "./agents/reviewer.toml"
 
-[agents.qa]
-description = "Behavior/business QA against acceptance criteria (conditional)."
-config_file = "./agents/qa.toml"
-
 [agents.visual-reviewer]
 description = "Multimodal UI/visual review for layout, contrast, accessibility, and screenshots."
 config_file = "./agents/visual-reviewer.toml"

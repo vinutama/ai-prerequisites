@@ -55,19 +55,15 @@ Commands:
   verify detect             Detect project verification commands (JSON)
   verify run [--only a,b]   Run deterministic verification checks
   route detect              Classify route: backend|feature|frontend
-  harness init [--route r] [--qa true|false] [--visual true|false]
-                            Seed harness object on active goal (qa/visual default from route)
+  harness init [--route r] [--visual true|false]
+                            Seed harness object on active goal (visual default from route)
   harness phase <STATE>     Transition harness phase (validated)
   harness task add <role> <title> [--parent tN]
   harness task set <id> <state>
                             state: PENDING|SPAWNING|RUNNING|DONE|BLOCKED|FAILED
   harness gate <NAME> <STATUS> [reason]
-                            Evidence-backed PASS for IMPLEMENTATION/VERIFICATION/REVIEW/QA/VISUAL
+                            Evidence-backed PASS for IMPLEMENTATION/VERIFICATION/REVIEW/VISUAL
   harness retry <counter>   Increment retry counter (exit 1 if limit exceeded)
-  harness qa add <scenario> <PASS|FAIL> <note>
-  harness qa pending        Exit 1 if any scenario's latest result is an unresolved FAIL
-  harness qa resolve <id>
-                            Mark a historical QA FAIL superseded (keeps the audit row)
   harness visual add <viewport> <PASS|FAIL> <note>
   harness visual pending    Exit 1 if any viewport's latest observation is an unresolved FAIL
   harness visual resolve <id>
@@ -125,7 +121,7 @@ Commands:
                             Resolve a vision-capable model for multimodal roles
   complexity classify <text> [--files a,b]
                             Cheap heuristic complexity classification (JSON)
-  config set <source> <target> <platform> [concurrency] [auto_merge] [review_mode] [review_max_iterations] [max_rework] [max_escalations] [max_verify_retries] [qa_mode] [visual_mode]
+  config set <source> <target> <platform> [concurrency] [auto_merge] [review_mode] [review_max_iterations] [max_rework] [max_escalations] [max_verify_retries] [visual_mode]
   config get                Print goal-config.json
   state                     Print active goal JSON from state.json
   state complete            Mark active goal status as completed
@@ -1017,10 +1013,10 @@ cmd_figma_status() {
 cmd_config_set() {
   require_cmd jq
   local source="${1:-}" target="${2:-}" plat="${3:-}" concurrency="${4:-1}" auto_merge="${5:-false}" review_mode="${6:-inline}" review_max_iterations="${7:-0}"
-  local max_rework="${8:-3}" max_escalations="${9:-2}" max_verify_retries="${10:-3}" qa_mode="${11:-auto}" visual_mode="${12:-auto}"
+  local max_rework="${8:-3}" max_escalations="${9:-2}" max_verify_retries="${10:-3}" visual_mode="${11:-auto}"
 
   [ -z "$source" ] || [ -z "$target" ] || [ -z "$plat" ] && {
-    err "config set requires: <goal_source> <target_branch> <platform> [concurrency] [auto_merge] [review_mode] [review_max_iterations] [max_rework] [max_escalations] [max_verify_retries] [qa_mode] [visual_mode]"
+    err "config set requires: <goal_source> <target_branch> <platform> [concurrency] [auto_merge] [review_mode] [review_max_iterations] [max_rework] [max_escalations] [max_verify_retries] [visual_mode]"
     exit 1
   }
 
@@ -1062,11 +1058,6 @@ cmd_config_set() {
     fi
   done
 
-  case "$qa_mode" in
-    auto|always|never) ;;
-    *) err "qa_mode must be: auto, always, or never"; exit 1 ;;
-  esac
-
   case "$visual_mode" in
     auto|always|never) ;;
     *) err "visual_mode must be: auto, always, or never"; exit 1 ;;
@@ -1082,7 +1073,6 @@ cmd_config_set() {
       --arg target "$target" \
       --arg platform "$plat" \
       --arg review_mode "$review_mode" \
-      --arg qa_mode "$qa_mode" \
       --arg visual_mode "$visual_mode" \
       --argjson concurrency "$concurrency" \
       --argjson auto_merge "$auto_merge_json" \
@@ -1100,8 +1090,8 @@ cmd_config_set() {
        | .max_rework = $max_rework
        | .max_escalations = $max_escalations
        | .max_verify_retries = $max_verify_retries
-       | .qa_mode = $qa_mode
-       | .visual_mode = $visual_mode' \
+       | .visual_mode = $visual_mode
+       | del(.qa_mode)' \
       "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
   else
     jq -n \
@@ -1109,7 +1099,6 @@ cmd_config_set() {
       --arg target "$target" \
       --arg platform "$plat" \
       --arg review_mode "$review_mode" \
-      --arg qa_mode "$qa_mode" \
       --arg visual_mode "$visual_mode" \
       --argjson concurrency "$concurrency" \
       --argjson auto_merge "$auto_merge_json" \
@@ -1128,7 +1117,6 @@ cmd_config_set() {
         max_rework: $max_rework,
         max_escalations: $max_escalations,
         max_verify_retries: $max_verify_retries,
-        qa_mode: $qa_mode,
         visual_mode: $visual_mode,
         figma_enabled: false
       }' \
@@ -1547,7 +1535,6 @@ queue_plan_harness_json() {
     route: "feature",
     complexity: "NORMAL",
     requirements: {
-      qa: false,
       visual: false,
       planner: true,
       reviewer: false,
@@ -1560,10 +1547,8 @@ queue_plan_harness_json() {
       ANALYSIS: {status: "NOT_RUN"},
       VERIFICATION: {status: "NOT_RUN"},
       REVIEW: {status: "NOT_RUN"},
-      QA: {status: "NOT_RUN"},
       VISUAL: {status: "NOT_RUN"}
     },
-    qa_findings: [],
     visual_findings: [],
     counters: {rework: 0, escalations: 0, verify_retries: 0},
     limits: {max_rework: 0, max_escalations: 0, max_verify_retries: 0},
@@ -1573,12 +1558,11 @@ queue_plan_harness_json() {
       max_researcher_runs: 1,
       max_builder_expert_runs: 0,
       max_reviewer_runs: 0,
-      max_qa_runs: 0,
       max_visual_runs: 0
     },
     metrics: {
       agent_spawns: 0, planner_runs: 0, researcher_runs: 0, builder_runs: 0,
-      expert_runs: 0, reviewer_runs: 0, qa_runs: 0, visual_runs: 0, rework_cycles: 0
+      expert_runs: 0, reviewer_runs: 0, visual_runs: 0, rework_cycles: 0
     },
     context: {},
     events: []
@@ -2386,8 +2370,9 @@ harness_phase_allowed() {
     "RESEARCHING->BUILDING") return 0 ;;
     "BUILDING->ESCALATED"|"BUILDING->VERIFYING") return 0 ;;
     "ESCALATED->BUILDING") return 0 ;;
-    "VERIFYING->REWORK"|"VERIFYING->REVIEWING"|"VERIFYING->DONE"|"VERIFYING->QA"|"VERIFYING->VISUAL_REVIEW") return 0 ;;
-    "REVIEWING->REWORK"|"REVIEWING->QA"|"REVIEWING->DONE"|"REVIEWING->VISUAL_REVIEW") return 0 ;;
+    "VERIFYING->REWORK"|"VERIFYING->REVIEWING"|"VERIFYING->DONE"|"VERIFYING->VISUAL_REVIEW") return 0 ;;
+    "REVIEWING->REWORK"|"REVIEWING->DONE"|"REVIEWING->VISUAL_REVIEW") return 0 ;;
+    # Legacy stuck goals may still be in phase QA; allow exit only.
     "QA->REWORK"|"QA->VISUAL_REVIEW"|"QA->DONE") return 0 ;;
     "VISUAL_REVIEW->REWORK"|"VISUAL_REVIEW->DONE") return 0 ;;
     "REWORK->BUILDING"|"REWORK->VERIFYING"|"REWORK->ESCALATED"|"REWORK->FAILED") return 0 ;;
@@ -2431,7 +2416,7 @@ harness_phase_allows_task_add() {
 harness_phase_allows_spawn() {
   local role="$1" phase="$2"
   case "$role:$phase" in
-    planner:PLANNED|researcher:RESEARCHING|builder:BUILDING|builder-expert:BUILDING|reviewer:REVIEWING|qa:QA|visual-reviewer:VISUAL_REVIEW) return 0 ;;
+    planner:PLANNED|researcher:RESEARCHING|builder:BUILDING|builder-expert:BUILDING|reviewer:REVIEWING|visual-reviewer:VISUAL_REVIEW) return 0 ;;
     *)
       err "Spawn rejected — role '$role' may not be spawned during $phase. VERIFYING is a no-spawn barrier; use REWORK -> BUILDING for a new iteration."
       return 1
@@ -2491,28 +2476,28 @@ cmd_harness_init() {
     *) err "complexity must be: TRIVIAL, NORMAL, COMPLEX, or ARCHITECTURAL"; exit 1 ;;
   esac
 
-  # Route-based defaults (backward compatible when --qa/--visual omitted)
-  local qa_req=false visual_req=false req_source="route-default"
-  case "$route" in
-    backend)  qa_req=false; visual_req=false ;;
-    feature)  qa_req=true;  visual_req=false ;;
-    frontend) qa_req=true;  visual_req=true  ;;
-  esac
-
+  # --qa true is rejected; --qa false (legacy) is accepted and ignored.
   if [ -n "$qa_flag" ]; then
     case "$qa_flag" in
-      true|false) qa_req="$qa_flag"; req_source="explicit" ;;
+      true) err "QA was removed from the goal workflow"; exit 1 ;;
+      false) ;;
       *) err "--qa must be true or false"; exit 1 ;;
     esac
   fi
+
+  # Route-based defaults (backward compatible when --visual omitted)
+  local visual_req=false req_source="route-default"
+  case "$route" in
+    backend)  visual_req=false ;;
+    feature)  visual_req=false ;;
+    frontend) visual_req=true  ;;
+  esac
+
   if [ -n "$visual_flag" ]; then
     case "$visual_flag" in
       true|false) visual_req="$visual_flag"; req_source="explicit" ;;
       *) err "--visual must be true or false"; exit 1 ;;
     esac
-  fi
-  if [ -n "$qa_flag" ] || [ -n "$visual_flag" ]; then
-    req_source="explicit"
   fi
 
   # Complexity defaults for planner/reviewer
@@ -2543,7 +2528,7 @@ cmd_harness_init() {
   max_escalations="$(config_read max_escalations)"; max_escalations="${max_escalations:-2}"
   max_verify_retries="$(config_read max_verify_retries)"; max_verify_retries="${max_verify_retries:-3}"
 
-  local max_total max_planner max_researcher max_expert max_reviewer_runs max_qa max_visual
+  local max_total max_planner max_researcher max_expert max_reviewer_runs max_visual
   max_planner="$(config_read max_planner_runs)"; max_planner="${max_planner:-1}"
   max_researcher="$(config_read max_researcher_runs)"; max_researcher="${max_researcher:-1}"
   max_expert="$(config_read max_builder_expert_runs)"; max_expert="${max_expert:-1}"
@@ -2552,12 +2537,11 @@ cmd_harness_init() {
     # Initial review + one re-review after each allowed rework (avoids 2-reviewer deadlock).
     max_reviewer_runs=$((max_rework + 1))
   fi
-  max_qa="$(config_read max_qa_runs)"; max_qa="${max_qa:-1}"
   max_visual="$(config_read max_visual_runs)"; max_visual="${max_visual:-1}"
   max_total="$(config_read max_total_spawns)"
   if [ -z "$max_total" ]; then
-    # planner + researcher + builders(1+rework) + reviewers + expert + qa + visual
-    max_total=$((1 + 1 + 1 + max_rework + max_reviewer_runs + 1 + 1 + 1))
+    # planner + researcher + builders(1+rework) + reviewers + expert + visual
+    max_total=$((1 + 1 + 1 + max_rework + max_reviewer_runs + 1 + 1))
   fi
 
   # Re-init must not wipe handoffs/metrics already recorded (spawn/context put before final init).
@@ -2569,14 +2553,13 @@ cmd_harness_init() {
     prev_metrics="$(jq -c --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics // empty' "$STATE_FILE")"
   fi
   if [ -z "$prev_metrics" ] || [ "$prev_metrics" = "null" ]; then
-    prev_metrics='{"agent_spawns":0,"planner_runs":0,"researcher_runs":0,"builder_runs":0,"expert_runs":0,"reviewer_runs":0,"qa_runs":0,"visual_runs":0,"rework_cycles":0}'
+    prev_metrics='{"agent_spawns":0,"planner_runs":0,"researcher_runs":0,"builder_runs":0,"expert_runs":0,"reviewer_runs":0,"visual_runs":0,"rework_cycles":0}'
   fi
 
   local harness
   harness="$(jq -n \
     --arg route "$route" \
     --arg complexity "$complexity" \
-    --argjson qa "$qa_req" \
     --argjson visual "$visual_req" \
     --argjson planner_req "$planner_req" \
     --argjson reviewer_req "$reviewer_req" \
@@ -2589,7 +2572,6 @@ cmd_harness_init() {
     --argjson max_researcher "$max_researcher" \
     --argjson max_expert "$max_expert" \
     --argjson max_reviewer_runs "$max_reviewer_runs" \
-    --argjson max_qa "$max_qa" \
     --argjson max_visual "$max_visual" \
     --argjson prev_context "$prev_context" \
     --argjson prev_events "$prev_events" \
@@ -2600,7 +2582,6 @@ cmd_harness_init() {
       route: $route,
       complexity: $complexity,
       requirements: {
-        qa: $qa,
         visual: $visual,
         planner: $planner_req,
         reviewer: $reviewer_req,
@@ -2613,10 +2594,8 @@ cmd_harness_init() {
         ANALYSIS: {status: "NOT_RUN"},
         VERIFICATION: {status: "NOT_RUN"},
         REVIEW: {status: "NOT_RUN"},
-        QA: {status: "NOT_RUN"},
         VISUAL: {status: "NOT_RUN"}
       },
-      qa_findings: [],
       visual_findings: [],
       counters: {rework: 0, escalations: 0, verify_retries: 0},
       limits: {
@@ -2630,7 +2609,6 @@ cmd_harness_init() {
         max_researcher_runs: $max_researcher,
         max_builder_expert_runs: $max_expert,
         max_reviewer_runs: $max_reviewer_runs,
-        max_qa_runs: $max_qa,
         max_visual_runs: $max_visual
       },
       metrics: $prev_metrics,
@@ -2638,9 +2616,6 @@ cmd_harness_init() {
       events: $prev_events
     }')"
 
-  if [ "$qa_req" = false ]; then
-    harness="$(echo "$harness" | jq '.gates.QA = {status:"SKIPPED",reason:"requirements.qa=false"}')"
-  fi
   if [ "$visual_req" = false ]; then
     harness="$(echo "$harness" | jq '.gates.VISUAL = {status:"SKIPPED",reason:"requirements.visual=false"}')"
   fi
@@ -2652,8 +2627,8 @@ cmd_harness_init() {
   fi
 
   harness_put "$harness"
-  harness_event "harness" "init" "route=$route complexity=$complexity qa=$qa_req visual=$visual_req planner=$planner_req reviewer=$reviewer_req"
-  log "Harness initialized (route=$route, complexity=$complexity, qa=$qa_req, visual=$visual_req, phase=PLANNED)"
+  harness_event "harness" "init" "route=$route complexity=$complexity visual=$visual_req planner=$planner_req reviewer=$reviewer_req"
+  log "Harness initialized (route=$route, complexity=$complexity, visual=$visual_req, phase=PLANNED)"
   harness_get
 }
 
@@ -2662,8 +2637,13 @@ cmd_harness_phase() {
   local to="${1:-}"
   [ -z "$to" ] && { err "harness phase requires <STATE>"; exit 1; }
 
+  if [ "$to" = "QA" ]; then
+    err "QA was removed from the goal workflow"
+    exit 1
+  fi
+
   case "$to" in
-    PLANNED|RESEARCHING|BUILDING|ESCALATED|VERIFYING|REVIEWING|QA|VISUAL_REVIEW|REWORK|DONE|FAILED) ;;
+    PLANNED|RESEARCHING|BUILDING|ESCALATED|VERIFYING|REVIEWING|VISUAL_REVIEW|REWORK|DONE|FAILED) ;;
     *) err "Invalid phase: $to"; exit 1 ;;
   esac
 
@@ -2849,38 +2829,6 @@ harness_discovery_context_ok() {
   return 0
 }
 
-harness_qa_evidence_ok() {
-  local req total failed qa_runs
-  req="$(jq -r --arg repo "${GOAL_REPO:-.}" --argjson idx "$GOAL_IDX" '.[$idx].harness.requirements.qa // false' "$STATE_FILE")"
-  if [ "$req" != "true" ]; then
-    err "QA PASS rejected — requirements.qa is false"
-    return 1
-  fi
-  harness_completed_role qa || return
-  qa_runs="$(jq -r --arg repo "${GOAL_REPO:-.}" --argjson idx "$GOAL_IDX" '.[$idx].harness.metrics.qa_runs // 0' "$STATE_FILE")"
-  if [ "${qa_runs:-0}" -lt 1 ]; then
-    err "QA PASS rejected — QA agent was not spawned (harness spawn qa + @qa). Do not forge scenarios."
-    return 1
-  fi
-  total="$(jq -r --arg repo "${GOAL_REPO:-.}" --argjson idx "$GOAL_IDX" '(.[$idx].harness.qa_findings // [] | map(select((.repo // ".") == $repo))) | length' "$STATE_FILE")"
-  failed="$(jq -r --arg repo "${GOAL_REPO:-.}" --argjson idx "$GOAL_IDX" \
-    '(.[$idx].harness.qa_findings // [] | map(select((.repo // ".") == $repo))) | group_by(.scenario) | map(.[-1]) | map(select(.result == "FAIL" and .resolved != true)) | length' \
-    "$STATE_FILE")"
-  if [ "${total:-0}" -eq 0 ]; then
-    err "QA PASS rejected — no QA scenarios recorded (run harness qa add)"
-    return 1
-  fi
-  if [ "${failed:-0}" -ne 0 ]; then
-    err "QA PASS rejected — $failed open failing scenario(s) (harness qa pending; latest result per scenario, unresolved FAILs only)"
-    return 1
-  fi
-  local sha; sha=$(implementation_fingerprint) || return
-  jq -e --arg repo "${GOAL_REPO:-.}" --argjson idx "$GOAL_IDX" --arg sha "$sha" '
-    (.[$idx].harness.qa_findings // [] | map(select((.repo // ".") == $repo))) | group_by(.scenario) | map(.[-1]) | all(.[]; .sha == $sha)
-  ' "$STATE_FILE" >/dev/null || { goal_error stale_evidence "scenario observations belong to an older commit"; return 1; }
-  return 0
-}
-
 harness_visual_evidence_ok() {
   local req total failed visual_runs
   req="$(jq -r --arg repo "${GOAL_REPO:-.}" --argjson idx "$GOAL_IDX" '.[$idx].harness.requirements.visual // false' "$STATE_FILE")"
@@ -2922,7 +2870,6 @@ harness_spawn_reserved_remaining() {
     | ($h.requirements // {}) as $r
     | ($h.metrics // {}) as $m
     | 0
-      + (if ($r.qa == true) and (($m.qa_runs // 0) == 0) and ($role != "qa") then 1 else 0 end)
       + (if ($r.visual == true) and (($m.visual_runs // 0) == 0) and ($role != "visual-reviewer") then 1 else 0 end)
   ' "$STATE_FILE"
 }
@@ -2932,8 +2879,13 @@ cmd_harness_gate() {
   local name="${1:-}" status="${2:-}" reason="${3:-}"
   [ -z "$name" ] || [ -z "$status" ] && { err "harness gate requires <NAME> <STATUS> [reason]"; exit 1; }
 
+  if [ "$name" = "QA" ]; then
+    err "QA was removed from the goal workflow"
+    exit 1
+  fi
+
   case "$name" in
-    PLAN|IMPLEMENTATION|ANALYSIS|VERIFICATION|REVIEW|QA|VISUAL) ;;
+    PLAN|IMPLEMENTATION|ANALYSIS|VERIFICATION|REVIEW|VISUAL) ;;
     *) err "Unknown gate: $name"; exit 1 ;;
   esac
 
@@ -2971,9 +2923,6 @@ cmd_harness_gate() {
       REVIEW)
         harness_review_evidence_ok || exit 1
         ;;
-      QA)
-        harness_qa_evidence_ok || exit 1
-        ;;
       VISUAL)
         harness_visual_evidence_ok || exit 1
         ;;
@@ -2990,7 +2939,7 @@ cmd_harness_gate() {
       '.[$idx].harness.gates[$name] = {status: $status, sha:$sha}'
   fi
 
-  case "$name" in ANALYSIS|VERIFICATION|REVIEW|QA|VISUAL)
+  case "$name" in ANALYSIS|VERIFICATION|REVIEW|VISUAL)
     state_mutate --argjson idx "$GOAL_IDX" --arg repo "${GOAL_REPO:-.}" --arg name "$name" '
       .[$idx].harness.repo_gates[$repo][$name] = .[$idx].harness.gates[$name]
     ' || return ;;
@@ -3033,80 +2982,6 @@ cmd_harness_retry() {
   fi
 
   log "Retry $field: $next / $limit"
-}
-
-cmd_harness_qa_add() {
-  harness_require
-  local scenario="${1:-}" result="${2:-}" note="${3:-}"
-  [ -z "$scenario" ] || [ -z "$result" ] && { err "harness qa add requires <scenario> <PASS|FAIL> <note>"; exit 1; }
-  case "$result" in
-    PASS|FAIL) ;;
-    *) err "QA result must be PASS or FAIL"; exit 1 ;;
-  esac
-  [ -z "$note" ] && note=""
-
-  local observed_sha
-  observed_sha=$(implementation_fingerprint) || return
-  local id
-  id="$(jq -r --argjson idx "$GOAL_IDX" '
-    .[$idx].harness.qa_findings | length as $n
-    | "q" + (($n + 1) | tostring)
-  ' "$STATE_FILE")"
-
-  state_mutate --argjson idx "$GOAL_IDX" \
-    --arg repo "${GOAL_REPO:-.}" --arg sha "$observed_sha" \
-    --arg id "$id" \
-    --arg scenario "$scenario" \
-    --arg result "$result" \
-    --arg note "$note" \
-    '
-    .[$idx].harness.qa_findings = (
-      (.[$idx].harness.qa_findings // [])
-      | map(
-          if $result == "PASS" and .scenario == $scenario and (.repo // ".") == $repo and .result == "FAIL" and .resolved != true
-          then . + {resolved: true, superseded_by: $id}
-          else .
-          end
-        )
-      + [{id: $id, scenario: $scenario, result: $result, note: $note, sha:$sha, repo:$repo}]
-    )'
-
-  harness_event "harness" "qa" "$id $result $scenario"
-  printf '%s\n' "$id"
-}
-
-cmd_harness_qa_pending() {
-  harness_require
-  local failed
-  failed="$(jq -r --arg repo "${GOAL_REPO:-.}" --argjson idx "$GOAL_IDX" \
-    '(.[$idx].harness.qa_findings // [] | map(select((.repo // ".") == $repo))) | group_by(.scenario) | map(.[-1]) | map(select(.result == "FAIL" and .resolved != true)) | length' \
-    "$STATE_FILE")"
-  jq --arg repo "${GOAL_REPO:-.}" --argjson idx "$GOAL_IDX" '
-    ((.[$idx].harness.qa_findings // [] | map(select((.repo // ".") == $repo))) | group_by(.scenario) | map(.[-1])) as $latest
-    | {
-        total: ((.[$idx].harness.qa_findings // [] | map(select((.repo // ".") == $repo))) | length),
-        failed: ($latest | map(select(.result == "FAIL" and .resolved != true)) | length),
-        latest: $latest
-      }
-  ' "$STATE_FILE"
-  [ "$failed" -eq 0 ] || exit 1
-}
-
-cmd_harness_qa_resolve() {
-  harness_require
-  local id="${1:-}"
-  [ -z "$id" ] && { err "harness qa resolve requires <id>"; exit 1; }
-  local found
-  found="$(jq -r --argjson idx "$GOAL_IDX" --arg id "$id" \
-    '[.[$idx].harness.qa_findings[]? | select(.id == $id)] | length' "$STATE_FILE")"
-  if [ "${found:-0}" -eq 0 ]; then
-    err "QA finding not found: $id"
-    exit 1
-  fi
-  state_mutate --argjson idx "$GOAL_IDX" --arg id "$id" \
-    '.[$idx].harness.qa_findings = [.[$idx].harness.qa_findings[] | if .id == $id then . + {resolved: true} else . end]'
-  harness_event "harness" "qa_resolve" "$id"
-  log "Resolved QA finding $id (historical row kept)"
 }
 
 cmd_harness_visual_add() {
@@ -3399,7 +3274,6 @@ cmd_harness_done() {
     | (if ($r.planner == false) then [] else ["PLAN"] end)
       + ["IMPLEMENTATION","ANALYSIS","VERIFICATION"]
       + (if ($r.reviewer == false) then [] else ["REVIEW"] end)
-      + (if ($r.qa == true) then ["QA"] else [] end)
       + (if ($r.visual == true) then ["VISUAL"] else [] end)
   ' "$STATE_FILE")"
 
@@ -3443,7 +3317,7 @@ cmd_harness_done() {
 
 
 
-# Reviewer and QA must keep spawning until findings are clean. Grow the
+# Reviewer must keep spawning until findings are clean. Grow the
 # role cap and total spawn cap instead of stopping with findings still open.
 
 
@@ -3452,7 +3326,7 @@ cmd_harness_budget_set() {
   local key="${1:-}" val="${2:-}"
   [ -z "$key" ] || [ -z "$val" ] && { err "harness budget set requires <key> <n>"; exit 1; }
   case "$key" in
-    max_total_spawns|max_planner_runs|max_researcher_runs|max_builder_expert_runs|max_reviewer_runs|max_qa_runs|max_visual_runs) ;;
+    max_total_spawns|max_planner_runs|max_researcher_runs|max_builder_expert_runs|max_reviewer_runs|max_visual_runs) ;;
     *) err "Unknown budget key: $key"; exit 1 ;;
   esac
   if ! [[ "$val" =~ ^[0-9]+$ ]] || [ "$val" -lt 1 ]; then
@@ -3536,7 +3410,8 @@ cmd_harness_brief() {
     esac
   done
   case "$role" in
-    planner|researcher|builder|builder-expert|reviewer|qa|visual-reviewer) ;;
+    qa) err "QA was removed from the goal workflow"; exit 1 ;;
+    planner|researcher|builder|builder-expert|reviewer|visual-reviewer) ;;
     *) err "Unknown role for brief: $role"; exit 1 ;;
   esac
 
@@ -3669,12 +3544,8 @@ cmd_harness() {
     gate) cmd_harness_gate "$@" ;;
     retry) cmd_harness_retry "$@" ;;
     qa)
-      case "${1:-}" in
-        add) shift; cmd_harness_qa_add "$@" ;;
-        pending) cmd_harness_qa_pending ;;
-        resolve) shift; cmd_harness_qa_resolve "$@" ;;
-        *) err "harness qa subcommand must be add, pending, or resolve"; exit 1 ;;
-      esac
+      err "QA was removed from the goal workflow"
+      exit 1
       ;;
     visual)
       case "${1:-}" in
@@ -3709,7 +3580,7 @@ cmd_harness() {
     brief) cmd_harness_brief "$@" ;;
     done) cmd_harness_done ;;
     recover-spawn) cmd_harness_recover_spawn ;;
-    *) err "harness subcommand must be: init, phase, task, gate, retry, qa, visual, event, progress, hook, spawn, metrics, budget, context, brief, status, done, recover-spawn"; exit 1 ;;
+    *) err "harness subcommand must be: init, phase, task, gate, retry, visual, event, progress, hook, spawn, metrics, budget, context, brief, status, done, recover-spawn"; exit 1 ;;
   esac
 }
 
@@ -3939,10 +3810,9 @@ cmd_route_detect() {
   state_ensure_array
   refresh_goal_idx
 
-  local base files figma_enabled qa_mode visual_mode
+  local base files figma_enabled visual_mode
   base="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].base_branch // "main"' "$STATE_FILE")"
   figma_enabled="$(config_read figma_enabled)"; figma_enabled="${figma_enabled:-false}"
-  qa_mode="$(config_read qa_mode)"; qa_mode="${qa_mode:-auto}"
   visual_mode="$(config_read visual_mode)"; visual_mode="${visual_mode:-auto}"
 
   local wd
@@ -3992,13 +3862,7 @@ cmd_route_detect() {
   fi
 
   if [ "$route" != "frontend" ]; then
-    if [ "$qa_mode" = "always" ]; then
-      route="feature"
-      add_reason "qa_mode=always"
-    elif [ "$qa_mode" = "never" ]; then
-      route="backend"
-      add_reason "qa_mode=never"
-    elif [ "$business" -eq 1 ]; then
+    if [ "$business" -eq 1 ]; then
       route="feature"
       add_reason "business_paths"
     elif [ -n "$files" ]; then
@@ -4017,7 +3881,6 @@ cmd_route_detect() {
     --arg route "$route" \
     --arg evidence "${evidence:-none}" \
     --arg reasons "$reasons" \
-    --arg qa_mode "$qa_mode" \
     --arg visual_mode "$visual_mode" \
     --argjson figma_enabled "$figma_json" \
     '{
@@ -4025,7 +3888,6 @@ cmd_route_detect() {
       baseline: true,
       evidence: $evidence,
       reasons: $reasons,
-      qa_mode: $qa_mode,
       visual_mode: $visual_mode,
       figma_enabled: $figma_enabled
     }'

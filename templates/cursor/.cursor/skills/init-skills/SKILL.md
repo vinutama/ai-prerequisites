@@ -31,7 +31,6 @@ Canonical map (exclude `ui-ux-pro-max` from the npx `--skills` install):
 | `builder` | `test-driven-development`, `lint-and-validate`, `error-handling-patterns`, `api-endpoint-builder` |
 | `builder-expert` | `systematic-debugging`, `test-driven-development`, `lint-and-validate`, `architecture`, `error-handling-patterns`, `api-endpoint-builder` |
 | `reviewer` | `code-review-excellence`, `verification-before-completion`, `api-security-best-practices`, `systematic-debugging` |
-| `qa` | `e2e-testing-patterns`, `webapp-testing`, `browser-automation`, `test-driven-development`, `verification-before-completion`, `systematic-debugging`, `api-security-testing` |
 | `visual-reviewer` | `wcag-audit-patterns`, `frontend-design`, `webapp-testing` |
 
 Ask the user the following questions one at a time and wait for each answer:
@@ -43,7 +42,7 @@ Ask the user the following questions one at a time and wait for each answer:
    If `recommended`, compute the deduplicated union and install from the project root:
    ```bash
    npx agentic-awesome-skills --path .cursor/skills --skills \
-   verification-before-completion,brainstorming,concise-planning,writing-plans,architecture,deep-research,research-prompt,documentation,documentation-templates,api-security-best-practices,test-driven-development,lint-and-validate,error-handling-patterns,api-endpoint-builder,systematic-debugging,code-review-excellence,e2e-testing-patterns,webapp-testing,browser-automation,api-security-testing,wcag-audit-patterns,frontend-design
+   verification-before-completion,brainstorming,concise-planning,writing-plans,architecture,deep-research,research-prompt,documentation,documentation-templates,api-security-best-practices,test-driven-development,lint-and-validate,error-handling-patterns,api-endpoint-builder,systematic-debugging,code-review-excellence,webapp-testing,wcag-audit-patterns,frontend-design
    ```
    Do **not** pass `--category` or `--risk` for recommended — the skill list is exact.
    Then skip to **After agentic-awesome-skills install** below.
@@ -51,7 +50,7 @@ Ask the user the following questions one at a time and wait for each answer:
    If `custom`, continue with question 2.
 
 2. **Agents** (custom only) — Which agents' skills to install? (multi-select)
-   - `planner`, `researcher`, `builder`, `builder-expert`, `reviewer`, `qa`, `visual-reviewer`
+   - `planner`, `researcher`, `builder`, `builder-expert`, `reviewer`, `visual-reviewer`
    - Or `all` (same as recommended)
 
    Build a deduplicated comma-separated `--skills` list from the map for the selected agents only.

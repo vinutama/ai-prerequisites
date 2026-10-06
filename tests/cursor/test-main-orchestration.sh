@@ -43,13 +43,25 @@ if jq -e '.orchestrator // .["$routing"].orchestrator' "$PROJECT/.cursor/goal-mo
   echo 'orchestrator role still configured' >&2
   exit 1
 fi
-for role in planner researcher builder builder-expert reviewer qa visual-reviewer; do
+for role in planner researcher builder builder-expert reviewer visual-reviewer; do
   test -f "$PROJECT/.cursor/agents/$role.md"
   if rg -qi 'orchestrator' "$PROJECT/.cursor/agents/$role.md"; then
     echo "$role still refers to the removed coordinator" >&2
     exit 1
   fi
 done
+test ! -e "$PROJECT/.cursor/agents/qa.md"
+if GOAL_PLATFORM=github "$PROJECT/.cursor/scripts/goal-git.sh" models qa --complexity NORMAL > "$TEST_ROOT/qa.out" 2>&1; then
+  echo 'removed qa still resolves as a worker model' >&2
+  exit 1
+fi
+
+# Reinstall must delete leftover QA agent files and strip qa_mode from config.
+printf '%s\n' 'stale' > "$PROJECT/.cursor/agents/qa.md"
+printf '%s\n' '{"platform":"github","qa_mode":"auto"}' > "$PROJECT/.cursor/goal-config.json"
+bash "$ROOT/init.sh" --cursor "$PROJECT" > "$TEST_ROOT/reinit-qa.log"
+test ! -e "$PROJECT/.cursor/agents/qa.md"
+jq -e 'has("qa_mode") | not' "$PROJECT/.cursor/goal-config.json" >/dev/null
 
 if GOAL_PLATFORM=github "$PROJECT/.cursor/scripts/goal-git.sh" models orchestrator --complexity NORMAL > "$TEST_ROOT/orchestrator.out" 2>&1; then
   echo 'removed orchestrator still resolves as a worker model' >&2
@@ -64,3 +76,4 @@ echo 'PASS: brief / spawn-confirm / Agent/Task launch recipe present'
 echo 'PASS: shared scripts and commands.md installed'
 echo 'PASS: orchestrator role/model removed; legacy agent backed up'
 echo 'PASS: worker handoffs use MAIN; worker routing resolves to inherit'
+echo 'PASS: qa.md absent; reinstall removes leftover qa.md and strips qa_mode'

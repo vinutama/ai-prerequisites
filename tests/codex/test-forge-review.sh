@@ -71,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix='codex-review-') as temp:
   repo='forge.test/team/app' if platform=='github' else 'https://forge.test/team/app'
   (p/'.codex/goal-config.json').write_text(json.dumps(dict(platform=platform,forge_repo=repo,review_mode='inline')))
   state=[dict(id='review-goal',branch='feat/changes',base_branch='main',status='in_progress',pr_number=7,pr_url='https://forge.test/pr/7',
-    harness=dict(phase='DONE',tasks=[],spawn_reservations=[],requirements=dict(planner=False,reviewer=False,qa=False,visual=False),gates=dict(IMPLEMENTATION=dict(status='PASS'),ANALYSIS=dict(status='PASS',sha=sha),VERIFICATION=dict(status='PASS',sha=sha))),
+    harness=dict(phase='DONE',tasks=[],spawn_reservations=[],requirements=dict(planner=False,reviewer=False,visual=False),gates=dict(IMPLEMENTATION=dict(status='PASS'),ANALYSIS=dict(status='PASS',sha=sha),VERIFICATION=dict(status='PASS',sha=sha))),
     repos=[dict(path='.',pr_number=7,pr_url='https://forge.test/pr/7',delivery=dict(validated=True,verified_sha=sha))])]
   state_file=p/'state.json';state_file.write_text(json.dumps(state));helper=p/'.codex/scripts/goal-git.sh'
   env=dict(os.environ,PATH=str(fixture)+':'+os.environ['PATH'],FIXTURE=str(fixture),PLATFORM=platform,SHA=sha,BASE_SHA=base)

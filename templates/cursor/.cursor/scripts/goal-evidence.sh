@@ -5,7 +5,7 @@ harness_invalidate() {
   [ -f "$STATE_FILE" ] || return 0
   jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness != null' "$STATE_FILE" >/dev/null || return 0
   state_mutate --argjson idx "$GOAL_IDX" --arg reason "$1" '
-    reduce ["ANALYSIS","VERIFICATION","REVIEW","QA","VISUAL"][] as $k (.;
+    reduce ["ANALYSIS","VERIFICATION","REVIEW","VISUAL"][] as $k (.;
       if .[$idx].harness.gates[$k].status == "SKIPPED" then . else
         .[$idx].harness.gates[$k] = {status:"NOT_RUN",reason:$reason} end)
     | .[$idx].harness.repo_gates = {}
@@ -56,7 +56,7 @@ cmd_doctor() {
   fi
   data=$(forge_doctor "${selected/unknown/}") || true
   [ -n "$data" ] || return 1
-  for role in planner researcher builder builder-expert reviewer qa visual-reviewer; do
+  for role in planner researcher builder builder-expert reviewer visual-reviewer; do
     if ! delegation_role_config "$role" >/dev/null 2>&1; then
       missing=$(printf '%s' "$missing" | jq --arg role "$role" '. + [$role]')
     fi

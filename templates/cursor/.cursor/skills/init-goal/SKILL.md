@@ -110,7 +110,7 @@ After collecting answers for questions 1–9 (including 6b/6c when Figma is enab
 ```bash
 .cursor/scripts/goal-git.sh config set \
   <goal_source> <target_branch> <platform> <concurrency> <auto_merge> <review_mode> \
-  <review_max_iterations> <max_rework> <max_escalations> <max_verify_retries> <qa_mode> <visual_mode>
+  <review_max_iterations> <max_rework> <max_escalations> <max_verify_retries> <visual_mode>
 ```
 
 Defaults when the user did not override:
@@ -118,7 +118,6 @@ Defaults when the user did not override:
 - `max_rework` → `3`
 - `max_escalations` → `2`
 - `max_verify_retries` → `3`
-- `qa_mode` → `auto` (`auto|always|never`)
 - `visual_mode` → `auto` (`auto|always|never`)
 
 Use `1` for concurrency when the user chose sequential only.
@@ -130,7 +129,7 @@ Always pass `0` for `review_max_iterations`.
 
 Example (prompt, main, github, sequential, manual merge, inline review, defaults):
 ```bash
-.cursor/scripts/goal-git.sh config set prompt main github 1 false inline 0 3 2 3 auto auto
+.cursor/scripts/goal-git.sh config set prompt main github 1 false inline 0 3 2 3 auto
 ```
 
 If `issues` was selected, after `config set` persist issue settings:

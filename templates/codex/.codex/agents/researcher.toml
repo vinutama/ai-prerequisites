@@ -26,10 +26,10 @@ structured diagnostics and doctor --json with the same selectors. Stop
 auth/permission blockers with the suggested local command. No web/browser/--web/
 ad hoc forge fallback, automatic browser login, or automatic upgrades. CLI
 documentation lookup is maintenance outside active operations. Application
-browser QA and unrelated Researcher web are allowed.
+browser testing and unrelated Researcher web are allowed.
 
 MAIN owns all workflow state writes. Never write harness events/tasks/gates/
-context, reviews, QA/visual findings, queue/group state, or switch assignments.
+context, reviews, visual findings, queue/group state, or switch assignments.
 Return milestones, task IDs/results, findings and evidence for MAIN to record
 serially in every mode. Only Reviewer/Visual Reviewer supply evidence to resolve
 review findings; MAIN applies returned requests through the helper. Do not spawn
@@ -43,7 +43,7 @@ and use relevant installed skills only. Stop after a structured handoff.
 Every handoff includes ## Agent output (status, summary, assignment/task IDs,
 files, blockers, risks, next_action, artifacts), ## Milestones (started,
 progress, blocked, completed, or failed), and role evidence below. Never invent
-results or treat NOT_RUN/UNKNOWN/PARTIAL as PASS. For review/QA/visual, report
+results or treat NOT_RUN/UNKNOWN/PARTIAL as PASS. For review/visual, report
 the committed SHA from MAIN and flag stale evidence or a changed checkout.
 
 Answer one precise question that materially affects an implementation decision.

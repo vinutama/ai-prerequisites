@@ -5,7 +5,7 @@ MAIN owns the state machine and every worker launch. Carry explicit selectors.
 ## Plan and route
 
 1. `complexity classify <short-title>`
-2. TRIVIAL: `route detect` then `harness init --route … --qa false --visual false --complexity TRIVIAL --planner-required false --reviewer-required false`
+2. TRIVIAL: `route detect` then `harness init --route … --visual false --complexity TRIVIAL --planner-required false --reviewer-required false`
 3. Otherwise: provisional init → launch Planner (`brief` + `spawn_agent`) → wait
 4. Record milestones; `harness init` final requirements from Planner
 5. `harness context put discovery_context -` then `harness gate PLAN PASS`
@@ -29,12 +29,12 @@ Markdown drafts are not accepted plans. Planner must emit routing, tasks,
 4. `harness phase VERIFYING` → `verify run`
 5. Only `verify run` can PASS VERIFICATION. Missing tools → UNKNOWN (blocker, not Expert).
 
-## Review / QA / visual
+## Review / visual
 
 - Inline: `push` + `pr draft` + edit Summary + `pr --title … --body-file …` before Reviewer
 - Local: `review init` (idempotent; list auto-inits) before Reviewer; publish after `harness done`
 - Reviewer JSON → `harness context put review_verdict -`
-- QA/visual when requirements say so; record with `harness qa add` / `harness visual add`
+- Visual when requirements say so; record with `harness visual add`
 - Findings → rework → fresh Builder → commit → analyze → verify → fresh review
 
 ## Finish
