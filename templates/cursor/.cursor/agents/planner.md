@@ -168,10 +168,12 @@ Explore all repos; tag tasks `[repo-name] …`; order by cross-repo deps;
 still tag every task `@builder`.
 
 ### 8. Issue queue mode
-When given a JSON issue list: order by dependency, batch for concurrency
-(disjoint paths, width ≤ concurrency), output `## Issue Execution Plan` only
-(no per-issue implementation tasks yet). Later, for a single `GOAL_ISSUE`,
-produce the normal Implementation Plan.
+When MAIN selects `GOAL_ID=queue-<run_id>` after `issues plan begin`: order by
+dependency, batch for concurrency (disjoint paths, width ≤ concurrency), and
+output `## Issue Execution Plan` only as JSON suitable for
+`harness context put queue_plan` (no per-issue implementation tasks yet; do not
+start issues or create branches). Later, for a single `GOAL_ISSUE`, produce the
+normal Implementation Plan.
 
 ### 9. UI / visual
 If Figma enabled: use Figma MCP / config URLs as visual source of truth;

@@ -236,7 +236,7 @@ sys.exit(0 if ok else 1)
 }
 
 cmd_pr_draft() {
-  require_active_goal; refresh_goal_idx
+  require_work_goal || return 1
   local group_id=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -310,7 +310,8 @@ cmd_pr_draft() {
 
 cmd_pr() {
   [ -z "${GOAL_TASK:-}" ] || { goal_error assignment "Integrate task worktrees and clear GOAL_TASK before PR/MR delivery"; return 1; }
-  require_active_goal; refresh_goal_idx; require_vcs_cli
+  require_work_goal || return 1
+  require_vcs_cli
   local mode gid
   mode=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].delivery_mode // "single"' "$STATE_FILE")
   gid=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].active_group_id // empty' "$STATE_FILE")

@@ -37,12 +37,14 @@ invent a per-spawn model override. MAIN's session model is user-selected.
   `harness recover-spawn`. Resume an incomplete issue queue if `issues queue`
   has entries; otherwise resume the active goal from persisted phase. Never
   recreate an existing branch, worktree, PR, or completed task. For a queue,
-  select each issue with `GOAL_ISSUE` and follow the persisted batch plan.
+  run `issues plan show` first (skip re-planning when `status` is `planned`),
+  then select each issue with `GOAL_ISSUE` and follow the persisted batch plan.
 - `--issues [url] [count]`, or bare `/goal` when `goal_source=issues`: use the
   explicit URL/count or config's `issue_list_url`/`issue_limit` (default 3).
   Require a URL. Set `GOAL_RUN_ID`, run `issues list`, and read
   `references/issue-queue.md`. One issue uses `issues start <n>` and the
-  normal loop; 2+ issues use one queue plan and one PR per issue. Independent
+  normal loop; 2+ issues use `issues plan begin` → queue Planner →
+  `issues plan done` before any branches, then one PR per issue. Independent
   single-repo issues in the same batch start together in separate worktrees.
 - New goal: resolve `--source <prompt|markdown|jira|issues>` or configured
   `goal_source` (default `prompt`). Prompt requires a nonempty objective.

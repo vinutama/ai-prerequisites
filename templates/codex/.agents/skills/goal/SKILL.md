@@ -33,7 +33,7 @@ Parse text after `$goal` before mutations.
 | `--list` | `list` then return |
 | `--status` | `harness progress` + `harness status` then return |
 | `--continue [id] [instruction]` | `continue`; restore selectors; reuse branches/PRs |
-| `--issues [url] [count]` | see [issue-queue](references/issue-queue.md) |
+| `--issues [url] [count]` | see [issue-queue](references/issue-queue.md) (`issues plan begin` before branches when 2+) |
 | new goal | resolve `--source` / config; snapshot source; see below |
 
 ### Source intake (before any branch/worktree)

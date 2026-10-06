@@ -60,6 +60,7 @@ Title must match `feat|fix|docs|refactor|perf|test|chore|build|ci(scope)?: subje
 ```text
 doctor --json
 "$GOAL_GIT" help
+issues plan begin|done|show   # run-scoped queue Planner bootstrap (2+ issues)
 ```
 
 Never complete a failed forge operation via web/browser/`--web`/ad hoc CLI.

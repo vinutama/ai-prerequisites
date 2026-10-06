@@ -102,12 +102,15 @@ must be stable. Optional pr_title must be conventional
 (`feat|fix|docs|refactor|perf|test|chore|build|ci(scope)?: subject`), single line, ≤72 chars;
 subject must not start with an uppercase letter.
 
-For queue-level planning (2+ issues), return only ## Issue Execution Plan and
-milestones: full issue metadata, predicted file ownership, dependency ordering,
-and disjoint batches no wider than global concurrency. Unknown overlap is
-sequential; multi-repo queues are sequential. Queue planning precedes issue
-branch mutations. One issue bypasses queue planning. A specific issue assignment
-uses normal discovery and task planning.
+For queue-level planning (2+ issues), MAIN creates a run-scoped queue record with
+`issues plan begin` and selects it via `GOAL_ID=queue-<run_id>` before spawning
+you. Return only ## Issue Execution Plan and milestones: full issue metadata,
+predicted file ownership, dependency ordering, and disjoint batches no wider
+than global concurrency. The plan JSON must be suitable for
+`harness context put queue_plan`. Unknown overlap is sequential; multi-repo
+queues are sequential. Queue planning precedes issue branch mutations — do not
+start issues or create branches. One issue bypasses queue planning. A specific
+issue assignment uses normal discovery and task planning.
 
 Return ## Agent output status DONE|BLOCKED and next_action BUILD|RESEARCH|BLOCKED,
 ## Milestones, discovery_context, ## Implementation Plan (routing, tasks,

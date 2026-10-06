@@ -187,6 +187,17 @@ delegation_reserve() {
     task="$2"
   fi
   case "$effort" in minimal|low|medium|high|xhigh) ;; *) err "Invalid effort: $effort"; return 1 ;; esac
+  if jq -e --argjson idx "$GOAL_IDX" '.[$idx].kind == "queue"' "$STATE_FILE" >/dev/null 2>&1; then
+    case "$role" in
+      planner|researcher) ;;
+      *)
+        goal_error assignment \
+          "Queue record allows only planner/researcher; got $role" \
+          "Export GOAL_ID=queue-<run_id> only for queue planning, then clear it before issue workers"
+        return 1
+        ;;
+    esac
+  fi
   delegation_role_config "$role" || return 1
   phase="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.phase' "$STATE_FILE")"
   route="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].harness.complexity // "NORMAL"' "$STATE_FILE")"

@@ -139,6 +139,10 @@ Commands:
   issues list [url] [limit]     List open issues from GitHub/GitLab issue list URL
   issues start <number> [--worktree] [--url URL]  Start goal for issue (branch off base)
   issues queue                  Print current issue run queue from state
+  issues plan begin [--url u] [--count n]
+                            Create run-scoped queue record + harness (no branch)
+  issues plan done              Mark queue planning complete (requires queue_plan)
+  issues plan show              Print queue record status and plan for this run
   issues finish <number>        Mark issue goal complete and remove worktree
   review init [repo_path]       Initialize local review findings file
   review add <path> <line> <severity> <body> [repo_path]  Add local finding
@@ -306,6 +310,22 @@ require_active_goal() {
   jq -e --argjson idx "$GOAL_IDX" 'type == "array" and (.[$idx] | type) == "object"' "$STATE_FILE" >/dev/null || { goal_error assignment "No active goal exists"; return 1; }
 }
 
+is_queue_record() {
+  [ -f "$STATE_FILE" ] || return 1
+  jq -e --argjson idx "$GOAL_IDX" '.[$idx].kind == "queue"' "$STATE_FILE" >/dev/null 2>&1
+}
+
+# Issue/branch work commands must not run against a queue planning record.
+require_work_goal() {
+  require_active_goal || return 1
+  refresh_goal_idx || return 1
+  if is_queue_record; then
+    goal_error assignment "Queue record selected; this command needs an issue/work goal" \
+      "Clear GOAL_ID of the queue record and set GOAL_ISSUE (and GOAL_RUN_ID) for an issue goal"
+    return 1
+  fi
+}
+
 pr_number_active() {
   require_active_goal
   local repo_path="${1:-${GOAL_REPO:-.}}"
@@ -438,9 +458,10 @@ cmd_start() {
   state_ensure_array
 
   if [ -f "$STATE_FILE" ]; then
-    local old_status
+    local old_status old_kind
     old_status=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].status // "unknown"' "$STATE_FILE" 2>/dev/null || echo "unknown")
-    if [ "${GOAL_SUPPRESS_IN_PROGRESS_WARN:-}" != "1" ] && [ "$old_status" = "in_progress" ]; then
+    old_kind=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].kind // empty' "$STATE_FILE" 2>/dev/null || true)
+    if [ "${GOAL_SUPPRESS_IN_PROGRESS_WARN:-}" != "1" ] && [ "$old_kind" != "queue" ] && [ "$old_status" = "in_progress" ]; then
       warn "A goal is already in progress. Starting a new goal will append to history. Use 'continue' to extend the existing goal instead."
     fi
   fi
@@ -544,7 +565,7 @@ cmd_start() {
 }
 
 cmd_commit() {
-  require_active_goal; refresh_goal_idx
+  require_work_goal || return 1
   local msg="${1:-chore: automated changes}" wd
   wd=$(repo_dir "${GOAL_REPO:-.}") || return
   context_assert_branch "$wd" || return
@@ -740,7 +761,7 @@ cmd_list() {
 
 cmd_analyze() {
   require_cmd npx
-  refresh_goal_idx
+  require_work_goal || return 1
   local wd
   wd="$(repo_dir "${GOAL_REPO:-.}")"
   implementation_fingerprint >/dev/null || return
@@ -1457,13 +1478,191 @@ cmd_issues_queue() {
   state_ensure_array
   local run_id="${GOAL_RUN_ID:-}"
   if [ -z "$run_id" ]; then
-    run_id=$(jq -r '[.[] | select(.run_id != null) | .run_id] | last // empty' "$STATE_FILE")
+    run_id=$(jq -r '[.[] | select(.run_id != null and (.kind // "") != "queue") | .run_id] | last // empty' "$STATE_FILE")
   fi
   if [ -z "$run_id" ]; then
     echo "[]"
     return
   fi
-  jq --arg rid "$run_id" '[.[] | select(.run_id == $rid)]' "$STATE_FILE"
+  jq --arg rid "$run_id" '[.[] | select(.run_id == $rid and (.kind // "") != "queue")]' "$STATE_FILE"
+}
+
+# Minimal harness for run-scoped queue planning (no branch / worktree).
+queue_plan_harness_json() {
+  jq -n '{
+    phase: "PLANNED",
+    route: "feature",
+    complexity: "NORMAL",
+    requirements: {
+      qa: false,
+      visual: false,
+      planner: true,
+      reviewer: false,
+      source: "queue-plan"
+    },
+    tasks: [],
+    gates: {
+      PLAN: {status: "NOT_RUN"},
+      IMPLEMENTATION: {status: "NOT_RUN"},
+      ANALYSIS: {status: "NOT_RUN"},
+      VERIFICATION: {status: "NOT_RUN"},
+      REVIEW: {status: "NOT_RUN"},
+      QA: {status: "NOT_RUN"},
+      VISUAL: {status: "NOT_RUN"}
+    },
+    qa_findings: [],
+    visual_findings: [],
+    counters: {rework: 0, escalations: 0, verify_retries: 0},
+    limits: {max_rework: 0, max_escalations: 0, max_verify_retries: 0},
+    budget: {
+      max_total_spawns: 4,
+      max_planner_runs: 2,
+      max_researcher_runs: 1,
+      max_builder_expert_runs: 0,
+      max_reviewer_runs: 0,
+      max_qa_runs: 0,
+      max_visual_runs: 0
+    },
+    metrics: {
+      agent_spawns: 0, planner_runs: 0, researcher_runs: 0, builder_runs: 0,
+      expert_runs: 0, reviewer_runs: 0, qa_runs: 0, visual_runs: 0, rework_cycles: 0
+    },
+    context: {},
+    events: []
+  }'
+}
+
+cmd_issues_plan_begin() {
+  require_cmd jq
+  local url="" count=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --url) [ $# -ge 2 ] || { err "issues plan begin --url requires a value"; exit 1; }; url="$2"; shift 2 ;;
+      --count) [ $# -ge 2 ] || { err "issues plan begin --count requires a value"; exit 1; }; count="$2"; shift 2 ;;
+      *) err "Unknown issues plan begin argument: $1"; exit 1 ;;
+    esac
+  done
+  [ -z "${GOAL_GROUP:-}${GOAL_TASK:-}${GOAL_ISSUE:-}" ] || {
+    goal_error assignment "Clear GOAL_GROUP, GOAL_TASK, and GOAL_ISSUE before issues plan begin"; return 1;
+  }
+
+  local run_id goal_id issues_json existing harness
+  run_id="${GOAL_RUN_ID:-$(generate_run_id)}"
+  goal_id="queue-${run_id}"
+
+  state_ensure_array
+  if [ -f "$STATE_FILE" ]; then
+    existing=$(jq -c --arg rid "$run_id" --arg id "$goal_id" \
+      '[.[] | select((.id == $id) or (.kind == "queue" and .run_id == $rid))]
+       | if length > 1 then error("Ambiguous queue plan records") else .[0] // empty end' "$STATE_FILE") || return
+    if [ -n "$existing" ]; then
+      log "Reusing existing queue plan record for run $run_id"
+      printf '%s\n' "$existing" | jq -c '{goal_id:.id, run_id:.run_id, status:.status, issues:.issues}'
+      return 0
+    fi
+  fi
+
+  issues_json="$(cmd_issues_list "${url:-}" "${count:-}")" || return
+  printf '%s' "$issues_json" | jq -e 'type == "array" and length > 0' >/dev/null || {
+    err "issues plan begin requires at least one open issue from issues list"; exit 1;
+  }
+
+  harness="$(queue_plan_harness_json)"
+  local entry
+  entry=$(jq -n \
+    --arg id "$goal_id" \
+    --arg run_id "$run_id" \
+    --argjson issues "$issues_json" \
+    --argjson harness "$harness" \
+    '{
+      id: $id,
+      kind: "queue",
+      goal_source: "issues",
+      source: {
+        type: "issue_queue",
+        title: ("Issue queue plan (" + ($issues | length | tostring) + " issues)"),
+        body: "Order dependencies and form parallel batches before any issue branch exists.",
+        reference: "",
+        acceptance_criteria: []
+      },
+      goal: ("Plan issue queue for run " + $run_id),
+      branch: null,
+      worktree: null,
+      status: "planning",
+      run_id: $run_id,
+      issues: $issues,
+      harness: $harness,
+      spawn_reservations: []
+    }')
+
+  state_append_goal "$entry" || return
+  GOAL_RUN_ID="$run_id"
+  log "Queue plan record created: $goal_id (run_id=$run_id, issues=$(printf '%s' "$issues_json" | jq length))"
+  jq -n --arg id "$goal_id" --arg rid "$run_id" --argjson issues "$issues_json" \
+    '{goal_id:$id, run_id:$rid, status:"planning", issues:$issues}'
+}
+
+cmd_issues_plan_done() {
+  require_active_goal
+  refresh_goal_idx
+  is_queue_record || {
+    goal_error assignment "issues plan done requires the queue record (GOAL_ID=queue-<run_id>)"; return 1;
+  }
+  local run_id plan status
+  run_id=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].run_id // empty' "$STATE_FILE")
+  [ -n "$run_id" ] || { err "Queue record missing run_id"; exit 1; }
+  plan=$(jq -c --argjson idx "$GOAL_IDX" '.[$idx].harness.context.queue_plan // empty' "$STATE_FILE")
+  [ -n "$plan" ] && [ "$plan" != "null" ] || {
+    goal_error incomplete "queue_plan missing on queue record" \
+      "Store the Planner output with: harness context put queue_plan -"; return 1;
+  }
+  status=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].status // empty' "$STATE_FILE")
+  if [ "$status" = "planned" ]; then
+    log "Queue plan already marked planned for run $run_id"
+  else
+    state_mutate --argjson idx "$GOAL_IDX" '.[$idx].status = "planned"' || return
+  fi
+  mkdir -p "$PROJECT_ROOT/.codex/queue-plans"
+  printf '%s\n' "$plan" > "$PROJECT_ROOT/.codex/queue-plans/${run_id}.json"
+  printf '%s\n' "$plan" > "$PROJECT_ROOT/.codex/queue-plan.json"
+  log "Queue plan done for run $run_id"
+  jq -n --arg rid "$run_id" --argjson plan "$plan" \
+    '{run_id:$rid, status:"planned", queue_plan:$plan}'
+}
+
+cmd_issues_plan_show() {
+  require_cmd jq
+  [ -f "$STATE_FILE" ] || { echo '{"status":"missing"}'; return; }
+  state_ensure_array
+  local run_id="${GOAL_RUN_ID:-}" record
+  if [ -n "${GOAL_ID:-}" ]; then
+    record=$(jq -c --arg id "$GOAL_ID" \
+      '[.[] | select(.id == $id and .kind == "queue")] | .[0] // empty' "$STATE_FILE")
+  else
+    if [ -z "$run_id" ]; then
+      run_id=$(jq -r '[.[] | select(.kind == "queue" and .run_id != null) | .run_id] | last // empty' "$STATE_FILE")
+    fi
+    [ -n "$run_id" ] || { echo '{"status":"missing"}'; return; }
+    record=$(jq -c --arg rid "$run_id" \
+      '[.[] | select(.kind == "queue" and .run_id == $rid)] | last // empty' "$STATE_FILE")
+  fi
+  [ -n "$record" ] || { echo '{"status":"missing"}'; return; }
+  printf '%s\n' "$record" | jq '{
+    goal_id: .id,
+    run_id: .run_id,
+    status: .status,
+    issues: .issues,
+    queue_plan: (.harness.context.queue_plan // null)
+  }'
+}
+
+cmd_issues_plan() {
+  case "${1:-}" in
+    begin) shift; cmd_issues_plan_begin "$@" ;;
+    done)  shift; cmd_issues_plan_done "$@" ;;
+    show)  shift; cmd_issues_plan_show "$@" ;;
+    *) err "issues plan subcommand must be begin, done, or show"; exit 1 ;;
+  esac
 }
 
 cmd_issues_start() {
@@ -1528,7 +1727,7 @@ ${body}"
   local existing=""
   if [ -f "$STATE_FILE" ]; then
     existing=$(jq -c --arg rid "$run_id" --argjson n "$number" \
-      --arg repo "$repo" '[.[] | select(.run_id == $rid and .issue.number == $n and (.issue.repo // $repo) == $repo)]
+      --arg repo "$repo" '[.[] | select((.kind // "") != "queue" and .run_id == $rid and .issue.number == $n and (.issue.repo // $repo) == $repo)]
       | if length > 1 then error("Ambiguous issue assignment in state") else .[0] // empty end' "$STATE_FILE") || return
   fi
   if [ -n "${REQUESTED_GOAL_ID:-}" ]; then
@@ -1756,8 +1955,7 @@ review_require_file() {
 
 cmd_review_init() {
   require_cmd jq
-  require_active_goal
-  refresh_goal_idx
+  require_work_goal || return 1
   local repo_path
   repo_path="$(review_normalize_repo "${1:-${GOAL_REPO:-.}}")" || return
   local branch max_iter rf
@@ -2184,7 +2382,7 @@ harness_phase_allows_spawn() {
 }
 
 cmd_harness_init() {
-  require_active_goal
+  require_work_goal || return 1
   require_cmd jq
   refresh_goal_idx
 
@@ -3123,6 +3321,7 @@ cmd_harness_hook() {
 }
 
 cmd_harness_done() {
+  require_work_goal || return 1
   harness_require
 
   harness_require_current_evidence || return
@@ -3301,11 +3500,15 @@ cmd_harness_brief() {
       '((.[$idx].harness.tasks // []) | map(select(.id == $task)) | .[0]) // null' "$STATE_FILE")
   fi
 
-  local briefs_dir slug out
+  local briefs_dir slug out is_queue=false issues_json
   briefs_dir="$PROJECT_ROOT/.codex/briefs"
   mkdir -p "$briefs_dir"
   slug="$(slugify "${goal_id}-${role}-${task:-root}")"
   out="$briefs_dir/${slug}.md"
+  if jq -e --argjson idx "$GOAL_IDX" '.[$idx].kind == "queue"' "$STATE_FILE" >/dev/null 2>&1; then
+    is_queue=true
+    issues_json=$(jq -c --argjson idx "$GOAL_IDX" '.[$idx].issues // []' "$STATE_FILE")
+  fi
 
   {
     printf '# Worker brief: %s\n\n' "$role"
@@ -3324,16 +3527,34 @@ cmd_harness_brief() {
     printf -- '- WORKFLOW_ROOT: `%s`\n' "$PROJECT_ROOT"
     printf -- '- TARGET_WORKTREE: `%s`\n' "$wd"
     printf -- '- GOAL_GIT: `%s`\n' "$PROJECT_ROOT/.codex/scripts/goal-git.sh"
-    printf -- '- branch: `%s` (base: `%s`)\n\n' "$branch" "$base"
+    if [ "$is_queue" = true ]; then
+      printf -- '- Queue planning: no issue branch yet — do not mutate branches or worktrees.\n\n'
+    else
+      printf -- '- branch: `%s` (base: `%s`)\n\n' "$branch" "$base"
+    fi
     printf '## Rules\n\n'
     printf -- '- Use only the root GOAL_GIT above. Do not invent helper paths from the worktree.\n'
     printf -- '- Carry every selector on every shell invocation.\n'
-    printf -- '- Edit/check only TARGET_WORKTREE. Do not write harness/review/state.\n'
+    if [ "$is_queue" = true ]; then
+      printf -- '- Queue mode: return ## Issue Execution Plan only. Do not start issues or create branches.\n'
+      printf -- '- After planning, MAIN stores the plan with harness context put queue_plan and issues plan done.\n'
+    else
+      printf -- '- Edit/check only TARGET_WORKTREE. Do not write harness/review/state.\n'
+    fi
     printf -- '- Never run raw gh/glab or web search for forge operations.\n'
     printf -- '- Never edit `.codex/scripts` during a run.\n\n'
     printf '## Source\n\n```json\n'
     printf '%s\n' "$source_json" | jq .
     printf '```\n\n'
+    if [ "$is_queue" = true ]; then
+      printf '## Queue issues\n\n```json\n'
+      printf '%s\n' "$issues_json" | jq .
+      printf '```\n\n'
+      printf '## Queue planning instructions\n\n'
+      printf 'Order dependencies, predict file ownership, and form batches of disjoint issues\n'
+      printf '(width at most configured concurrency). Multi-repo queues are sequential.\n'
+      printf 'Return JSON suitable for harness context put queue_plan under ## Issue Execution Plan.\n\n'
+    fi
     if [ "$task_json" != "null" ]; then
       printf '## Assigned task\n\n```json\n'
       printf '%s\n' "$task_json" | jq .
@@ -3349,8 +3570,12 @@ cmd_harness_brief() {
         end
     ' "$STATE_FILE"
     printf '\n\n## Handoff required\n\n'
-    printf 'Return ## Agent output, ## Milestones, and ## Handoff with task_id, task_result,\n'
-    printf 'status, files_staged, checks_run, findings_addressed, decisions, notes, next_action.\n'
+    if [ "$is_queue" = true ]; then
+      printf 'Return ## Issue Execution Plan (JSON for queue_plan) plus ## Agent output / ## Handoff.\n'
+    else
+      printf 'Return ## Agent output, ## Milestones, and ## Handoff with task_id, task_result,\n'
+      printf 'status, files_staged, checks_run, findings_addressed, decisions, notes, next_action.\n'
+    fi
     printf '\n## Notes from MAIN\n\n'
     printf '(MAIN may append rework findings below this line.)\n'
   } > "$out"
@@ -3519,7 +3744,7 @@ cmd_verify_detect() {
 
 cmd_verify_run() {
   require_cmd jq
-  refresh_goal_idx
+  require_work_goal || return 1
   local wd only=""
   wd="$(repo_dir "${GOAL_REPO:-.}")"
   local verified_sha
@@ -3862,8 +4087,9 @@ case "${1:-}" in
       list)   cmd_issues_list "${3:-}" "${4:-}" ;;
       start)  shift 2; cmd_issues_start "$@" ;;
       queue)  cmd_issues_queue ;;
+      plan)   shift 2; cmd_issues_plan "$@" ;;
       finish) cmd_issues_finish "${3:-}" ;;
-      *)      err "issues subcommand must be list, start, queue, or finish"; exit 1 ;;
+      *)      err "issues subcommand must be list, start, queue, plan, or finish"; exit 1 ;;
     esac
     ;;
   review)

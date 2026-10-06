@@ -130,7 +130,7 @@ context_init() {
   # resolves and validates its requested number/run/repository itself; do not
   # bind it to the previous goal or reject the not-yet-created issue.
   if [ "${1:-}" = issues ]; then
-    case "${2:-}" in list|queue|start) return ;; esac
+    case "${2:-}" in list|queue|start|plan) return ;; esac
   fi
   refresh_goal_idx || return
   if [ -f "$STATE_FILE" ]; then
