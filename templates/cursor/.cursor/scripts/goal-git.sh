@@ -3,11 +3,12 @@ set -euo pipefail
 
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUNTIME_ROOT="$(cd "$SCRIPTS_DIR/../.." && pwd)"
-AGENT_CONFIG_DIR="$(basename "$(cd "$SCRIPTS_DIR/.." && pwd)")"   # .codex | .cursor
+AGENT_CONFIG_DIR="$(basename "$(cd "$SCRIPTS_DIR/.." && pwd)")"   # .codex | .cursor | .claude
 case "$AGENT_CONFIG_DIR" in
   .codex) AGENT_PLATFORM=codex ;;
   .cursor) AGENT_PLATFORM=cursor ;;
-  *) printf '%s\n' "Unsupported agent config dir: $AGENT_CONFIG_DIR (expected .codex or .cursor)" >&2; exit 1 ;;
+  .claude) AGENT_PLATFORM=claude ;;
+  *) printf '%s\n' "Unsupported agent config dir: $AGENT_CONFIG_DIR (expected .codex, .cursor or .claude)" >&2; exit 1 ;;
 esac
 PROJECT_ROOT="$RUNTIME_ROOT"
 if [ -f "$RUNTIME_ROOT/$AGENT_CONFIG_DIR/workflow-root" ]; then
@@ -21,6 +22,8 @@ PROGRESS_LOG="$PROJECT_ROOT/$AGENT_CONFIG_DIR/goal-progress.log"
 CONFIG_FILE="$PROJECT_ROOT/$AGENT_CONFIG_DIR/goal-config.json"
 FIGMA_ENV_FILE="$PROJECT_ROOT/$AGENT_CONFIG_DIR/figma.env"
 MCP_JSON="$PROJECT_ROOT/$AGENT_CONFIG_DIR/mcp.json"
+# Claude Code reads project MCP servers from the project-root .mcp.json.
+[ "$AGENT_PLATFORM" != claude ] || MCP_JSON="$PROJECT_ROOT/.mcp.json"
 WORKTREES_DIR="$PROJECT_ROOT/.worktrees"
 REVIEW_DIR="$PROJECT_ROOT/.goal-review"
 CODEX_TOML="$PROJECT_ROOT/$AGENT_CONFIG_DIR/config.toml"
@@ -51,9 +54,10 @@ Commands:
   threads                   List review threads as JSON
   comment <path> <line> <body>  Post inline review comment
   resolve <thread-id>       Resolve a review thread/discussion
-  analyze                   Run gitnexus analyze && rtk gain
+  analyze                   Run gitnexus analyze && rtk gain (pinned version, timeout)
   verify detect             Detect project verification commands (JSON)
-  verify run [--only a,b]   Run deterministic verification checks
+  verify run [--only a,b] [--none-detected-ok]
+                            Run deterministic verification checks (timeout: config verify_timeout)
   route detect              Classify route: backend|feature|frontend
   harness init [--route r] [--visual true|false]
                             Seed harness object on active goal (visual default from route)
@@ -61,18 +65,26 @@ Commands:
   harness task add <role> <title> [--parent tN]
   harness task set <id> <state>
                             state: PENDING|SPAWNING|RUNNING|DONE|BLOCKED|FAILED
+  harness task retry <id> [reason]
+                            FAILED/BLOCKED/stuck task back to PENDING; releases its reservation
+  harness task cancel <id> [reason]
+                            CANCELLED task: accepted by VERIFYING and harness done
   harness gate <NAME> <STATUS> [reason]
                             Evidence-backed PASS for IMPLEMENTATION/VERIFICATION/REVIEW/VISUAL
   harness retry <counter>   Increment retry counter (exit 1 if limit exceeded)
+  harness limit set <max_rework|max_escalations|max_verify_retries> <n>
+                            Raise a retry limit (after a retry_budget FAILED)
   harness visual add <viewport> <PASS|FAIL> <note>
   harness visual pending    Exit 1 if any viewport's latest observation is an unresolved FAIL
   harness visual resolve <id>
                             Mark a historical visual FAIL superseded (keeps the audit row)
   harness event <agent> <event> [detail]
-                            Append typed milestone to harness.events (best-effort)
+                            Append typed milestone to harness.events (best-effort);
+                            'harness event blocker <reason>' saves a blocker (lets the Stop hook stop)
   harness progress [-n N] [--json]
                             Render recent harness timeline (default last 20)
-  harness hook              Read Codex hook JSON on stdin; emit START/END event
+  harness hook              Read Codex/Claude hook JSON on stdin; emit START/END event
+  harness stop-check        Claude Stop hook: block stopping while a goal is unfinished (never errors)
   harness spawn <role> <model> <effort> [--task tN]
                             Reserve a launch; returns reservation JSON
   harness spawn-confirm <reservation> <agent-id>
@@ -88,9 +100,11 @@ Commands:
                             Print stored handoff artifact
   harness brief <role> [--task tN]
                             Write worker brief markdown; print absolute path
-  harness status            Print harness object
+  harness status            Print harness object plus computed next_action
+  harness reap [--older-than <min>]
+                            Release spawn reservations left over from a previous session
   harness done              Exit 0 only when required gates PASS (from requirements)
-  harness recover-spawn     Unstick FAILED/SPAWNING/BLOCKED after spawn_agent was withheld
+  harness recover-spawn     Unstick FAILED/SPAWNING/BLOCKED after a launch was withheld
   codex ensure-user-config  Trust this project in ~/.codex/config.toml
   groups persist            Save active group harness/PR overlay back into delivery_groups
   groups list               List delivery groups on the active Markdown goal
@@ -123,6 +137,11 @@ Commands:
                             Cheap heuristic complexity classification (JSON)
   config set <source> <target> <platform> [concurrency] [auto_merge] [review_mode] [review_max_iterations] [max_rework] [max_escalations] [max_verify_retries] [visual_mode]
   config get                Print goal-config.json
+  config put <key> <value>  Set one key (JSON value or plain string), e.g. verify_cmd, verify_timeout,
+                            fingerprint_ignore, forge_max_wait, gitnexus_version, analyze_timeout
+  run-id                    Print a fresh GOAL_RUN_ID for issue/queue runs
+  forge pending [clear [--reconcile]]
+                            List/clear unresolved PR/MR create ledgers (reconcile adopts an existing PR/MR)
   state                     Print active goal JSON from state.json
   state complete            Mark active goal status as completed
   merge                     Merge active PR/MR into target branch (after clean review)
@@ -135,9 +154,9 @@ Commands:
   reset runtime [--force] [--yes]
                             Fresh runtime for this platform only (goals, reviews,
                             worktrees, progress). Keeps the other platform and config.
-  worktree merge <task-slug|tN>  Merge worktree branch into goal branch
+  worktree merge <task-slug|tN> [--abort]  Merge worktree branch into goal branch (--abort cancels a conflicted merge)
   worktree remove <task-slug|tN> Remove worktree without merging
-  figma setup <token>       Store Figma PAT and enable figma MCP in agent config dir (mcp.json / config.toml)
+  figma setup <token>       Store Figma PAT and enable figma MCP (.codex/config.toml, .cursor/mcp.json, or root .mcp.json for Claude)
   figma design set <url>    Set default Figma design link in goal-config.json
   figma disable             Disable Figma integration
   figma status              Show Figma integration status
@@ -157,6 +176,28 @@ Commands:
   review iterate [repo_path]      Increment review iteration counter (no cap; loop until clean)
 EOF
   return 0
+}
+
+# Unattended runs must never wait on a credential or host-key prompt.
+export GIT_TERMINAL_PROMPT=0
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes}"
+
+# Portable timeout (GNU timeout, Homebrew gtimeout, or a perl alarm fallback).
+# Usage: goal_timeout <seconds> <command...>; 0 disables. Exit 124 on timeout.
+goal_timeout() {
+  local secs="$1"; shift
+  if [ "$secs" = 0 ] || [ -z "$secs" ]; then "$@"; return; fi
+  if command -v timeout >/dev/null 2>&1; then timeout "$secs" "$@"; return; fi
+  if command -v gtimeout >/dev/null 2>&1; then gtimeout "$secs" "$@"; return; fi
+  command -v perl >/dev/null 2>&1 || { "$@"; return; }
+  perl -e '
+    my $t = shift; my $pid = fork();
+    die "fork: $!" unless defined $pid;
+    if (!$pid) { setpgrp(0, 0); exec @ARGV or exit 127; }
+    $SIG{ALRM} = sub { kill "TERM", -$pid; select(undef, undef, undef, 2); kill "KILL", -$pid; waitpid($pid, 0); exit 124; };
+    alarm $t; waitpid($pid, 0);
+    exit(($? & 127) ? 128 + ($? & 127) : ($? >> 8));
+  ' "$secs" "$@"
 }
 
 require_cmd() {
@@ -212,6 +253,10 @@ get_state_pr_url() {
   fi
 }
 
+# Cap unattended rate-limit sleeps in forge.sh (seconds).
+FORGE_MAX_WAIT="$(config_read forge_max_wait)"; FORGE_MAX_WAIT="${FORGE_MAX_WAIT:-120}"
+export FORGE_MAX_WAIT
+
 # --- Platform Detection ---
 
 detect_platform() {
@@ -230,7 +275,14 @@ case "$platform" in
   github|gitlab) ;;
   *)
     case "${1:-}" in
-      help|--help|-h|doctor|models|config|context|selfcheck|codex|complexity|issues|reset) ;;
+      help|--help|-h|doctor|models|config|context|selfcheck|codex|complexity|issues|reset|run-id|forge) ;;
+      harness)
+        # Hooks must degrade quietly when the project is not configured yet.
+        case "${2:-}" in
+          hook) echo '{"continue":true}'; exit 0 ;;
+          stop-check) exit 0 ;;
+          *) err "Cannot detect platform. Run '/init-goal' or set GOAL_PLATFORM=github|gitlab"; exit 1 ;;
+        esac ;;
       *) err "Cannot detect platform. Run '/init-goal' or set GOAL_PLATFORM=github|gitlab"; exit 1 ;;
     esac
     ;;
@@ -575,8 +627,15 @@ cmd_commit() {
   local msg="${1:-chore: automated changes}" wd
   wd=$(repo_dir "${GOAL_REPO:-.}") || return
   context_assert_branch "$wd" || return
-  git -C "$wd" diff --cached --quiet && { goal_error empty_commit "Nothing staged; use stage <files>"; return 1; }
-  git -C "$wd" commit -m "$msg" >&2 || return
+  git -C "$wd" diff --cached --quiet && {
+    goal_error empty_commit "Nothing staged" \
+      "Run goal-git.sh stage <files> for the intended paths (see goal-git.sh status), then commit again; if the work is already committed, continue with verify/analyze"; return 1;
+  }
+  if ! git -C "$wd" commit -m "$msg" </dev/null >&2; then
+    goal_error commit_hook_failed "git commit failed (pre-commit/commit-msg hook, signing, or identity)" \
+      "Read the hook output above, fix the reported files, restage them with stage <files>, and commit again; never bypass hooks with --no-verify"
+    return 1
+  fi
   harness_invalidate "implementation commit changed"
   log "Committed: $msg"
 }
@@ -683,33 +742,52 @@ cmd_resolve() {
 
 cmd_continue() {
   require_cmd git jq
-  [ ! -f "$STATE_FILE" ] && { err "No existing goal to continue — run 'start' first"; exit 1; }
+  [ ! -f "$STATE_FILE" ] && {
+    goal_error assignment "No existing goal to continue" "Run goal-git.sh start <goal> (or issues start <n>) first"; return 1;
+  }
 
   state_ensure_array
-  local identifier="${1:-}"
+  local identifier="${1:-}" idx branch
 
   if [ -n "$identifier" ]; then
-    local idx branch
-    idx=$(jq --arg id "$identifier" 'map(.branch == $id) | index(true)' "$STATE_FILE")
+    # Goal id first, then exact branch, then branch text. A goal without a
+    # branch (multi-PR Markdown, queue record) must not crash the lookup.
+    idx=$(jq --arg id "$identifier" '
+      (map(.id == $id) | index(true)) // (map((.branch // "") == $id) | index(true))
+      // (map((.branch // "") | contains($id)) | index(true))' "$STATE_FILE")
     if [ "$idx" = "null" ]; then
-      idx=$(jq --arg id "$identifier" 'map(.branch | contains($id)) | index(true)' "$STATE_FILE")
+      goal_error assignment "Goal not found: $identifier" "Run goal-git.sh list, then continue <goal-id|branch> (or export GOAL_ID)"
+      return 1
     fi
+  elif [ -z "${REQUESTED_GOAL_ID:-}${GOAL_ISSUE:-}" ]; then
+    # No selector: resume the most recent unfinished goal of THIS platform.
+    # Completed goals, queue records and other platforms' goals are skipped.
+    idx=$(jq -r --arg me "$AGENT_PLATFORM" "$(goal_platform_program)"'
+      to_entries | map(select(.value.status == "in_progress" and (.value.kind // "") != "queue"
+        and ((.value | goal_platform) | (. == $me or . == "unknown")))) | last | .key // "null"' "$STATE_FILE")
     if [ "$idx" = "null" ]; then
-      err "Goal not found: $identifier (use 'list' to see all goals)"
-      exit 1
+      goal_error assignment "No in-progress $AGENT_PLATFORM goal to continue" \
+        "Run goal-git.sh list; reopen a finished goal explicitly with continue <goal-id|branch>, or start a new goal"
+      return 1
     fi
+  fi
+
+  if [ -n "${idx:-}" ]; then
     GOAL_ID=$(jq -r --argjson idx "$idx" '.[$idx].id' "$STATE_FILE")
     GOAL_ISSUE=""; GOAL_RUN_ID=""; GOAL_ISSUE_REPO=""
     refresh_goal_idx
     state_mutate --argjson idx "$idx" '.[:$idx] + .[($idx+1):] + [.[$idx]]'
     refresh_goal_idx
-    branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch' "$STATE_FILE")
+    branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch // "(no aggregation branch)"' "$STATE_FILE")
     log "Switched to goal on branch: $branch"
   fi
 
   state_mutate --argjson idx "$GOAL_IDX" '.[$idx].status = "in_progress"'
+  if jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness != null' "$STATE_FILE" >/dev/null 2>&1; then
+    delegation_stale_report || true
+  fi
 
-  local branch delivery_mode
+  local delivery_mode
   delivery_mode="$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].delivery_mode // "single"' "$STATE_FILE")"
   branch=$(jq -r --argjson idx "$GOAL_IDX" '.[$idx].branch // empty' "$STATE_FILE")
   if [ "$delivery_mode" = "multi-pr" ]; then
@@ -768,25 +846,31 @@ cmd_list() {
 cmd_analyze() {
   require_cmd npx
   require_work_goal || return 1
-  local wd
+  local wd gn_version gn_timeout
   wd="$(repo_dir "${GOAL_REPO:-.}")"
   implementation_fingerprint >/dev/null || return
+  # Pinned gitnexus (config gitnexus_version) instead of @latest; bounded by analyze_timeout.
+  gn_version="$(config_read gitnexus_version)"; gn_version="${gn_version:-1.6.9}"
+  gn_timeout="$(config_read analyze_timeout)"; gn_timeout="${gn_timeout:-600}"
   cd "$wd" || { err "Cannot cd into goal workdir: $wd"; exit 1; }
-  log "Running gitnexus analyze…"
-  if ! npx --yes gitnexus@latest analyze; then
+  log "Running gitnexus analyze (gitnexus@$gn_version, timeout ${gn_timeout}s)…"
+  local -a gn_cmd=(npx --yes "gitnexus@$gn_version" analyze)
+  if ! goal_timeout "$gn_timeout" "${gn_cmd[@]}" </dev/null; then
     if [ -f "$STATE_FILE" ] && jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness' "$STATE_FILE" >/dev/null 2>&1; then
       cmd_harness_gate ANALYSIS FAIL "gitnexus analyze failed" || true
     fi
-    err "gitnexus analyze failed"
-    exit 1
+    goal_error analyze "gitnexus analyze failed or timed out" \
+      "Run goal-git.sh doctor --json (tools.gitnexus/npx), fix the cause or pin config gitnexus_version / raise analyze_timeout (config put), then re-run analyze"
+    return 1
   fi
   log "Running rtk gain…"
-  if ! rtk gain; then
+  if ! goal_timeout 120 rtk gain </dev/null; then
     if [ -f "$STATE_FILE" ] && jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness' "$STATE_FILE" >/dev/null 2>&1; then
       cmd_harness_gate ANALYSIS FAIL "rtk gain failed" || true
     fi
-    err "rtk gain failed"
-    exit 1
+    goal_error analyze "rtk gain failed (is rtk installed?)" \
+      "Run goal-git.sh doctor --json (tools.rtk); install or fix rtk, then re-run analyze"
+    return 1
   fi
   if [ -f "$STATE_FILE" ] && jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness' "$STATE_FILE" >/dev/null 2>&1; then
     HARNESS_GATE_SOURCE=analyze cmd_harness_gate ANALYSIS PASS
@@ -819,7 +903,7 @@ parse_figma_url() {
 
 merge_figma_mcp() {
   local enabled="${1:-true}"
-  if [ "$AGENT_PLATFORM" = "cursor" ]; then
+  if [ "$AGENT_PLATFORM" = "cursor" ] || [ "$AGENT_PLATFORM" = "claude" ]; then
     require_cmd jq
     local mcp_json="$MCP_JSON"
     local figma_block
@@ -919,7 +1003,11 @@ cmd_figma_setup() {
   jq '.figma_enabled = true' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
 
   log "Figma PAT saved to $FIGMA_ENV_FILE"
-  if [ "$AGENT_PLATFORM" = "cursor" ]; then
+  if [ "$AGENT_PLATFORM" = "claude" ]; then
+    log "Figma MCP enabled in $MCP_JSON (mcpServers.figma)"
+    warn "Load secrets before Claude Code: set -a && source $AGENT_CONFIG_DIR/figma.env && set +a && claude"
+    warn "Or use: $AGENT_CONFIG_DIR/scripts/run-claude.sh (approve the project MCP server on first launch)"
+  elif [ "$AGENT_PLATFORM" = "cursor" ]; then
     log "Figma MCP enabled in $MCP_JSON"
     warn "Load secrets before Cursor: set -a && source $AGENT_CONFIG_DIR/figma.env && set +a && cursor-agent"
     warn "Or use: $AGENT_CONFIG_DIR/scripts/run-cursor.sh"
@@ -995,11 +1083,12 @@ cmd_figma_status() {
   else
     warn "  figma.env: missing"
   fi
-  if [ "$AGENT_PLATFORM" = "cursor" ]; then
+  if [ "$AGENT_PLATFORM" = "cursor" ] || [ "$AGENT_PLATFORM" = "claude" ]; then
+    local mcp_label="${MCP_JSON#"$PROJECT_ROOT"/}"
     if [ -f "$MCP_JSON" ] && jq -e '.mcpServers.figma' "$MCP_JSON" >/dev/null 2>&1; then
-      log "  $AGENT_CONFIG_DIR/mcp.json mcpServers.figma: configured"
+      log "  $mcp_label mcpServers.figma: configured"
     else
-      warn "  $AGENT_CONFIG_DIR/mcp.json mcpServers.figma: not configured"
+      warn "  $mcp_label mcpServers.figma: not configured"
     fi
   else
     if [ -f "$CODEX_TOML" ] && grep -q '^\[mcp_servers.figma\]' "$CODEX_TOML"; then
@@ -1140,6 +1229,24 @@ cmd_config_get() {
     exit 1
   fi
   jq . "$CONFIG_FILE"
+}
+
+# Set one goal-config.json key. The value is parsed as JSON when valid
+# (numbers, booleans, arrays), otherwise stored as a plain string.
+cmd_config_put() {
+  require_cmd jq
+  local key="${1:-}" value="${2:-}"
+  [[ "$key" =~ ^[a-z][a-z0-9_]{1,48}$ ]] && [ $# -ge 2 ] || {
+    goal_error usage "config put requires <snake_case_key> <value>" "Example: goal-git.sh config put verify_cmd 'npm test' ; config put verify_timeout 1800"
+    return 1
+  }
+  config_ensure_exists
+  if printf '%s' "$value" | jq . >/dev/null 2>&1; then
+    jq --arg k "$key" --argjson v "$value" '.[$k] = $v' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+  else
+    jq --arg k "$key" --arg v "$value" '.[$k] = $v' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+  fi
+  log "Config $key set"
 }
 
 cmd_state() {
@@ -1359,17 +1466,39 @@ cmd_worktree_list() {
 
 cmd_worktree_merge() {
   require_active_goal; refresh_goal_idx
-  local slug="${1:-}" wd wt branch key
-  [ -n "$slug" ] || return 1
+  local slug="" abort=false wd wt branch key arg
+  for arg in "$@"; do
+    case "$arg" in
+      --abort) abort=true ;;
+      -*) goal_error usage "Unknown worktree merge argument: $arg"; return 1 ;;
+      *) slug="$arg" ;;
+    esac
+  done
+  wd=$(GOAL_TASK= goal_workdir) || return
+  if [ "$abort" = true ]; then
+    if git -C "$wd" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+      git -C "$wd" merge --abort >&2 || return
+      log "Aborted the in-progress merge in $wd"
+    else
+      warn "No merge in progress in $wd"
+    fi
+    return 0
+  fi
+  [ -n "$slug" ] || { goal_error usage "worktree merge requires <task-slug|tN> [--abort]"; return 1; }
   if [[ "$slug" =~ ^t[0-9]+$ ]]; then key="$slug"; else key=$(slugify "$slug"); fi
   wt=$(worktree_path "$key")
-  wd=$(GOAL_TASK= goal_workdir) || return
   context_assert_branch "$wd" || return
   delivery_clean "$wd" || return
   delivery_clean "$wt" || return
   branch=$(git -C "$wt" branch --show-current)
-  [ "$branch" = "$(task_branch_name "$(git -C "$wd" branch --show-current)" "$key")" ] || return 1
-  git -C "$wd" merge "$branch" -m "merge: $key" >&2 || return
+  [ "$branch" = "$(task_branch_name "$(git -C "$wd" branch --show-current)" "$key")" ] || {
+    goal_error assignment "Task worktree $key is not on its task branch" "Check out the task branch in $wt, commit the task's work there, then re-run worktree merge $key"; return 1;
+  }
+  if ! git -C "$wd" merge "$branch" -m "merge: $key" </dev/null >&2; then
+    goal_error merge_conflict "Merging $branch into the goal branch conflicted" \
+      "Resolve the conflicts in $wd (edit, stage <files>, commit) and re-run worktree merge $key, or run worktree merge $key --abort and rework the overlapping tasks"
+    return 1
+  fi
   harness_invalidate "task branch integrated"
   git -C "$PROJECT_ROOT" worktree remove "$wt" >&2 || return
   # The root checkout may still be on main while the goal lives in a worktree.
@@ -1739,7 +1868,9 @@ p=urlsplit(sys.argv[1]).path
 print(p.split('/-/issues')[0].strip('/') if '/-/issues' in p else p.split('/issues')[0].strip('/'))
 PY
   ) || return
-  [ -z "$requested_repo" ] || [ "$requested_repo" = "$repo" ] || [ "$requested_repo" = "$repo_path" ] || {
+  [ -z "$requested_repo" ] || [ "$requested_repo" = "$repo" ] || [ "$requested_repo" = "$repo_path" ] ||
+    [ "$(normalize_forge_identity "$requested_repo")" = "$(normalize_forge_identity "$repo")" ] ||
+    [ "$(normalize_forge_identity "$requested_repo")" = "$(normalize_forge_identity "$repo_path")" ] || {
     goal_error assignment "GOAL_ISSUE_REPO differs from the supplied issue URL"; return 1;
   }
 
@@ -2367,7 +2498,7 @@ harness_phase_allowed() {
   local from="$1" to="$2"
   case "${from}->${to}" in
     "PLANNED->RESEARCHING"|"PLANNED->BUILDING") return 0 ;;
-    "RESEARCHING->BUILDING") return 0 ;;
+    "RESEARCHING->BUILDING"|"RESEARCHING->PLANNED") return 0 ;;
     "BUILDING->ESCALATED"|"BUILDING->VERIFYING") return 0 ;;
     "ESCALATED->BUILDING") return 0 ;;
     "VERIFYING->REWORK"|"VERIFYING->REVIEWING"|"VERIFYING->DONE"|"VERIFYING->VISUAL_REVIEW") return 0 ;;
@@ -2376,6 +2507,8 @@ harness_phase_allowed() {
     "QA->REWORK"|"QA->VISUAL_REVIEW"|"QA->DONE") return 0 ;;
     "VISUAL_REVIEW->REWORK"|"VISUAL_REVIEW->DONE") return 0 ;;
     "REWORK->BUILDING"|"REWORK->VERIFYING"|"REWORK->ESCALATED"|"REWORK->FAILED") return 0 ;;
+    # Recovery: a FAILED harness or a DONE one with late findings/conflicts can re-enter rework.
+    "FAILED->REWORK"|"DONE->REWORK") return 0 ;;
     *)
       [ "$to" = "FAILED" ] && return 0
       return 1
@@ -2390,13 +2523,13 @@ harness_tasks_reconciled() {
   local incomplete
   incomplete="$(jq -r --argjson idx "$GOAL_IDX" '
     .[$idx].harness.tasks
-    | map(select(.state != "DONE"))
+    | map(select(.state != "DONE" and .state != "CANCELLED"))
     | map("\(.id)=\(.state)")
     | join(", ")
   ' "$STATE_FILE")"
   if [ -n "$incomplete" ]; then
-    err "VERIFYING rejected — task queue is not reconciled: $incomplete"
-    err "Finish or explicitly fail/block the tasks, then start a new REWORK -> BUILDING iteration before verification."
+    goal_error tasks "VERIFYING rejected — task queue is not reconciled: $incomplete" \
+      "Finish each task (spawn-finish, harness task set tN DONE), re-run it with harness task retry tN, or drop it with harness task cancel tN; then retry harness phase VERIFYING"
     return 1
   fi
   return 0
@@ -2656,8 +2789,13 @@ cmd_harness_phase() {
   fi
 
   if ! harness_phase_allowed "$from" "$to"; then
-    err "Illegal phase transition: $from -> $to"
-    exit 1
+    local legal="" candidate
+    for candidate in PLANNED RESEARCHING BUILDING ESCALATED VERIFYING REVIEWING VISUAL_REVIEW REWORK DONE FAILED; do
+      [ "$candidate" != "$from" ] && harness_phase_allowed "$from" "$candidate" && legal="$legal $candidate"
+    done
+    goal_error phase "Illegal phase transition: $from -> $to" \
+      "From $from the legal next phases are:${legal:- (none)}. For new implementation work use harness retry rework, harness phase REWORK, harness phase BUILDING"
+    return 1
   fi
 
   if [ "$to" = "VERIFYING" ]; then
@@ -2669,8 +2807,9 @@ cmd_harness_phase() {
     fi
   fi
 
-  state_mutate --argjson idx "$GOAL_IDX" --arg to "$to" \
-    '.[$idx].harness.phase = $to'
+  state_mutate --argjson idx "$GOAL_IDX" --arg to "$to" --arg from "$from" \
+    '.[$idx].harness.phase = $to
+     | if $from == "FAILED" and $to == "REWORK" then .[$idx].harness |= del(.blocker, .spawn_failure) else . end'
   [ "$to" != REWORK ] || harness_invalidate "rework entered"
   harness_event "harness" "phase" "$from -> $to"
   groups_persist_active 2>/dev/null || true
@@ -2730,7 +2869,7 @@ cmd_harness_task_set() {
 
   case "$state" in
     PENDING|SPAWNING|RUNNING|DONE|BLOCKED|FAILED) ;;
-    *) err "Task state must be: PENDING, SPAWNING, RUNNING, DONE, BLOCKED, or FAILED"; exit 1 ;;
+    *) err "Task state must be: PENDING, SPAWNING, RUNNING, DONE, BLOCKED, or FAILED (use harness task retry|cancel tN to recover or drop a task)"; exit 1 ;;
   esac
 
   if ! jq -e --argjson idx "$GOAL_IDX" --arg id "$id" \
@@ -2744,7 +2883,11 @@ cmd_harness_task_set() {
       any((.[$idx].harness.spawn_reservations // [])[];
         .task == $id and .agent_id != null and
         (if $state == "DONE" then .state == "completed" else .state == "confirmed" end))
-    ' "$STATE_FILE" >/dev/null || { goal_error missing_agent "Use spawn-confirm/spawn-finish for task $id"; return 1; }
+    ' "$STATE_FILE" >/dev/null || {
+      goal_error missing_agent "Task $id has no confirmed agent for state $state" \
+        "Reserve and launch it: harness spawn <role> <model> <effort> --task $id, then spawn-confirm <reservation> <agent-id>; after it returns run spawn-finish <agent-id> completed --closed before harness task set $id DONE"
+      return 1
+    }
   fi
   state_mutate --argjson idx "$GOAL_IDX" --arg id "$id" --arg state "$state" '
     .[$idx].harness.tasks |= map(
@@ -2765,7 +2908,7 @@ harness_impl_tasks_ready() {
   local info
   info="$(jq -r --argjson idx "$GOAL_IDX" '
     .[$idx].harness.tasks as $t
-    | ($t | map(select(.role == "builder" or .role == "builder-expert"))) as $impl
+    | ($t | map(select((.role == "builder" or .role == "builder-expert") and .state != "CANCELLED"))) as $impl
     | {
         count: ($impl | length),
         not_done: ($impl | map(select(.state != "DONE")) | map("\(.id)=\(.state)") | join(", "))
@@ -2774,17 +2917,21 @@ harness_impl_tasks_ready() {
   ' "$STATE_FILE")"
   local count not_done
   jq -e --argjson idx "$GOAL_IDX" '
-    .[$idx].harness as $h | all($h.tasks[] | select(.role == "builder" or .role == "builder-expert");
+    .[$idx].harness as $h | all($h.tasks[] | select((.role == "builder" or .role == "builder-expert") and .state != "CANCELLED");
       . as $t | any(($h.spawn_reservations // [])[]; .task == $t.id and .agent_id == $t.agent_id and .state == "completed"))
-  ' "$STATE_FILE" >/dev/null || { goal_error missing_agent "Builder tasks require confirmed completed agents"; return 1; }
+  ' "$STATE_FILE" >/dev/null || {
+    goal_error missing_agent "Builder tasks require confirmed completed agents" \
+      "For each builder task run spawn-confirm after launching and spawn-finish <agent-id> completed --closed when it returns; for a task whose agent was lost use harness task retry tN or harness task cancel tN"
+    return 1
+  }
   count="$(echo "$info" | cut -f1)"
   not_done="$(echo "$info" | cut -f2-)"
   if [ "${count:-0}" -eq 0 ]; then
-    err "IMPLEMENTATION PASS requires at least one builder/builder-expert task"
+    err "IMPLEMENTATION PASS requires at least one non-cancelled builder/builder-expert task (harness task add builder <title>)"
     return 1
   fi
   if [ -n "$not_done" ]; then
-    err "IMPLEMENTATION PASS rejected — incomplete tasks: $not_done"
+    err "IMPLEMENTATION PASS rejected — incomplete tasks: $not_done (finish them, harness task retry tN, or harness task cancel tN)"
     return 1
   fi
   return 0
@@ -2857,7 +3004,8 @@ harness_visual_evidence_ok() {
   local sha; sha=$(implementation_fingerprint) || return
   jq -e --arg repo "${GOAL_REPO:-.}" --argjson idx "$GOAL_IDX" --arg sha "$sha" '
     (.[$idx].harness.visual_findings // [] | map(select((.repo // ".") == $repo))) | group_by(.viewport) | map(.[-1]) | all(.[]; .sha == $sha)
-  ' "$STATE_FILE" >/dev/null || { goal_error stale_evidence "viewport observations belong to an older commit"; return 1; }
+  ' "$STATE_FILE" >/dev/null || { goal_error stale_evidence "viewport observations belong to an older commit" \
+    "Re-run the visual-reviewer on the current commit and record every viewport again with harness visual add"; return 1; }
   return 0
 }
 
@@ -2977,7 +3125,8 @@ cmd_harness_retry() {
       .[$idx].harness.phase = "FAILED"
       | .[$idx].harness.blocker = {kind:"retry_budget",counter:$counter,attempt:$next,limit:$limit}
     ' || return
-    err "Retry limit exceeded for $field: $next > $limit; state saved, stop and adjust the plan explicitly"
+    goal_error retry_budget "Retry limit exceeded for $field: $next > $limit; harness is FAILED (state saved)" \
+      "Ask the user whether to continue; if approved raise it with: goal-git.sh harness limit set $limit_field $next, then harness phase REWORK. Otherwise save the blocker: goal-git.sh harness event blocker \"$field limit reached\" and report"
     return 1
   fi
 
@@ -3058,13 +3207,74 @@ cmd_harness_visual_resolve() {
   log "Resolved visual finding $id (historical row kept)"
 }
 
+# Computed (never stored) hint: what MAIN should do next from phase and gates.
+harness_next_action_jq() {
+  cat <<'JQ'
+    def next_action:
+      . as $h
+      | ($h.gates // {}) as $g
+      | ($h.requirements // {}) as $r
+      | ($h.tasks // []) as $tasks
+      | [$tasks[] | select(.state == "PENDING")] as $pending
+      | [$tasks[] | select(.state == "RUNNING" or .state == "SPAWNING")] as $running
+      | [$tasks[] | select(.state == "FAILED" or .state == "BLOCKED")] as $broken
+      | ($g.REVIEW.status // "NOT_RUN") as $review
+      | ($g.VISUAL.status // "NOT_RUN") as $visual
+      | (($r.reviewer == false) or $review == "PASS" or $review == "SKIPPED") as $review_ok
+      | (($r.visual != true) or $visual == "PASS" or $visual == "SKIPPED") as $visual_ok
+      | if $h.phase == "FAILED" then
+          "Harness is FAILED" + (if $h.blocker != null then " (" + ($h.blocker.kind // "blocker") + ")" else "" end)
+          + ". Fix the cause (harness limit set <key> <n> after user approval, harness reap, harness task retry <id>), then harness phase REWORK; if it needs the user, run harness event blocker \"<reason>\" and report."
+        elif $h.phase == "DONE" then
+          "Harness is DONE. Deliver: push, pr (pr draft first), clear review threads, then state complete (or issues finish)."
+        elif $h.phase == "PLANNED" then
+          if ($r.planner != false) and (($g.PLAN.status // "NOT_RUN") != "PASS" and ($g.PLAN.status // "NOT_RUN") != "SKIPPED") then
+            "Run the planner: harness brief planner; harness spawn planner <model> <effort>; launch it; spawn-confirm; store harness context put discovery_context; harness gate PLAN PASS."
+          else "harness phase BUILDING, then register tasks with harness task add builder <title> (tasks can only be added in BUILDING)." end
+        elif $h.phase == "RESEARCHING" then
+          "Collect the researcher result, harness context put research_report, then harness phase BUILDING (or PLANNED to re-plan)."
+        elif $h.phase == "BUILDING" or $h.phase == "ESCALATED" then
+          if ($pending | length) > 0 then
+            "Launch " + (if $h.phase == "ESCALATED" then "builder-expert" else ($pending[0].role // "builder") end) + " for task " + $pending[0].id + ": harness brief <role> --task " + $pending[0].id + "; harness spawn <role> <model> <effort> --task " + $pending[0].id + "; launch; spawn-confirm."
+          elif ($running | length) > 0 then
+            "Wait for running worker(s) " + ($running | map(.id) | join(", ")) + "; when each returns: spawn-finish <agent-id> completed --closed, then harness task set <id> DONE (or harness task retry <id> / reap if the agent is gone)."
+          elif ($broken | length) > 0 then
+            "Task " + ($broken[0].id) + " is " + $broken[0].state + ": harness task retry " + $broken[0].id + ", harness task cancel " + $broken[0].id + ", or escalate (harness phase ESCALATED + builder-expert)."
+          elif ($tasks | length) == 0 then "Register implementation tasks: harness task add builder <title>."
+          elif ($g.IMPLEMENTATION.status // "NOT_RUN") != "PASS" then "Commit the work (stage <files>, commit), then harness gate IMPLEMENTATION PASS."
+          elif ($g.ANALYSIS.status // "NOT_RUN") != "PASS" then "Run goal-git.sh analyze, then harness phase VERIFYING."
+          else "harness phase VERIFYING" end
+        elif $h.phase == "VERIFYING" then
+          if ($g.VERIFICATION.status // "NOT_RUN") != "PASS" then "Run goal-git.sh verify run (fix failures: harness retry verify_retries / REWORK)."
+          elif ($review_ok | not) then "harness phase REVIEWING"
+          elif ($visual_ok | not) then "harness phase VISUAL_REVIEW"
+          else "Run goal-git.sh harness done." end
+        elif $h.phase == "REVIEWING" then
+          if ($review_ok | not) then
+            "Run the reviewer (harness brief reviewer; spawn; launch; spawn-confirm). Findings open: harness retry rework, harness phase REWORK. Clean: harness context put review_verdict, harness gate REVIEW PASS."
+          elif ($visual_ok | not) then "harness phase VISUAL_REVIEW"
+          else "Run goal-git.sh harness done." end
+        elif $h.phase == "VISUAL_REVIEW" then
+          if ($visual_ok | not) then "Run the visual-reviewer, record harness visual add per viewport, then harness gate VISUAL PASS (or rework on FAIL)."
+          else "Run goal-git.sh harness done." end
+        elif $h.phase == "REWORK" then
+          "Address the findings: harness phase BUILDING, add or retry tasks (harness task add / task retry), rebuild, analyze, verify and review again."
+        else "Run goal-git.sh harness status and follow the phase." end;
+JQ
+}
+
 cmd_harness_status() {
   harness_require
-  harness_get
+  jq --argjson idx "$GOAL_IDX" "$(harness_next_action_jq)"'.[$idx].harness | . + {next_action: next_action}' "$STATE_FILE"
 }
 
 cmd_harness_event() {
   # Agent-facing: never fails the caller
+  # `harness event blocker <reason...>` saves a blocker as a main/blocker event.
+  if [ "${1:-}" = blocker ]; then
+    shift
+    set -- main blocker "$*"
+  fi
   local agent="${1:-}" event="${2:-}" detail="${3:-}"
   if [ -z "$agent" ] || [ -z "$event" ]; then
     # Still exit 0 — malformed milestone must not break an agent turn
@@ -3216,8 +3426,17 @@ cmd_harness_progress() {
   done
 }
 
+# Index of the newest unfinished goal of this platform that has a harness
+# (hooks run without GOAL_* selectors). Prints nothing when there is none.
+platform_goal_idx() {
+  [ -f "$STATE_FILE" ] || return 0
+  jq -r --arg me "$AGENT_PLATFORM" "$(goal_platform_program)"'
+    to_entries | map(select(.value.status == "in_progress" and (.value.kind // "") != "queue"
+      and (.value.harness != null) and ((.value | goal_platform) == $me))) | last | .key // empty' "$STATE_FILE" 2>/dev/null || true
+}
+
 cmd_harness_hook() {
-  # Read Codex hook JSON from stdin. Emit START/END event. Print JSON for SubagentStop.
+  # Read Codex/Claude hook JSON from stdin. Emit START/END event. Print JSON for SubagentStop.
   if [ "$AGENT_PLATFORM" = "cursor" ]; then
     echo '{"continue":true,"note":"harness hook not applicable on cursor"}'
     return 0
@@ -3231,12 +3450,21 @@ cmd_harness_hook() {
     return 0
   fi
 
-  local hook_event agent_type agent_id last_msg first_line
+  local hook_event agent_type agent_id last_msg first_line hook_idx=""
   hook_event="$(echo "$payload" | jq -r '.hook_event_name // empty')"
   agent_type="$(echo "$payload" | jq -r '.agent_type // "unknown"')"
   agent_id="$(echo "$payload" | jq -r '.agent_id // empty')"
   last_msg="$(echo "$payload" | jq -r '.last_assistant_message // empty')"
   first_line="$(echo "$last_msg" | head -n 1 | tr '\n' ' ' | cut -c1-120)"
+
+  # No GOAL_* selectors in a hook process: target this platform's unfinished goal.
+  if [ -n "${GOAL_ID:-}" ]; then refresh_goal_idx 2>/dev/null && hook_idx="$GOAL_IDX" || hook_idx=""
+  else hook_idx="$(platform_goal_idx)"; fi
+  if [ -z "$hook_idx" ]; then
+    echo '{"continue":true}'
+    return 0
+  fi
+  GOAL_IDX="$hook_idx"
 
   case "$hook_event" in
     SubagentStart)
@@ -3257,6 +3485,69 @@ cmd_harness_hook() {
   return 0
 }
 
+# Claude Stop hook. Blocks stopping while this platform's goal is unfinished and
+# prints {"decision":"block","reason":...}. Everything else, including any
+# internal error, allows the stop silently: it must never break a session.
+cmd_harness_stop_check() {
+  local payload=""
+  [ -t 0 ] || payload="$(cat 2>/dev/null || true)"
+  harness_stop_check_eval "$payload" 2>/dev/null || true
+  return 0
+}
+
+harness_stop_check_eval() (
+  set +e
+  command -v jq >/dev/null 2>&1 || exit 0
+  [ -f "$STATE_FILE" ] || exit 0
+  local idx verdict count fp guard_file guard_fp window now_epoch auth_file auth_at reason
+  idx="$(platform_goal_idx)"
+  [ -n "$idx" ] || exit 0
+
+  # Recent activity only: a goal abandoned long ago must not trap unrelated sessions.
+  window="$(config_read stop_check_window)"; window="${window:-180}"
+  case "$window" in ''|*[!0-9]*) window=180 ;; esac
+  now_epoch="$(date +%s)"
+  verdict="$(jq -c --argjson idx "$idx" --argjson now "$now_epoch" --argjson window "$window" \
+    "$(harness_next_action_jq)$(delegation_epoch_jq)"'
+    .[$idx] as $g | $g.harness as $h
+    | ($h.events // []) as $events
+    | ($events | map(select(.event != "started" and .event != "completed" and .event != "hook")) | last) as $last
+    | (($events | last | .at // "" | epoch) // 0) as $at
+    | if $h.phase == "DONE" then {block:false, why:"done"}
+      elif $last.event == "blocker" then {block:false, why:"blocker"}
+      elif $h.phase == "FAILED" and $h.blocker != null then {block:false, why:"failed_blocker"}
+      elif $at == 0 or ($now - $at) > ($window * 60) then {block:false, why:"inactive"}
+      else {block:true, goal:($g.goal // $g.branch // ""), phase:$h.phase, next:($h | next_action)} end' \
+    "$STATE_FILE")" || exit 0
+  [ "$(printf '%s' "$verdict" | jq -r .block)" = true ] || exit 0
+
+  # A forge authentication/permission failure needs the user: allow stopping.
+  auth_file="${FORGE_CACHE_DIR:-$PROJECT_ROOT/$AGENT_CONFIG_DIR/cache/forge}/auth-error.json"
+  if [ -f "$auth_file" ]; then
+    auth_at="$(jq -r '.at // 0' "$auth_file" 2>/dev/null)"
+    case "$auth_at" in ''|*[!0-9]*) auth_at=0 ;; esac
+    [ $((now_epoch - auth_at)) -gt 86400 ] || exit 0
+  fi
+
+  # Consecutive blocks without any state change: stop after 3 so a stuck loop
+  # (or a model that cannot make progress) is always allowed to end.
+  fp="$(cksum < "$STATE_FILE" | awk '{print $1 "-" $2}')"
+  guard_file="$PROJECT_ROOT/$AGENT_CONFIG_DIR/stop-guard.json"
+  count=0
+  if [ -f "$guard_file" ]; then
+    guard_fp="$(jq -r '.fp // ""' "$guard_file" 2>/dev/null)"
+    [ "$guard_fp" != "$fp" ] || count="$(jq -r '.count // 0' "$guard_file" 2>/dev/null)"
+    case "$count" in ''|*[!0-9]*) count=0 ;; esac
+  fi
+  [ "$count" -lt 3 ] || exit 0
+  jq -cn --arg fp "$fp" --argjson count "$((count + 1))" '{fp:$fp,count:$count}' > "$guard_file" 2>/dev/null || exit 0
+
+  reason="$(printf '%s' "$verdict" | jq -r '
+    "Goal \"" + .goal + "\" is not finished (harness phase " + .phase + "). Do not stop yet. Next: " + .next
+    + " Keep going until goal-git.sh harness done exits 0 and delivery is recorded. If you are genuinely blocked (needs the user, authentication, a decision), save it with goal-git.sh harness event blocker \"<reason>\" and then stop."')" || exit 0
+  jq -cn --arg reason "$reason" '{decision:"block",reason:$reason}'
+)
+
 cmd_harness_done() {
   require_work_goal || return 1
   harness_require
@@ -3264,9 +3555,10 @@ cmd_harness_done() {
   harness_require_current_evidence || return
   jq -e --argjson idx "$GOAL_IDX" '.[$idx] |
     .harness.phase != "FAILED" and
-    all(.harness.tasks[]?; .state == "DONE") and
+    all(.harness.tasks[]?; .state == "DONE" or .state == "CANCELLED") and
     all((.harness.spawn_reservations // [])[]; .state == "failed" or (.state == "completed" and .closed == true))' "$STATE_FILE" >/dev/null || {
-    goal_error incomplete "Harness is failed, tasks remain, or agents/reservations are still active"; return 1;
+    goal_error incomplete "Harness is failed, tasks remain, or agents/reservations are still active" \
+      "Run harness status (next_action). FAILED: harness phase REWORK after fixing the cause. Open tasks: harness task retry|cancel tN. Live agents: spawn-finish <agent-id> completed --closed, or harness reap after a restart"; return 1;
   }
   local required
   required="$(jq -c --argjson idx "$GOAL_IDX" '
@@ -3294,7 +3586,7 @@ cmd_harness_done() {
   local count
   count="$(echo "$blockers" | jq 'length')"
   if [ "$count" -gt 0 ]; then
-    err "Definition of DONE not met — blocking gates:"
+    err "Definition of DONE not met — blocking gates (see harness status next_action):"
     echo "$blockers" | jq .
     exit 1
   fi
@@ -3316,11 +3608,6 @@ cmd_harness_done() {
 }
 
 
-
-# Reviewer must keep spawning until findings are clean. Grow the
-# role cap and total spawn cap instead of stopping with findings still open.
-
-
 cmd_harness_budget_set() {
   harness_require
   local key="${1:-}" val="${2:-}"
@@ -3338,6 +3625,19 @@ cmd_harness_budget_set() {
   harness_event "harness" "budget_set" "$key=$val"
   log "Budget $key -> $val"
   jq --argjson idx "$GOAL_IDX" '.[$idx].harness.budget' "$STATE_FILE"
+}
+
+cmd_harness_limit_set() {
+  harness_require
+  local key="${1:-}" val="${2:-}"
+  case "$key" in
+    max_rework|max_escalations|max_verify_retries) ;;
+    *) err "harness limit set <max_rework|max_escalations|max_verify_retries> <n>"; return 1 ;;
+  esac
+  [[ "$val" =~ ^[0-9]+$ ]] && [ "$val" -ge 1 ] || { err "limit value must be a positive integer"; return 1; }
+  state_mutate --argjson idx "$GOAL_IDX" --arg k "$key" --argjson v "$val" '.[$idx].harness.limits[$k] = $v'
+  harness_event "harness" "limit_set" "$key=$val"
+  log "Limit $key -> $val"
 }
 
 cmd_harness_metrics() {
@@ -3515,7 +3815,10 @@ cmd_harness_brief() {
       printf 'status, files_staged, checks_run, findings_addressed, decisions, notes, next_action.\n'
     fi
     printf '\n## Launch\n\n'
-    if [ "$AGENT_PLATFORM" = "cursor" ]; then
+    if [ "$AGENT_PLATFORM" = "claude" ]; then
+      printf 'Agent(subagent_type="%s", model=<reserved model>, description="%s %s", prompt="Read and follow your brief: %s")\n' "$role" "$role" "${task:-root}" "$out"
+      printf 'Then run harness spawn-confirm <reservation> <agentId from the Agent tool result>.\n'
+    elif [ "$AGENT_PLATFORM" = "cursor" ]; then
       printf 'Launch with the Agent/Task tool: subagent `%s`, prompt `Read and follow your brief: %s`\n' "$role" "$out"
     else
       printf 'spawn_agent({agent_type, model, reasoning_effort, fork_context:false, message:"Read and follow your brief: %s"})\n' "$out"
@@ -3538,11 +3841,19 @@ cmd_harness() {
       case "${1:-}" in
         add) shift; cmd_harness_task_add "$@" ;;
         set) shift; cmd_harness_task_set "$@" ;;
-        *) err "harness task subcommand must be add or set"; exit 1 ;;
+        retry) shift; cmd_harness_task_retry "$@" ;;
+        cancel) shift; cmd_harness_task_cancel "$@" ;;
+        *) err "harness task subcommand must be add, set, retry or cancel"; exit 1 ;;
       esac
       ;;
     gate) cmd_harness_gate "$@" ;;
     retry) cmd_harness_retry "$@" ;;
+    limit)
+      case "${1:-}" in
+        set) shift; cmd_harness_limit_set "$@" ;;
+        *) err "harness limit subcommand must be set"; exit 1 ;;
+      esac
+      ;;
     qa)
       err "QA was removed from the goal workflow"
       exit 1
@@ -3559,6 +3870,8 @@ cmd_harness() {
     event) cmd_harness_event "$@" ;;
     progress) cmd_harness_progress "$@" ;;
     hook) cmd_harness_hook "$@" ;;
+    stop-check) cmd_harness_stop_check "$@" ;;
+    reap) cmd_harness_reap "$@" ;;
     spawn) cmd_harness_spawn "$@" ;;
     spawn-confirm) cmd_harness_spawn_confirm "$@" ;;
     spawn-fail) cmd_harness_spawn_fail "$@" ;;
@@ -3580,7 +3893,7 @@ cmd_harness() {
     brief) cmd_harness_brief "$@" ;;
     done) cmd_harness_done ;;
     recover-spawn) cmd_harness_recover_spawn ;;
-    *) err "harness subcommand must be: init, phase, task, gate, retry, visual, event, progress, hook, spawn, metrics, budget, context, brief, status, done, recover-spawn"; exit 1 ;;
+    *) err "harness subcommand must be: init, phase, task, gate, retry, limit, visual, event, progress, hook, stop-check, spawn, spawn-confirm, spawn-fail, spawn-finish, reap, metrics, budget, context, brief, status, done, recover-spawn"; exit 1 ;;
   esac
 }
 
@@ -3603,6 +3916,17 @@ verify_detect_checks() {
     local name="$1" cmd="$2"
     checks="$(echo "$checks" | jq -c --arg n "$name" --arg c "$cmd" '. + [{name: $n, cmd: $c}]')"
   }
+
+  # Single-command override (config put verify_cmd '<command>').
+  if [ -f "$CONFIG_FILE" ]; then
+    local single
+    single="$(jq -r '.verify_cmd // empty | select(type == "string")' "$CONFIG_FILE" 2>/dev/null || true)"
+    if [ -n "$single" ]; then
+      add_check verify "$single"
+      echo "$checks"
+      return 0
+    fi
+  fi
 
   if [ -f "$wd/package.json" ]; then
     local pkg_mgr="npm run"
@@ -3685,16 +4009,22 @@ cmd_verify_detect() {
 cmd_verify_run() {
   require_cmd jq
   require_work_goal || return 1
-  local wd only=""
+  local wd only="" none_ok=false vtimeout
   wd="$(repo_dir "${GOAL_REPO:-.}")"
   local verified_sha
   verified_sha=$(implementation_fingerprint) || return
+  vtimeout="$(config_read verify_timeout)"; vtimeout="${vtimeout:-900}"
+  [[ "$vtimeout" =~ ^[0-9]+$ ]] || vtimeout=900
 
   while [ $# -gt 0 ]; do
     case "$1" in
       --only)
         only="${2:-}"
         shift 2
+        ;;
+      --none-detected-ok)
+        none_ok=true
+        shift
         ;;
       *)
         err "Unknown verify run arg: $1"
@@ -3717,12 +4047,28 @@ cmd_verify_run() {
   local count
   count="$(echo "$checks" | jq "length")"
   if [ "$count" -eq 0 ]; then
+    local trivial=false allow_none
+    allow_none="$(config_read verify_allow_none)"
+    if [ -f "$STATE_FILE" ] && jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness.complexity == "TRIVIAL"' "$STATE_FILE" >/dev/null 2>&1; then trivial=true; fi
+    if [ "$none_ok" = true ] && [ -z "$only" ] && { [ "$trivial" = true ] || [ "$allow_none" = true ]; }; then
+      warn "No verification checks detected; accepted (--none-detected-ok on a TRIVIAL goal / verify_allow_none)"
+      local empty_report
+      empty_report="$(jq -n --arg sha "$verified_sha" '{sha:$sha,overall:"PASS",results:[],note:"no checks detected"}')"
+      echo "$empty_report" | jq .
+      if [ -f "$STATE_FILE" ] && jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness' "$STATE_FILE" >/dev/null 2>&1; then
+        state_mutate --arg repo "${GOAL_REPO:-.}" --argjson idx "$GOAL_IDX" --argjson report "$empty_report" '.[$idx].harness.context.verification_report = $report | .[$idx].harness.context.verification_reports[$repo] = $report'
+        HARNESS_GATE_SOURCE=verify cmd_harness_gate VERIFICATION PASS "no checks detected (accepted)"
+      fi
+      return 0
+    fi
     warn "No verification checks detected"
     if [ -f "$STATE_FILE" ] && jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness' "$STATE_FILE" >/dev/null 2>&1; then
       cmd_harness_gate VERIFICATION UNKNOWN "no checks detected"
     fi
     echo '{"overall":"UNKNOWN","results":[]}'
-    exit 1
+    goal_error verify_none "No verification checks detected for $wd" \
+      "Define one: goal-git.sh config put verify_cmd '<command>' (or verify_commands as [{name,cmd}]); for a TRIVIAL goal with nothing to run use verify run --none-detected-ok"
+    return 1
   fi
 
   local results='[]'
@@ -3738,13 +4084,18 @@ cmd_verify_run() {
     local outfile exit_code status suggested
     outfile="$(mktemp)"
     set +e
-    (cd "$wd" && bash -c "$cmd") >"$outfile" 2>&1
+    # No stdin, CI=1 and a hard timeout: a check must never wait on a prompt or hang the run.
+    (cd "$wd" && CI=1 goal_timeout "$vtimeout" bash -c "$cmd") </dev/null >"$outfile" 2>&1
     exit_code=$?
     set -e
 
     if [ "$exit_code" -eq 0 ]; then
       status="PASS"
       suggested="none"
+    elif [ "$exit_code" -eq 124 ] || [ "$exit_code" -eq 137 ]; then
+      status="FAIL"
+      overall="FAIL"
+      suggested="check exceeded verify_timeout (${vtimeout}s): fix the hang, or raise it with config put verify_timeout <seconds>; then re-run verify"
     elif [ "$exit_code" -eq 127 ] || \
          printf '%s' "$(cat "$outfile")" | grep -Eqi \
            'command not found|not found in PATH|No such file or directory:.*(lint|go|node|npm|yarn|pnpm|cargo|python)|golangci-lint:.*(not found|No such file)|make:.*No rule to make target'; then
@@ -3950,18 +4301,19 @@ PY
 
 # shellcheck source=delivery-groups.sh
 for module in forge goal-context delivery-groups goal-delivery goal-delegation goal-evidence; do
-  [ -f "$SCRIPTS_DIR/$module.sh" ] || { err "Missing workflow module: $module.sh; reinstall the Codex template"; exit 1; }
+  [ -f "$SCRIPTS_DIR/$module.sh" ] || { err "Missing workflow module: $module.sh; reinstall the $AGENT_PLATFORM template"; exit 1; }
   . "$SCRIPTS_DIR/$module.sh"
 done
 context_init "${1:-help}" "${2:-}"
 
 # Ownership of a goal in the shared state.json. New goals set agent_platform.
-# Older goals are inferred from spawn models: inherit is Cursor, any other
-# model name is Codex, and a goal with no reservations stays unknown.
+# Older goals are inferred from spawn models: inherit is Cursor, the
+# sonnet/opus/haiku aliases are Claude, any other model name is Codex, and a
+# goal with no reservations stays unknown.
 goal_platform_program() {
   cat <<'EOF'
 def goal_platform:
-  if (.agent_platform == "cursor" or .agent_platform == "codex") then .agent_platform
+  if (.agent_platform == "cursor" or .agent_platform == "codex" or .agent_platform == "claude") then .agent_platform
   else
     (
       ((.spawn_reservations // []) | map(.model // empty))
@@ -3970,6 +4322,7 @@ def goal_platform:
     ) as $models
     | if ($models | length) == 0 then "unknown"
       elif any($models[]; . == "inherit") then "cursor"
+      elif any($models[]; . == "sonnet" or . == "opus" or . == "haiku") then "claude"
       else "codex"
       end
   end;
@@ -4023,8 +4376,24 @@ cmd_reset() {
   done
   require_cmd jq git
   if [ -d "$STATE_LOCK_DIR" ]; then
-    err "State lock exists ($STATE_LOCK_DIR); a run may be active. Reset refused."
-    exit 1
+    # A lock whose holder is gone (dead PID, or no PID and older than 30s) is stale.
+    local lock_pid lock_mtime lock_age=0 lock_live=false
+    lock_pid="$(cat "$STATE_LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ -n "$lock_pid" ]; then
+      kill -0 "$lock_pid" 2>/dev/null && lock_live=true
+    else
+      lock_mtime="$(stat -f %m "$STATE_LOCK_DIR" 2>/dev/null || stat -c %Y "$STATE_LOCK_DIR" 2>/dev/null || echo 0)"
+      lock_age=$(( $(date +%s) - lock_mtime ))
+      [ "$lock_age" -ge 30 ] || lock_live=true
+    fi
+    if [ "$lock_live" = true ]; then
+      err "State lock exists ($STATE_LOCK_DIR); a run may be active. Reset refused."
+      goal_error locked "State lock held by ${lock_pid:+process $lock_pid}${lock_pid:-a recent writer} ($STATE_LOCK_DIR)" \
+        "Wait for that process to finish (or stop it), then retry reset runtime; a lock whose process is gone is removed automatically"
+      return 1
+    fi
+    warn "Removing stale state lock (holder ${lock_pid:-unknown} is gone)"
+    rm -rf "$STATE_LOCK_DIR"
   fi
 
   local prog owned removed_ids kept_ids unknown_ids
@@ -4184,6 +4553,28 @@ case "${1:-}" in
   comment)  cmd_comment "${2:-}" "${3:-}" "${4:-}" "${5:-}" ;;
   resolve)  cmd_resolve "${2:-}" "${3:-}" ;;
   analyze)  cmd_analyze ;;
+  run-id)   generate_run_id ;;
+  forge)
+    case "${2:-}" in
+      pending)
+        case "${3:-}" in
+          ""|list)
+            forge_cache_dir || exit 1
+            ls -d "$FORGE_CACHE_DIR"/create-*.pending 2>/dev/null | while IFS= read -r d; do jq -c --arg dir "$d" '. + {pending:$dir}' "$d/operation.json" 2>/dev/null || jq -cn --arg dir "$d" '{pending:$dir}'; done || true
+            ;;
+          clear)
+            case "${4:-}" in
+              "") forge_pending_clear "$platform" clear ;;
+              --reconcile) forge_pending_clear "$platform" reconcile ;;
+              *) err "forge pending clear [--reconcile]"; exit 2 ;;
+            esac
+            ;;
+          *) err "forge pending [clear [--reconcile]]"; exit 2 ;;
+        esac
+        ;;
+      *) err "forge subcommand must be: pending"; exit 2 ;;
+    esac
+    ;;
   verify)   shift; cmd_verify "$@" ;;
   route)    shift; cmd_route "$@" ;;
   harness)  shift; cmd_harness "$@" ;;
@@ -4198,7 +4589,8 @@ case "${1:-}" in
     case "${2:-}" in
       set) cmd_config_set "${3:-}" "${4:-}" "${5:-}" "${6:-1}" "${7:-false}" "${8:-inline}" "${9:-2}" "${10:-3}" "${11:-2}" "${12:-3}" "${13:-auto}" "${14:-auto}" ;;
       get) cmd_config_get ;;
-      *)   err "config subcommand must be 'set' or 'get'"; exit 1 ;;
+      put) cmd_config_put "${@:3}" ;;
+      *)   err "config subcommand must be 'set', 'get' or 'put'"; exit 1 ;;
     esac
     ;;
   state)
@@ -4216,7 +4608,7 @@ case "${1:-}" in
       add)    cmd_worktree_add "${3:-}" ;;
       list)   cmd_worktree_list ;;
       sync)   cmd_worktree_sync "${3:-}" ;;
-      merge)  cmd_worktree_merge "${3:-}" ;;
+      merge)  shift 2; cmd_worktree_merge "$@" ;;
       remove) cmd_worktree_remove "${3:-}" ;;
       *)      err "worktree subcommand must be add, list, sync, merge, or remove"; exit 1 ;;
     esac
@@ -4265,5 +4657,6 @@ case "${1:-}" in
       *) err "figma subcommand must be setup, design set, disable, or status"; exit 1 ;;
     esac
     ;;
-  *)        usage ;;
+  "")       usage ;;
+  *)        err "Unknown command: ${1}"; usage >&2; exit 2 ;;
 esac

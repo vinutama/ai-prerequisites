@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Local integration fixtures for the sourced delegation module. No network.
-# Usage: AGENT=codex|cursor bash tests/codex/test-delegation.sh
+# Usage: AGENT=codex|cursor|claude bash tests/codex/test-delegation.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 AGENT="${AGENT:-${PLATFORM:-codex}}"
@@ -19,8 +19,15 @@ case "$AGENT" in
     AGENT_DIR=".cursor"
     AGENTS_GLOB="*.md"
     ;;
+  claude)
+    SRC_SCRIPTS="$ROOT/templates/claude/.claude/scripts"
+    SRC_AGENTS="$ROOT/templates/claude/.claude/agents"
+    SRC_MODELS="$ROOT/templates/claude/.claude/goal-models.json"
+    AGENT_DIR=".claude"
+    AGENTS_GLOB="*.md"
+    ;;
   *)
-    echo "Unknown AGENT=$AGENT (expected codex|cursor)" >&2
+    echo "Unknown AGENT=$AGENT (expected codex|cursor|claude)" >&2
     exit 1
     ;;
 esac
@@ -152,7 +159,7 @@ printf '%s\n' 'PASS: reserve/fail/retry, confirmation idempotency, lifecycle and
 reset_fixture
 id="$(reserve builder "$BUILDER" medium --task t1)"
 run harness spawn-fail "$id" uncertain 'tool timed out without an agent ID' > /dev/null 2> "$TEST_ROOT/uncertain.err"
-rg -q 'stop and reconcile' "$TEST_ROOT/uncertain.err"
+rg -q 'spawn-confirm' "$TEST_ROOT/uncertain.err"
 check '.[0].spawn_reservations[0].state == "uncertain" and .[0].spawn_reservations[0].closed == false and .[0].harness.metrics.agent_spawns == 0'
 reject 'Uncertain launch' harness spawn builder "$BUILDER" medium --task t2
 reject 'Uncertain launch' harness recover-spawn
@@ -213,8 +220,18 @@ mutate_fixture '.[0].harness.phase = "REVIEWING" | .[0].harness.budget.max_revie
 id="$(reserve reviewer "$BUILDER" medium)"
 run harness spawn-confirm "$id" reviewer-once > /dev/null
 run harness spawn-finish reviewer-once completed --closed > /dev/null
-reject 'role budget exceeded' harness spawn reviewer "$BUILDER" medium
-check '.[0].harness.budget.max_reviewer_runs == 1 and .[0].harness.metrics.reviewer_runs == 1'
+# Review loops grow their caps (bounded by max_rework) instead of stalling.
+id="$(reserve reviewer "$BUILDER" medium)"
+check '.[0].harness.budget.max_reviewer_runs == 2 and .[0].harness.metrics.reviewer_runs == 1 and
+ any(.[0].harness.events[]; .event == "budget_grow")'
+reset_fixture
+PLANNER="$(jq -r '."$routing".planner.NORMAL.model // .planner.model' "$PROJECT/$AGENT_DIR/goal-models.json")"
+mutate_fixture '.[0].harness.phase = "PLANNED" | .[0].harness.budget.max_planner_runs = 1'
+id="$(reserve planner "$PLANNER" medium)"
+run harness spawn-confirm "$id" planner-once > /dev/null
+run harness spawn-finish planner-once completed --closed > /dev/null
+reject 'role budget exceeded.*harness budget set max_planner_runs' harness spawn planner "$PLANNER" medium
+check '.[0].harness.budget.max_planner_runs == 1 and .[0].harness.metrics.planner_runs == 1'
 reset_fixture
 mutate_fixture '.[0].harness.phase = "VERIFYING"'
 reject 'Spawn rejected' harness spawn builder "$BUILDER" medium --task t1
@@ -230,13 +247,13 @@ run harness spawn-confirm "$id" shared-one > /dev/null
 export GOAL_ISSUE=2
 id2="$(reserve reviewer "$BUILDER" medium)"
 reject 'already belongs' harness spawn-confirm "$id2" shared-one
-reject 'Global concurrency' harness spawn reviewer "$BUILDER" medium
+reject 'Concurrency limit' harness spawn reviewer "$BUILDER" medium
 run harness spawn-fail "$id2" rejected 'second launch denied' > /dev/null
 run harness recover-spawn > /dev/null
 id2="$(reserve reviewer "$BUILDER" medium)"
 run harness spawn-confirm "$id2" shared-two > /dev/null
 run harness spawn-finish shared-two completed > /dev/null
-reject 'Global concurrency' harness spawn reviewer "$BUILDER" medium
+reject 'Concurrency limit' harness spawn reviewer "$BUILDER" medium
 run harness spawn-finish shared-two completed --closed > /dev/null
 # Select a local stale file but explicitly point delegation at shared state.
 cp "$PROJECT/state.json" "$TEST_ROOT/shared-state.json"
@@ -255,7 +272,7 @@ run harness spawn-confirm "$id" group-agent > /dev/null
 # Activate a distinct fixture harness to emulate MAIN switching groups.
 mutate_fixture '.[0].active_group_id = "g2" | .[0].harness.spawn_reservations = [] | .[0].harness.metrics.reviewer_runs = 0 | .[0].harness.metrics.agent_spawns = 0'
 id2="$(reserve reviewer "$BUILDER" medium)"
-reject 'Global concurrency' harness spawn reviewer "$BUILDER" medium
+reject 'Concurrency limit' harness spawn reviewer "$BUILDER" medium
 reject 'another delivery group' harness spawn-confirm "$id" group-agent
 check '.[0].delivery_groups[0].harness.metrics.agent_spawns == 1 and .[0].delivery_groups[1].harness.spawn_reservations[0].state == "pending"'
 printf '%s\n' 'PASS: global concurrency, shared file selection, agent uniqueness and group mirrors'
@@ -284,7 +301,7 @@ mutate_fixture '.[0].delivery_groups[1].harness.phase = "BUILDING"'
 id2="$(reserve builder "$BUILDER" medium --task t1)"
 export GOAL_GROUP=g1
 id3="$(reserve builder "$BUILDER" medium --task t1)"
-reject 'Global concurrency' harness spawn builder "$BUILDER" medium --task t2
+reject 'Concurrency limit' harness spawn builder "$BUILDER" medium --task t2
 reject 'another delivery group' harness spawn-confirm "$id2" wrong-group
 run harness spawn-confirm "$id3" projected-g1 > /dev/null
 export GOAL_GROUP=g2
@@ -344,10 +361,10 @@ if run models planner --complexity TRIVIAL > /dev/null 2>&1; then exit 1; else r
 expect_models "$(printf '%s\tmedium\t' "$BUILDER")" visual-reviewer --complexity NORMAL --require-multimodal
 printf '%s\n' 'PASS: routing/legacy fallback chains, composable multimodal/next flags and consistent TSV'
 
-# Role config is parsed; custom roles supported. Codex rejects TOML pins; Cursor
+# Role config is parsed; custom roles supported. Codex rejects TOML pins; Cursor and Claude
 # allows frontmatter model pins (session/frontmatter owns the real model).
 reset_fixture
-if [ "$AGENT" = cursor ]; then
+if [ "$AGENT" = cursor ] || [ "$AGENT" = claude ]; then
   cat > "$PROJECT/$AGENT_DIR/agents/custom.md" <<'MD'
 ---
 name: custom

@@ -1,7 +1,7 @@
 # Shared checkout and state boundary. Sourced by goal-git.sh (Bash 3.2+).
 
 goal_error() {
-  local code="$1" message="$2" action="${3:-Run goal-git.sh doctor --json; preserve state and stop.}"
+  local code="$1" message="$2" action="${3:-Run goal-git.sh doctor --json, fix the named cause, then retry the command. Stop only for authentication or permission errors.}"
   jq -n --arg code "$code" --arg message "$message" --arg action "$action" \
     '{error:{category:$code,message:$message,retryable:false,corrective_action:$action}}' >&2
   return 1
@@ -10,27 +10,37 @@ goal_error() {
 resolve_goal_idx() {
   if [ ! -f "$STATE_FILE" ]; then
     [ -z "${GOAL_ID:-}${GOAL_ISSUE:-}${GOAL_GROUP:-}" ] || {
-      goal_error assignment "No state exists for the requested assignment"; return 1;
+      goal_error assignment "No state exists for the requested assignment" \
+        "Run goal-git.sh list to see goals, then export GOAL_ID of an existing goal or start the assignment with issues start / start"; return 1;
     }
     echo -1; return
   fi
   local matches
   matches=$(jq -c --arg id "${GOAL_ID:-}" --arg issue "${GOAL_ISSUE:-}" \
     --arg run "${GOAL_RUN_ID:-}" --arg repo "${GOAL_ISSUE_REPO:-}" '
+    # One identity form: host-less for github.com, no scheme, no .git, no trailing slash.
+    def norm: (. // "") | ascii_downcase | sub("^https?://"; "") | sub("/+$"; "") | sub("\\.git$"; "") | sub("^github\\.com/"; "");
     to_entries | map(select(
       ($id == "" or .value.id == $id) and
       ($issue == "" or (.value.issue.number | tostring) == $issue) and
       ($run == "" or .value.run_id == $run) and
-      ($repo == "" or .value.issue.repo == $repo))) | map(.key)
+      ($repo == "" or (.value.issue.repo | norm) == ($repo | norm)))) | map(.key)
   ' "$STATE_FILE") || return
   if [ -z "${GOAL_ID:-}${GOAL_ISSUE:-}" ]; then echo -1; return; fi
   [ "$(printf '%s' "$matches" | jq length)" -eq 1 ] || {
-    goal_error assignment "Assignment missing or ambiguous; supply GOAL_ID or GOAL_RUN_ID and GOAL_ISSUE_REPO"; return 1;
+    goal_error assignment "Assignment missing or ambiguous; supply GOAL_ID or GOAL_RUN_ID and GOAL_ISSUE_REPO" \
+      "Run goal-git.sh context or list to find the goal, export its GOAL_ID (and GOAL_RUN_ID/GOAL_ISSUE_REPO), then retry"; return 1;
   }
   printf '%s' "$matches" | jq -r '.[0]'
 }
 
 refresh_goal_idx() { GOAL_IDX="$(resolve_goal_idx)"; }
+
+# One identity form for forge repositories: lower case, no scheme, no .git,
+# no trailing slash, host-less for github.com (matches resolve_goal_idx).
+normalize_forge_identity() {
+  printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | sed -E 's#^https?://##; s#/+$##; s#\.git$##; s#^github\.com/##'
+}
 
 state_ensure_array() {
   [ -f "$STATE_FILE" ] || return 0
@@ -124,7 +134,11 @@ context_init() {
   SHARED_STATE_FILE="$STATE_FILE"
   REQUESTED_GOAL_ID="${GOAL_ID:-}"
   # Independent commands such as help/doctor/models need no assignment.
-  case "${1:-}" in help|--help|-h|doctor|models|config|selfcheck|codex|complexity|reset) return ;; esac
+  case "${1:-}" in help|--help|-h|doctor|models|config|selfcheck|codex|complexity|reset|run-id|forge) return ;; esac
+  # Hooks run without GOAL_* selectors and must never fail on assignment resolution.
+  if [ "${1:-}" = harness ]; then
+    case "${2:-}" in hook|stop-check) return ;; esac
+  fi
   state_ensure_array || return
   # Intake must run before an assignment exists. In particular, issues start
   # resolves and validates its requested number/run/repository itself; do not
@@ -274,6 +288,7 @@ worktree_install_excludes() {
     printf '%s\n' "$WORKFLOW_EXCLUDE_BEGIN"
     printf '%s\n' \
       'AGENTS.md' \
+      'CLAUDE.md' \
       '.worktrees/' \
       '.goal-review/' \
       'state.json' \
@@ -299,6 +314,15 @@ worktree_install_excludes() {
         '.cursor/skills/init-skills/' \
         '.cursor/skills/create-issues/'
     fi
+    if [ -f "$PROJECT_ROOT/.claude/scripts/goal-git.sh" ]; then
+      printf '%s\n' \
+        '.claude/' \
+        '.claude/skills/goal/' \
+        '.claude/skills/goal-loop/' \
+        '.claude/skills/init-goal/' \
+        '.claude/skills/init-skills/' \
+        '.claude/skills/create-issues/'
+    fi
     printf '%s\n' "$WORKFLOW_EXCLUDE_END"
   } >> "$tmp"
   mv "$tmp" "$exclude_file" || return 1
@@ -321,7 +345,7 @@ sync_worktree_config() {
   source_common=$(git -C "$PROJECT_ROOT" rev-parse --path-format=absolute --git-common-dir)
   target_common=$(git -C "$wt_path" rev-parse --path-format=absolute --git-common-dir)
   [ "$source_common" = "$target_common" ] || { goal_error assignment "Worktree belongs to another repository"; return 1; }
-  for agent_dir in .codex .cursor; do
+  for agent_dir in .codex .cursor .claude; do
     manifest="$wt_path/$agent_dir/workflow-manifest"
     if [ -f "$manifest" ]; then
       while IFS= read -r file; do

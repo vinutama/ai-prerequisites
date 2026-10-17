@@ -100,13 +100,13 @@ delegation_shared() {
   "$@"
 }
 
-# Parse role config for the active platform. Codex uses TOML; Cursor uses
-# Markdown frontmatter (and may pin model there — that is intentional).
+# Parse role config for the active platform. Codex uses TOML; Cursor and Claude
+# use Markdown frontmatter (and may pin model there — that is intentional).
 delegation_role_config() {
   local role="$1"
   [[ "$role" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || { err "Invalid role name: $role"; return 1; }
   require_cmd python3
-  if [ "${AGENT_PLATFORM:-}" = "cursor" ]; then
+  if [ "${AGENT_PLATFORM:-}" = "cursor" ] || [ "${AGENT_PLATFORM:-}" = "claude" ]; then
     python3 - "$PROJECT_ROOT/$AGENT_CONFIG_DIR/agents/$role.md" "$role" <<'PY'
 import sys
 path, expected = sys.argv[1], sys.argv[2]
@@ -160,11 +160,17 @@ PY
 # Shared jq definitions. Validation executes inside the mutation lock, so two
 # reservations cannot both pass a stale budget/concurrency read.
 delegation_jq() {
+  # Goals tagged for another platform (a Cursor leftover in a Codex project)
+  # must not consume this platform's concurrency or block it as "uncertain".
+  if declare -F goal_platform_program >/dev/null; then goal_platform_program
+  else printf '%s\n' 'def goal_platform: "unknown";'; fi
+  printf 'def me: "%s";\n' "${AGENT_PLATFORM:-}"
   cat <<'JQ'
     def held: .state == "pending" or .state == "uncertain";
     def active: held or (.agent_id != null and .closed != true);
     def ledger:
-      [.[] | (.spawn_reservations // [])[], (.harness.spawn_reservations // [])[],
+      [.[] | select(goal_platform == me or goal_platform == "unknown")
+        | (.spawn_reservations // [])[], (.harness.spawn_reservations // [])[],
         (.delivery_groups[]?.harness.spawn_reservations // [])[]]
       | reduce .[] as $r ([]; if any(.[]; .id == $r.id) then . else . + [$r] end);
     def metric($role):
@@ -203,6 +209,19 @@ delegation_output() {
 
 cmd_harness_spawn() { delegation_shared delegation_reserve "$@"; }
 
+# Concrete next command when the harness is not in the phase a role needs.
+delegation_phase_hint() {
+  local phase="$1" expected="$2"
+  case "$phase->$expected" in
+    VERIFYING-\>BUILDING|REVIEWING-\>BUILDING|VISUAL_REVIEW-\>BUILDING|DONE-\>BUILDING|FAILED-\>BUILDING|QA-\>BUILDING)
+      printf '%s' "New implementation work needs a rework cycle: goal-git.sh harness retry rework && goal-git.sh harness phase REWORK && goal-git.sh harness phase BUILDING (then retry the spawn)" ;;
+    FAILED-\>*)
+      printf '%s' "Phase is FAILED: inspect harness status (blocker/spawn_failure); if recoverable run goal-git.sh harness recover-spawn or harness phase REWORK, otherwise save the blocker with harness event blocker" ;;
+    *)
+      printf '%s' "Run: goal-git.sh harness phase $expected (or harness status for the next legal step)" ;;
+  esac
+}
+
 delegation_reserve() {
   local role="${1:-}" model="${2:-}" effort="${3:-}" task="" phase route line allowed cap_value id now sha="" vision=false
   [ $# -ge 3 ] && [ -n "$model" ] && [ -n "$effort" ] || {
@@ -235,14 +254,18 @@ delegation_reserve() {
   line="$(cmd_models "$role" --complexity "$route")" || return 1
   allowed="$(printf '%s' "$line" | jq -R 'split("\t") | [.[0]] + ((.[2] // "") | split(",") | map(select(length > 0)))')"
   if ! printf '%s' "$allowed" | jq -e --arg m "$model" 'index($m) != null' >/dev/null; then
-    # Cursor catalogs use inherit; accept when chain includes it or platform is cursor.
+    # Cursor/Claude sessions own the real model: accept inherit (and, on Claude,
+    # the sonnet/opus/haiku aliases) when the chain includes it or the platform allows it.
     if [ "$model" = "inherit" ] && {
       printf '%s' "$allowed" | jq -e 'index("inherit") != null' >/dev/null ||
-      [ "${AGENT_PLATFORM:-}" = "cursor" ]
+      [ "${AGENT_PLATFORM:-}" = "cursor" ] || [ "${AGENT_PLATFORM:-}" = "claude" ]
     }; then
       :
+    elif [ "${AGENT_PLATFORM:-}" = "claude" ] && case "$model" in sonnet|opus|haiku) true ;; *) false ;; esac; then
+      :
     else
-      err "Model '$model' is outside the authorized $role/$route chain; update goal-models.json explicitly"; return 1
+      goal_error model "Model '$model' is outside the authorized $role/$route chain: $(printf '%s' "$allowed" | jq -r 'join(",")')" \
+        "Use a model from: goal-git.sh models $role --complexity $route (or add it to goal-models.json), then retry the spawn"; return 1
     fi
   fi
   models_role_multimodal "$PROJECT_ROOT/$AGENT_CONFIG_DIR/goal-models.json" "$role" && vision=true
@@ -264,7 +287,7 @@ delegation_reserve() {
     else
       goal_error assignment \
         "Spawn rejected: role $role during $phase; expected $expected_phase" \
-        "Run: GOAL_* selectors goal-git.sh harness phase $expected_phase"
+        "$(delegation_phase_hint "$phase" "$expected_phase")"
       return 1
     fi
   fi
@@ -298,20 +321,20 @@ delegation_reserve() {
     | ({planner:"PLANNED", researcher:"RESEARCHING", builder:"BUILDING", "builder-expert":"BUILDING",
         reviewer:"REVIEWING", "visual-reviewer":"VISUAL_REVIEW"}[$role] // "BUILDING") as $expected
     | if $phase != $expected and ($role != "builder-expert" or $phase != "ESCALATED") then
-        error("Spawn rejected: role " + $role + " during " + $phase + "; expected " + $expected + ". Run: harness phase " + $expected)
+        error("Spawn rejected: role " + $role + " during " + $phase + "; expected " + $expected + ". Run: harness phase " + $expected + " (from VERIFYING/REVIEWING use harness retry rework, harness phase REWORK, then BUILDING)")
       else . end
-    | if any($all[]; .state == "uncertain") then error("Uncertain launch outcome; reconcile reservation via spawn-confirm/fail before launching again") else . end
-    | if ([$all[] | select(active)] | length) >= $concurrency then error("Global concurrency limit reached across issues/groups; finish and close an agent") else . end
+    | if any($all[]; .state == "uncertain") then error("Uncertain launch outcome; run harness spawn-confirm <reservation> <agent-id> if the agent started, harness spawn-fail <reservation> <category> <reason> if it did not, or harness reap for leftovers of a previous session") else . end
+    | if ([$all[] | select(active)] | length) >= $concurrency then error("Concurrency limit reached across issues/groups of this platform; finish and close an agent (spawn-finish <agent> completed|failed --closed), or run harness reap for stale reservations of a previous session") else . end
     | [($g.spawn_reservations // [])[] | select(.group_id == ($g.active_group_id // null) and held)] as $pending
     | if $task != "" then
         ($h.tasks // [] | map(select(.id == $task)) | .[0]) as $t
         | if $t == null then error("Unknown task: " + $task)
           elif $t.role != $role then error("Task role conflicts with spawn role: " + $task)
-          elif ($t.state != "PENDING" and $t.state != "SPAWNING") then error("Task must be PENDING/SPAWNING: " + $task)
+          elif ($t.state != "PENDING" and $t.state != "SPAWNING") then error("Task must be PENDING/SPAWNING: " + $task + " is " + $t.state + "; run harness task retry " + $task + " (or harness task cancel " + $task + "; harness reap if its agent is from a previous session)")
           elif any($all[]; .task == $task and .goal_key == ($g.id // $g.branch // ($idx | tostring)) and .group_id == ($g.active_group_id // null) and active)
             then error("Task already has a live reservation/agent: " + $task)
           else . end
-      elif any($pending[]; .role == $role and .task == null) then error("Role already has a pending reservation; confirm/fail it first") else . end
+      elif any($pending[]; .role == $role and .task == null) then error("Role already has a pending reservation; run spawn-confirm/spawn-fail for it, or harness reap if it is left over from a previous session") else . end
     | if ($role == "builder" or $role == "builder-expert" or $expected == "BUILDING") and
         (any($all[]; active and (.worktree == $worktree) and
           (.role == "builder" or .role == "builder-expert" or .phase == "BUILDING")) or
@@ -320,14 +343,28 @@ delegation_reserve() {
            .spawn_reservation_id == null and $worktree == $parent_wt))
       then error("Parallel builders cannot share worktree " + $worktree) else . end
     | ($h.metrics.agent_spawns // 0) as $total
-    | (($h.budget.max_total_spawns // 10)) as $max
+    | (($h.budget.max_total_spawns // 10)) as $max0
     | ((if $h.requirements.visual == true and ($h.metrics.visual_runs // 0) == 0 and $role != "visual-reviewer" and
           (any($pending[]; .role == "visual-reviewer") | not) then 1 else 0 end)) as $required
-    | if $total + ($pending | length) + 1 + $required > $max then error("Spawn budget exceeded (confirmed + reservations + required Visual); raise max_total_spawns explicitly") else . end
+    | ($h.counters.rework // 0) as $rw
+    # Review/rework loops must not stall on a hard cap: grow the caps while the
+    # rework counter is still within max_rework (harness retry rework fails the
+    # goal beyond it, so the loop stays bounded).
+    | ((($role == "reviewer" and $phase == "REVIEWING") or ($role == "builder" and $phase == "BUILDING" and $rw > 0))
+        and $rw <= ($h.limits.max_rework // 3)) as $grow
+    | ($total + ($pending | length) + 1 + $required) as $need
+    | (if $grow and $need > $max0 then $need else $max0 end) as $max
     | cap($role) as $cap | metric($role) as $metric
-    | ($h.budget[$cap] // (if $role == "builder" or ($expected == "BUILDING" and $role != "builder-expert") then $max else 0 end)) as $limit
-    | if ($h.metrics[$metric] // 0) + ([$pending[] | select(.role == $role)] | length) >= $limit
-      then error("Spawn role budget exceeded: " + $cap + "; raise it explicitly") else . end
+    | $h.budget[$cap] as $configured
+    | (($h.metrics[$metric] // 0) + ([$pending[] | select(.role == $role)] | length)) as $used
+    | ($configured // (if $role == "builder" or ($expected == "BUILDING" and $role != "builder-expert") then $max else 0 end)) as $limit0
+    | (if $grow and $configured != null and $used >= $limit0 then $used + 1 else $limit0 end) as $limit
+    | if $need > $max then error("Spawn budget exceeded (confirmed + reservations + required Visual); run: harness budget set max_total_spawns " + ($need | tostring)) else . end
+    | if $used >= $limit then error("Spawn role budget exceeded: " + $cap + "; run: harness budget set " + $cap + " " + (($used + 1) | tostring)) else . end
+    | if $max != $max0 then .[$idx].harness.budget.max_total_spawns = $max
+        | event($idx; $at; "budget_grow"; "max_total_spawns " + ($max0 | tostring) + " -> " + ($max | tostring) + " (rework " + ($rw | tostring) + ")") else . end
+    | if $limit != $limit0 then .[$idx].harness.budget[$cap] = $limit
+        | event($idx; $at; "budget_grow"; $cap + " " + ($limit0 | tostring) + " -> " + ($limit | tostring) + " (rework " + ($rw | tostring) + ")") else . end
     | .[$idx].spawn_reservations = (($g.spawn_reservations // []) + [{
         id:$id, role:$role, model:$model, effort:$effort, task:(if $task == "" then null else $task end),
         phase:$phase, prior_phase:$phase, state:"pending", created_at:$at, closed:false,
@@ -414,7 +451,7 @@ delegation_fail() {
       end
     | commit($idx)
   ' || return 1
-  [ "$category" != uncertain ] || warn "Launch outcome uncertain for $id; stop and reconcile via spawn-confirm or definitive spawn-fail"
+  [ "$category" != uncertain ] || warn "Launch outcome uncertain for $id; run spawn-confirm $id <agent-id> if the agent started, or a definitive spawn-fail $id <category> <reason> (or harness reap) before launching again"
   delegation_output "$id"
 }
 
@@ -498,5 +535,129 @@ delegation_recover() {
     | event($idx; $at; "recover_spawn"; "Only unconfirmed spawn failures reset; pending/confirmed reservations remain held")
     | commit($idx)
   ' || return 1
+  if jq -e --argjson idx "$GOAL_IDX" '.[$idx].harness.phase == "FAILED"' "$STATE_FILE" >/dev/null 2>&1; then
+    warn "Phase is still FAILED (failed tasks, failed gates or a failed agent remain): fix the cause, use harness task retry <id>, then harness phase REWORK"
+  fi
   jq --argjson idx "$GOAL_IDX" '.[$idx].harness | {phase, next: ([.tasks[]? | select(.state == "PENDING")] | .[0] // null)}' "$STATE_FILE"
+}
+
+# --- Recovery: release stale reservations and retry/cancel tasks -------------
+
+# Epoch seconds of a local ISO timestamp with offset (2026-09-13T20:12:00+07:00).
+delegation_epoch_jq() {
+  cat <<'JQ'
+    def epoch:
+      (. // "") as $t
+      | ($t | capture("^(?<d>.*)(?<sign>[+-])(?<h>[0-9]{2}):(?<m>[0-9]{2})$")? // null) as $c
+      | if $c == null then (try ($t | sub("Z$"; "Z") | fromdateiso8601) catch 0)
+        else (($c.d + "Z" | fromdateiso8601) - ((if $c.sign == "-" then -1 else 1 end) * (($c.h | tonumber) * 3600 + ($c.m | tonumber) * 60)))
+        end;
+JQ
+}
+
+delegation_stale_jq() {
+  cat <<'JQ'
+    def stale($cutoff): active and ((.created_at | epoch) <= $cutoff);
+JQ
+}
+
+# Read-only: print a warning when reservations from a previous session still
+# hold capacity. Used by `continue`.
+delegation_stale_report() {
+  [ -f "$STATE_FILE" ] || return 0
+  local count ids
+  ids="$(jq -r --argjson idx "$GOAL_IDX" "$(delegation_jq)"'
+    [(.[$idx].spawn_reservations // [])[] | select(active) | .id] | join(" ")
+  ' "$STATE_FILE" 2>/dev/null || true)"
+  [ -n "$ids" ] || return 0
+  count="$(printf '%s' "$ids" | wc -w | tr -d ' ')"
+  warn "$count spawn reservation(s) are still held: $ids"
+  warn "If no worker is running (new session), release them with: goal-git.sh harness reap"
+}
+
+cmd_harness_reap() { delegation_shared delegation_reap "$@"; }
+
+delegation_reap() {
+  local older=0 now cutoff reaped
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --older-than)
+        [ $# -ge 2 ] && [[ "$2" =~ ^[0-9]+$ ]] || { err 'harness reap --older-than requires minutes'; return 1; }
+        older="$2"; shift 2 ;;
+      *) err "Unknown harness reap argument: $1"; return 1 ;;
+    esac
+  done
+  now="$(harness_now)"
+  cutoff=$(( $(date +%s) - older * 60 ))
+  reaped="$(jq -c --argjson idx "$GOAL_IDX" --argjson cutoff "$cutoff" "$(delegation_jq)$(delegation_epoch_jq)$(delegation_stale_jq)"'
+    [(.[$idx].spawn_reservations // [])[] | select(stale($cutoff)) | .id]
+  ' "$STATE_FILE")" || return 1
+  if [ "$reaped" = "[]" ]; then
+    log "No stale reservations to reap"
+    printf '{"reaped":[],"tasks_reset":[]}\n'
+    return 0
+  fi
+  state_mutate --argjson idx "$GOAL_IDX" --argjson cutoff "$cutoff" --argjson ids "$reaped" --arg at "$now" "$(delegation_jq)$(delegation_epoch_jq)$(delegation_stale_jq)"'
+    def release_tasks: map(
+      . as $t
+      | if ($t.state == "SPAWNING" or $t.state == "RUNNING" or ($t.state == "BLOCKED" and ($t.blocker_kind // $t.blocked_kind) == "spawn"))
+           and (($ids | index($t.spawn_reservation_id)) != null)
+        then .state = "PENDING" | del(.agent_id, .spawn_reservation_id, .blocker_kind, .blocked_kind, .blocker_reason, .spawn_failure)
+        else . end);
+    def release: map(. as $r | if (($ids | index($r.id)) != null) and ($r | stale($cutoff)) then
+        .state = "failed" | .closed = true | .finished_at = (.finished_at // $at)
+        | .failure = {category:"reaped", reason:"stale reservation from a previous session", at:$at}
+      else . end);
+    .[$idx].spawn_reservations |= release
+    | .[$idx].harness.spawn_reservations |= (. // [] | release)
+    | if .[$idx].delivery_groups then .[$idx].delivery_groups |= map(if .harness then .harness.spawn_reservations |= (. // [] | release) else . end) else . end
+    | .[$idx].harness.tasks |= (. // [] | release_tasks)
+    | if .[$idx].delivery_groups then .[$idx].delivery_groups |= map(if .harness then .harness.tasks |= (. // [] | release_tasks) else . end) else . end
+    | (.[$idx].harness.spawn_failure.reservation_id // "") as $sf
+    | if .[$idx].harness.phase == "FAILED" and (($ids | index($sf)) != null) then
+        .[$idx].harness.phase = (.[$idx].harness.spawn_failure.prior_phase // "BUILDING")
+        | .[$idx].harness |= del(.spawn_failure)
+      else . end
+    | event($idx; $at; "reap"; ($ids | length | tostring) + " stale reservation(s): " + ($ids | join(",")))
+    | commit($idx)
+  ' || return 1
+  log "Reaped $(printf '%s' "$reaped" | jq length) stale reservation(s); their tasks are PENDING again"
+  jq -c --argjson idx "$GOAL_IDX" --argjson ids "$reaped" '{reaped:$ids, tasks_reset:[.[$idx].harness.tasks[]? | select(.state == "PENDING") | .id]}' "$STATE_FILE"
+}
+
+cmd_harness_task_retry() { delegation_shared delegation_task_release retry "$@"; }
+cmd_harness_task_cancel() { delegation_shared delegation_task_release cancel "$@"; }
+
+# retry: FAILED/BLOCKED/stuck task back to PENDING (re-spawn with --task tN).
+# cancel: CANCELLED is accepted by VERIFYING and harness done.
+# Both release the task's live reservation so a new launch is not blocked.
+delegation_task_release() {
+  local mode="${1:-}" id="${2:-}" reason="" now
+  shift 2 || true
+  [ -n "$id" ] || { err "harness task $mode requires <task-id> [reason]"; return 1; }
+  reason="$*"
+  now="$(harness_now)"
+  state_mutate --argjson idx "$GOAL_IDX" --arg id "$id" --arg mode "$mode" --arg reason "$reason" --arg at "$now" "$(delegation_jq)"'
+    (.[$idx].harness.tasks // [] | map(select(.id == $id)) | .[0]) as $t
+    | (.[$idx].active_group_id // null) as $gid
+    | if $t == null then error("Unknown task: " + $id) else . end
+    | if $t.state == "DONE" then error("Task " + $id + " is already DONE; for new work run harness retry rework, harness phase REWORK, harness phase BUILDING and add a task") else . end
+    | if $mode == "cancel" and $t.state == "CANCELLED" then error("Task " + $id + " is already CANCELLED") else . end
+    | .[$idx].spawn_reservations |= map(
+        if .task == $id and .group_id == $gid and active then
+          .state = "failed" | .closed = true | .finished_at = (.finished_at // $at)
+          | .failure = {category:"released", reason:("task " + $mode), at:$at}
+        else . end)
+    | .[$idx].harness.tasks |= map(if .id == $id then
+        (if $mode == "retry" then .state = "PENDING" else .state = "CANCELLED" end)
+        | del(.agent_id, .spawn_reservation_id, .blocker_kind, .blocked_kind, .blocker_reason, .spawn_failure)
+        | .history = ((.history // []) + [{at:$at, action:$mode, from:$t.state, reason:$reason}])
+      else . end)
+    | event($idx; $at; "task_" + $mode; $id + " " + $t.state + (if $reason != "" then ": " + $reason else "" end))
+    | commit($idx)
+  ' || return 1
+  case "$mode" in
+    retry) log "Task $id -> PENDING; relaunch with: harness spawn <role> <model> <effort> --task $id" ;;
+    *) log "Task $id -> CANCELLED (ignored by VERIFYING and harness done)" ;;
+  esac
 }

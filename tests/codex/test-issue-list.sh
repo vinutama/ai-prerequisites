@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Guard machine-readable issue lists against CLI deprecation banners and bad JSON.
-# Usage: AGENT=codex|cursor bash tests/codex/test-issue-list.sh
+# Usage: AGENT=codex|cursor|claude bash tests/codex/test-issue-list.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -14,8 +14,12 @@ case "$AGENT" in
     SRC_SCRIPTS="$ROOT/templates/cursor/.cursor/scripts"
     AGENT_DIR=".cursor"
     ;;
+  claude)
+    SRC_SCRIPTS="$ROOT/templates/claude/.claude/scripts"
+    AGENT_DIR=".claude"
+    ;;
   *)
-    echo "Unknown AGENT=$AGENT (expected codex|cursor)" >&2
+    echo "Unknown AGENT=$AGENT (expected codex|cursor|claude)" >&2
     exit 1
     ;;
 esac

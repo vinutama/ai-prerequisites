@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Per-platform fresh-runtime reset. Shared state.json keeps the other platform.
-# Usage: AGENT=codex|cursor bash tests/codex/test-reset.sh
+# Usage: AGENT=codex|cursor|claude bash tests/codex/test-reset.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 AGENT="${AGENT:-${PLATFORM:-codex}}"
+# OTHER is the platform used to prove that its runtime and config survive.
 case "$AGENT" in
-  codex) OTHER=cursor; SELF_DIR=.codex; OTHER_DIR=.cursor ;;
-  cursor) OTHER=codex; SELF_DIR=.cursor; OTHER_DIR=.codex ;;
-  *) echo "Unknown AGENT=$AGENT (expected codex|cursor)" >&2; exit 1 ;;
+  codex) OTHER=cursor; SELF_DIR=.codex; OTHER_DIR=.cursor; ROOT_DOC=AGENTS.md ;;
+  cursor) OTHER=codex; SELF_DIR=.cursor; OTHER_DIR=.codex; ROOT_DOC=AGENTS.md ;;
+  claude) OTHER=codex; SELF_DIR=.claude; OTHER_DIR=.codex; ROOT_DOC=CLAUDE.md ;;
+  *) echo "Unknown AGENT=$AGENT (expected codex|cursor|claude)" >&2; exit 1 ;;
 esac
 export TMPDIR="${TMPDIR:-$ROOT/.tmp-tests}"
 mkdir -p "$TMPDIR"
@@ -22,6 +24,7 @@ git -C "$PROJECT" add README.md
 git -C "$PROJECT" commit -qm seed
 bash "$ROOT/init.sh" --cursor "$PROJECT" >/dev/null
 bash "$ROOT/init.sh" --codex "$PROJECT" >/dev/null
+bash "$ROOT/init.sh" --claude "$PROJECT" >/dev/null
 
 if bash "$ROOT/init.sh" --reset --clean --cursor "$PROJECT" >/dev/null 2>&1; then
   echo "FAIL: --reset combined with --clean should be rejected" >&2
@@ -82,6 +85,10 @@ jq -e '.unknown | index("unknown-owner")' "$TEST_ROOT/reset.json" >/dev/null
 if [ "$AGENT" = cursor ]; then
   jq -e '.removed | index("infer-inherit")' "$TEST_ROOT/reset.json" >/dev/null
   jq -e '.kept | index("infer-named")' "$TEST_ROOT/reset.json" >/dev/null
+elif [ "$AGENT" = claude ]; then
+  # Untagged goals with named models are inferred as Codex; inherit as Cursor.
+  jq -e '.kept | index("infer-inherit")' "$TEST_ROOT/reset.json" >/dev/null
+  jq -e '.kept | index("infer-named")' "$TEST_ROOT/reset.json" >/dev/null
 else
   jq -e '.kept | index("infer-inherit")' "$TEST_ROOT/reset.json" >/dev/null
   jq -e '.removed | index("infer-named")' "$TEST_ROOT/reset.json" >/dev/null
@@ -104,13 +111,19 @@ echo "PASS: other platform runtime is unchanged and config is kept"
 exclude="$(cat "$PROJECT/.git/info/exclude")"
 printf '%s\n' "$exclude" | grep -qxF '.codex/'
 printf '%s\n' "$exclude" | grep -qxF '.cursor/'
-echo "PASS: exclude block lists both installed platforms"
+printf '%s\n' "$exclude" | grep -qxF '.claude/'
+echo "PASS: exclude block lists every installed platform"
 
-# init.sh --reset upgrades scripts and keeps a shared AGENTS.md when both exist.
-printf 'CUSTOM-AGENTS\n' > "$PROJECT/AGENTS.md"
+# init.sh --reset upgrades scripts and keeps the shared root doc while another
+# platform that uses it is still installed (CLAUDE.md is never shared).
+printf 'CUSTOM-DOC\n' > "$PROJECT/$ROOT_DOC"
 bash "$ROOT/init.sh" --reset "--$AGENT" "$PROJECT" >"$TEST_ROOT/init-reset.log"
-grep -q 'CUSTOM-AGENTS' "$PROJECT/AGENTS.md"
+if [ "$AGENT" = claude ]; then
+  grep -q 'Claude Code goal workflow' "$PROJECT/$ROOT_DOC"
+else
+  grep -q 'CUSTOM-DOC' "$PROJECT/$ROOT_DOC"
+fi
 grep -q 'Reset complete' "$TEST_ROOT/init-reset.log"
-echo "PASS: init.sh --reset keeps shared AGENTS.md and completes"
+echo "PASS: init.sh --reset handles the root doc and completes"
 
 echo "PASS: reset ($AGENT)"

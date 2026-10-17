@@ -121,14 +121,21 @@ This command configures the goal workflow for this project. Ask the user the fol
 
 After collecting answers for questions 1–9 (including 6b/6c when Figma is enabled), persist core config:
 ```bash
-.codex/scripts/goal-git.sh config set <goal_source> <target_branch> <platform> <concurrency> <auto_merge> <review_mode> 0
+.codex/scripts/goal-git.sh config set \
+  <goal_source> <target_branch> <platform> <concurrency> <auto_merge> <review_mode> \
+  <review_max_iterations> <max_rework> <max_escalations> <max_verify_retries> <visual_mode>
 ```
+
+Defaults when the user did not override: `review_max_iterations` `0` (unlimited — loop
+until pending is clean), `max_rework` `3`, `max_escalations` `2`, `max_verify_retries`
+`3`, `visual_mode` `auto` (`auto|always|never`). Example:
+`.codex/scripts/goal-git.sh config set prompt main github 1 false inline 0 3 2 3 auto`
+
 Use `1` for concurrency when the user chose sequential only.
 Use `false` for `auto_merge` when the user chose manual merge (default).
 Use `true` when the user chose auto-merge.
 Use `inline` for `review_mode` when the user chose inline PR comments (default).
 Use `local` when the user chose local review.
-Always pass `0` for `review_max_iterations` (unlimited — loop until pending is clean).
 
 If `issues` was selected, after `config set` persist issue settings:
 ```bash
@@ -152,7 +159,7 @@ blockers with the suggested local command.
 Explain that source intake precedes branch/worktree mutations: prompt stores
 the full objective, Markdown stores draft contents, and Jira stores the full
 fetched ticket. Snapshot JSON is `{type,title,body,reference,acceptance_criteria}`.
-MAIN commits implementation before ANALYSIS, formal verify, review, QA, and
+MAIN commits implementation before ANALYSIS, formal verify, review, and
 visual checks; all evidence points to final committed clean HEAD. Workers
 return all milestones/tasks/findings for MAIN to record. PR commands require
 `--title <short-title> --body-file <path>` (also `groups pr <id>`), with a

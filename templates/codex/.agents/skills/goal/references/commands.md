@@ -40,6 +40,34 @@ harness spawn-finish <agent-id> completed|failed --closed
 If the phase is wrong, spawn auto-advances when legal; otherwise the error names
 `harness phase <EXPECTED>`. One targeted launch retry only.
 
+## Recovery
+
+Every error is JSON with `corrective_action`: run it and retry. "Stop" is only for
+authentication/permission errors.
+
+```text
+harness status                      # includes computed next_action
+harness reap [--older-than <min>]   # release reservations of a dead session (tasks -> PENDING)
+harness task retry tN [why]         # FAILED/BLOCKED/stuck -> PENDING; re-spawn with --task tN
+harness task cancel tN [why]        # CANCELLED: VERIFYING and harness done accept it
+harness budget set <key> <n>        # builder/reviewer caps already grow within max_rework
+harness limit set <max_rework|max_escalations|max_verify_retries> <n>   # after user approval
+harness phase REWORK                # legal from VERIFYING/REVIEWING/VISUAL_REVIEW/DONE/FAILED
+worktree merge tN [--abort]
+forge pending clear [--reconcile]   # unresolved PR/MR create ledger (adopts an existing PR/MR)
+config put <key> <value>            # verify_cmd, verify_timeout, fingerprint_ignore, forge_max_wait,
+                                    # gitnexus_version, analyze_timeout, stop_check_window
+verify run --none-detected-ok       # only TRIVIAL goals (or config verify_allow_none)
+run-id                              # fresh GOAL_RUN_ID
+```
+
+Rework sequence: `harness retry rework` → `harness phase REWORK` → `harness phase BUILDING` →
+`harness task add builder <fix>` (or `task retry tN`) → launch/confirm/finish → `commit` →
+`analyze` → `verify run` → fresh review. Details in [execution](execution.md).
+
+`verify run` has no stdin, `CI=1` and a timeout (`verify_timeout`, default 900s); git
+runs non-interactively; forge waits above `forge_max_wait` (120s) return `rate_limited`.
+
 ## Review evidence and PR metadata
 
 ```text
@@ -58,7 +86,7 @@ Title must match `feat|fix|docs|refactor|perf|test|chore|build|ci(scope)?: subje
 ## Reset
 
 `reset runtime [--force] [--yes]` clears this platform's goals, review files,
-worktrees, and runtime logs. It does not touch the other platform, config, or
+worktrees, and runtime logs. It does not touch other platforms, config, or
 branches. Older untagged goals are inferred from spawn models (`inherit` is
 Cursor). A goal with no reservations is kept. `--yes` skips the confirmation
 prompt. `--force` discards uncommitted worktree changes.

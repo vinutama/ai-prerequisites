@@ -8,6 +8,20 @@ disable-model-invocation: true
 ---
 
 Read the project README and AGENTS.md to understand conventions first.
+Use the installed absolute `GOAL_GIT` as the sole operational entry. Read
+`goal-git.sh help` and `doctor --json` before setup. Set explicit empty
+`GOAL_ID`, `GOAL_RUN_ID`, `GOAL_ISSUE`, `GOAL_GROUP`, `GOAL_TASK`, and `GOAL_REPO`
+for setup without an assignment, carrying them in every shell invocation.
+For an existing assignment, preserve its selectors and resolve `context --json`.
+Use returned absolute paths. Setup does not start a goal or mutate branches.
+
+On CLI failure, read structured helper diagnostics and `doctor --json`. The
+helper probes installed CLI capabilities. Read-only help/version inspection
+is allowed; actual Git/forge operations use the helper. Authentication or
+permission blockers stop with the suggested local command; do not launch
+browser login automatically. No web/browser/`--web`/ad hoc forge fallback,
+CLI documentation lookup during active operations, or automatic upgrades.
+CLI/helper repair belongs to maintenance outside this setup operation.
 
 This command configures the goal workflow for this project. Ask the user the following questions one at a time and wait for each answer:
 
@@ -18,16 +32,16 @@ This command configures the goal workflow for this project. Ask the user the fol
    - `issues` — Open issues from a GitHub/GitLab issue list URL (e.g. `/goal --issues` or bare `/goal` when configured)
 
    **If the user selects `jira`:** before continuing, verify Atlassian MCP is connected:
-   - Attempt a lightweight Jira MCP call (e.g. `jira_get_user_profile` or list available MCP tools for Atlassian).
+   - Discover the actual connected Jira/Atlassian MCP tools at runtime, inspect their supported schemas, and use an available read-only connectivity call. Never prescribe a guessed tool name.
    - If unavailable, do NOT save `jira` yet. Guide the user to connect the Atlassian MCP server in their project-level `.cursor/mcp.json` under `mcpServers`, then re-run `/init-goal`. Offer to use `prompt` or `markdown` instead for now.
-   - If available, confirm Jira connectivity and proceed.
+   - If available, confirm Jira connectivity and proceed. At goal intake, read the full ticket and acceptance criteria into a `--source-file` JSON object with `type,title,body,reference,acceptance_criteria` before any branch mutation; a summary alone is insufficient.
 
    **If the user selects `issues`:** before continuing, verify the forge CLI can read the list:
    - Ask for the issue list URL (e.g. `https://github.com/org/repo/issues` or `https://gitlab.com/group/project/-/issues`)
    - Ask how many issues per run (default `3`) — store as `issue_limit`
    - Run: `.cursor/scripts/goal-git.sh issues list "<url>" 1`
-   - If the command fails, do NOT save `issues` yet. Read the error before guiding the user. An invalid `--sort` / `--order` flag is a script bug, not an auth failure — do not ask them to run `glab auth login` for that. Auth failures mention login, token, or 401. For those, confirm `gh` or `glab` auth and the URL, then re-run `/init-goal`. Offer `prompt` or `markdown` instead for now.
-   - If successful, remember `issue_list_url` and `issue_limit` for persistence after `config set` (step below).
+   - If it fails, do NOT save `issues` yet. Run `doctor --json` and report the structured diagnostic. Unsupported flags are maintenance blockers, not authentication failures. For auth/permission blockers, stop with the suggested local command; do not perform login or try a browser/web fallback.
+   - If successful, remember `issue_list_url` and `issue_limit` for persistence after `config set` (step below). Every later start uses `issues start <n> --url <resolved-url> [--worktree]`, retaining run/repo identity and explicit URL overrides.
    - Note: concurrent issue worktrees are **single-repo only**. Multi-repo + issues runs one issue at a time across repos.
 
 2. **Target branch** — What is the base/target branch for this project? (e.g. `main`, `develop`, `master`)
@@ -73,7 +87,7 @@ This command configures the goal workflow for this project. Ask the user the fol
 
    **6b (only if yes):** Figma Personal Access Token
    - Guide: Figma → Settings → Security → Personal access tokens
-   - Warn: token is stored in `.cursor/figma.env` (project-level, gitignored); MCP block is written to `.cursor/mcp.json`
+   - Warn: token is stored in `.cursor/figma.env` (project-level, gitignored); the MCP block is written to `.cursor/mcp.json`
    - Run: `.cursor/scripts/goal-git.sh figma setup "<token>"`
    - Optionally verify after sourcing env: `set -a && source .cursor/figma.env && set +a && cursor-agent mcp list`
    - If verification fails, warn but continue
@@ -91,8 +105,8 @@ This command configures the goal workflow for this project. Ask the user the fol
      - On merge conflict: **stop**, report conflict files; do **not** invent conflict resolutions. User or a follow-up `/goal --continue` with builders can fix.
 
 8. **Review mode** — How should reviewers report findings?
-   - `inline` (**default**) — create PR first; reviewers post inline comments on GitHub/GitLab and resolve threads (`goal-git.sh pending` gates the loop).
-   - `local` — reviewers read the diff locally, record findings via `goal-git.sh review add`, MAIN delegates builders immediately. **No PR until review is clean** (push + `pr` happen only in DONE).
+   - `inline` (**default**) — MAIN publishes the committed verified diff before Reviewer, then records returned findings and evidenced resolution requests serially through helper commands.
+   - `local` — MAIN runs idempotent `review init` before Reviewer, preserving findings on rework. Reviewers return findings/resolution evidence for MAIN to record, and MAIN delegates fixes. **No PR until `harness done` is clean**.
      Review loops until `review pending` exits 0. Do **not** ask for a max iteration cap.
 
 9. **Markdown PR strategy** (only when goal source is `markdown`) — How should a Markdown goal be delivered?
@@ -106,31 +120,23 @@ This command configures the goal workflow for this project. Ask the user the fol
    ```
    Limits are planning signals; do not force unsafe splits. Existing in-progress Markdown goals keep their original one-PR schema until they complete.
 
-After collecting answers for questions 1–9 (including 6b/6c when Figma is enabled), persist core config with expanded keys:
+After collecting answers for questions 1–9 (including 6b/6c when Figma is enabled), persist core config:
 ```bash
 .cursor/scripts/goal-git.sh config set \
   <goal_source> <target_branch> <platform> <concurrency> <auto_merge> <review_mode> \
   <review_max_iterations> <max_rework> <max_escalations> <max_verify_retries> <visual_mode>
 ```
 
-Defaults when the user did not override:
-- `review_max_iterations` → always `0` (unlimited — loop until pending is clean)
-- `max_rework` → `3`
-- `max_escalations` → `2`
-- `max_verify_retries` → `3`
-- `visual_mode` → `auto` (`auto|always|never`)
+Defaults when the user did not override: `review_max_iterations` `0` (unlimited — loop
+until pending is clean), `max_rework` `3`, `max_escalations` `2`, `max_verify_retries`
+`3`, `visual_mode` `auto` (`auto|always|never`). Example:
+`.cursor/scripts/goal-git.sh config set prompt main github 1 false inline 0 3 2 3 auto`
 
 Use `1` for concurrency when the user chose sequential only.
 Use `false` for `auto_merge` when the user chose manual merge (default).
 Use `true` when the user chose auto-merge.
 Use `inline` for `review_mode` when the user chose inline PR comments (default).
 Use `local` when the user chose local review.
-Always pass `0` for `review_max_iterations`.
-
-Example (prompt, main, github, sequential, manual merge, inline review, defaults):
-```bash
-.cursor/scripts/goal-git.sh config set prompt main github 1 false inline 0 3 2 3 auto
-```
 
 If `issues` was selected, after `config set` persist issue settings:
 ```bash
@@ -139,7 +145,7 @@ jq --arg url "<issue_list_url>" --argjson limit <issue_limit> \
   .cursor/goal-config.json > .cursor/goal-config.json.tmp && mv .cursor/goal-config.json.tmp .cursor/goal-config.json
 ```
 
-If Figma was enabled (question 6 = yes), run `figma setup` and `figma design set` **after** `config set` (and after issue jq when applicable). Those helpers write `.cursor/figma.env` and update `.cursor/mcp.json`.
+If Figma was enabled (question 6 = yes), run `figma setup` and `figma design set` **after** `config set` (and after issue jq when applicable).
 
 Confirm the saved config:
 ```bash
@@ -147,13 +153,25 @@ Confirm the saved config:
 .cursor/scripts/goal-git.sh figma status
 ```
 
-Then run `.cursor/scripts/goal-git.sh selfcheck` to verify the platform CLI is available and authenticated.
+Then run `.cursor/scripts/goal-git.sh doctor --json` for installed capabilities,
+assignment/configuration diagnostics, and platform authentication. Stop on
+blockers with the suggested local command.
+
+Explain that source intake precedes branch/worktree mutations: prompt stores
+the full objective, Markdown stores draft contents, and Jira stores the full
+fetched ticket. Snapshot JSON is `{type,title,body,reference,acceptance_criteria}`.
+MAIN commits implementation before ANALYSIS, formal verify, review, and
+visual checks; all evidence points to final committed clean HEAD. Workers
+return all milestones/tasks/findings for MAIN to record. PR commands require
+`--title <short-title> --body-file <path>` (also `groups pr <id>`), with a
+single-line title ≤72 characters and a concise description (usually 100–200 words) of actual
+changes/checks/reference; empty diff stops.
 
 Tell the user they can now run `/goal <objective>` or `/goal --issues [count]` to start a goal (when `goal_source` is `issues`, bare `/goal` uses configured URL and limit).
 If Figma was configured, remind them to launch Cursor with secrets loaded:
 ```bash
 .cursor/scripts/run-cursor.sh
 ```
-or `set -a && source .cursor/figma.env && set +a && opencode`
+or load `.cursor/figma.env` in the shell before launching `cursor-agent`.
 
-Only use `.cursor/scripts/goal-git.sh` for all git and state operations — never run `git`, `gh`, or `glab` directly.
+Use `goal-git.sh` for all workflow/Git/forge operations. Read-only CLI help/version is allowed; mutations always use the helper. Optional project configuration edits above are setup configuration, never direct workflow state writes.

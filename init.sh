@@ -19,20 +19,20 @@ ALL_AGENTS=(opencode cursor claude codex qoder)
 usage() {
   cat <<EOF
 Usage: init.sh --opencode|--cursor|--claude|--codex|--qoder|--all [--clean] <target-project-path>
-       init.sh --reset --cursor|--codex [--force] <target-project-path>
+       init.sh --reset --cursor|--codex|--claude [--force] <target-project-path>
 
 Scaffold Goal Architecture Loop Engineering into an existing project.
 A target flag is required.
 
   --opencode   OpenCode  (.opencode/ + AGENTS.md). Invoke /goal
   --cursor     Cursor    (.cursor/ + AGENTS.md). Invoke /goal
-  --claude     Claude Code (.claude/ + CLAUDE.md). Invoke /goal
+  --claude     Claude Code (.claude/ incl. skills + CLAUDE.md). Invoke /goal
   --codex      Codex     (.codex/ + .agents/skills/ + AGENTS.md). Invoke \$goal
   --qoder      Qoder     (.qoder/ + AGENTS.md). Invoke /goal-arch
   --all        All five targets
   --clean      Remove the selected target(s) from a project
-  --reset      Fresh runtime for one platform (cursor or codex), then reinstall
-               its scripts. Keeps that platform's config and the other platform.
+  --reset      Fresh runtime for one platform (cursor, codex or claude), then reinstall
+               its scripts. Keeps that platform's config and the other platforms.
   --force      With --reset, discard uncommitted worktree changes
 
 Examples:
@@ -110,8 +110,8 @@ parse_args() {
     exit 1
   fi
   if [ "$RESET_MODE" = true ]; then
-    if [ ${#TARGETS[@]} -ne 1 ] || { [ "${TARGETS[0]}" != cursor ] && [ "${TARGETS[0]}" != codex ]; }; then
-      err "--reset requires exactly one of --cursor or --codex"
+    if [ ${#TARGETS[@]} -ne 1 ] || { [ "${TARGETS[0]}" != cursor ] && [ "${TARGETS[0]}" != codex ] && [ "${TARGETS[0]}" != claude ]; }; then
+      err "--reset requires exactly one of --cursor, --codex or --claude"
       exit 1
     fi
   fi
@@ -181,7 +181,18 @@ install_target() {
 
   log "Installing $name into: $dest"
 
+  # Keep the project's own .claude/settings.json; the template adds hooks/permissions.
+  local prev_settings=""
+  if [ "$name" = claude ] && [ -f "$dest/.claude/settings.json" ]; then
+    prev_settings="$(mktemp)"
+    cp "$dest/.claude/settings.json" "$prev_settings"
+  fi
+
   cp -R "$tree/$dir" "$dest/"
+  if [ -n "$prev_settings" ]; then
+    merge_claude_settings "$prev_settings" "$dest/.claude/settings.json"
+    rm -f "$prev_settings"
+  fi
   if [ -d "$tree/.agents" ]; then
     mkdir -p "$dest/.agents/skills"
     cp -R "$tree/.agents/skills/." "$dest/.agents/skills/"
@@ -209,6 +220,9 @@ install_target() {
         log "Removed obsolete $dir/agents/qa.md"
       fi
       ;;
+    claude)
+      disable_legacy_claude_files "$dest"
+      ;;
   esac
 
   # Strip retired qa_mode from an existing project config (created by /init-goal).
@@ -221,15 +235,58 @@ install_target() {
   fi
 }
 
+# The OpenCode-derived Claude template shipped commands/{goal,init-goal,init-skills}.md
+# and an orchestrator agent. Skills now provide the same slash names, and subagents
+# cannot spawn subagents, so the old pieces would shadow or break /goal.
+disable_legacy_claude_files() {
+  local dest="$1" cmd legacy backup n
+  for cmd in goal init-goal init-skills; do
+    legacy="$dest/.claude/commands/$cmd.md"
+    [ -f "$legacy" ] && grep -q '^agent: orchestrator' "$legacy" || continue
+    backup="$legacy.disabled"; n=1
+    while [ -e "$backup" ]; do backup="$legacy.disabled.$n"; n=$((n + 1)); done
+    mv "$legacy" "$backup"
+    log "Disabled legacy Claude command $cmd (recoverable at $backup)"
+  done
+  legacy="$dest/.claude/agents/orchestrator.md"
+  if [ -f "$legacy" ] && grep -q 'Goal-loop orchestrator' "$legacy"; then
+    backup="$legacy.disabled"; n=1
+    while [ -e "$backup" ]; do backup="$legacy.disabled.$n"; n=$((n + 1)); done
+    mv "$legacy" "$backup"
+    log "Disabled legacy Claude orchestrator (recoverable at $backup)"
+  fi
+}
+
+# Merge the template's hooks/permissions into the project's existing settings.json.
+# Existing keys win; goal-git.sh hook entries are replaced, never duplicated.
+merge_claude_settings() {
+  local previous="$1" target="$2"
+  command -v jq >/dev/null 2>&1 || { warn "jq required to merge .claude/settings.json; kept template settings (backup: $previous)"; return; }
+  if jq -s '
+    .[0] as $e | .[1] as $t
+    | $e
+    | .permissions = (($t.permissions // {}) * ($e.permissions // {}))
+    | .hooks = (reduce (($t.hooks // {}) | keys[]) as $k (($e.hooks // {});
+        .[$k] = (((.[$k] // []) | map(select((([.hooks[]?.command] | any(test("goal-git.sh harness"))) | not)))) + $t.hooks[$k])))
+  ' "$previous" "$target" > "$target.merged" 2>/dev/null; then
+    mv "$target.merged" "$target"
+    log "Merged goal-loop hooks into existing .claude/settings.json"
+  else
+    rm -f "$target.merged"
+    cp "$previous" "$target.user-backup"
+    warn "Could not merge existing .claude/settings.json; kept template (your file: $target.user-backup)"
+  fi
+}
+
 # Fresh runtime for one platform, then reinstall its templates.
-# Shared state.json is filtered to that platform's goals. The other platform,
+# Shared state.json is filtered to that platform's goals. The other platforms,
 # goal-config.json, figma.env, and mcp.json stay. A customized goal-models.json
 # is copied to goal-models.json.bak before the template overwrites it.
-# AGENTS.md is left in place when the other platform is still installed,
-# because both platforms share that file.
+# AGENTS.md is left in place when another AGENTS.md platform is still installed,
+# because those platforms share that file.
 reinstall_for_reset() {
   local name="$1" dest="$2"
-  local dir other root_doc models template_models helper saved=""
+  local dir other root_doc models template_models helper saved="" kept_other=""
   dir="$(agent_dir "$name")"
   [ -d "$dest/$dir/scripts" ] || {
     err "No $name install in $dest. Run ./init.sh --$name $dest first."
@@ -242,10 +299,15 @@ reinstall_for_reset() {
     log "Backed up customized goal-models.json to $models.bak"
   fi
 
-  other="codex"
-  [ "$name" = "codex" ] && other="cursor"
+  # The root doc (AGENTS.md) is shared by every platform except Claude (CLAUDE.md).
   root_doc="$(agent_root_doc "$name")"
-  if [ -f "$dest/$root_doc" ] && [ -d "$dest/$(agent_dir "$other")" ]; then
+  for other in "${ALL_AGENTS[@]}"; do
+    [ "$other" != "$name" ] || continue
+    [ "$(agent_root_doc "$other")" = "$root_doc" ] || continue
+    [ -d "$dest/$(agent_dir "$other")" ] || continue
+    kept_other="${kept_other:+$kept_other, }$other"
+  done
+  if [ -f "$dest/$root_doc" ] && [ -n "$kept_other" ]; then
     saved="$(mktemp)"
     cp "$dest/$root_doc" "$saved"
   fi
@@ -257,7 +319,7 @@ reinstall_for_reset() {
   if [ -n "$saved" ]; then
     cp "$saved" "$dest/$root_doc"
     rm -f "$saved"
-    log "Kept existing $root_doc ($other is still installed)"
+    log "Kept existing $root_doc ($kept_other still installed)"
   fi
 
   helper="$dest/$dir/scripts/goal-git.sh"
@@ -384,7 +446,7 @@ migrate_cursor_assets() {
 
 is_vision_model() {
   local model="$1"
-  echo "$model" | grep -qiE 'mimo|gpt-4o|gpt-4\.1|gpt-5|claude.*sonnet|sonnet|gemini.*(pro|flash|vision)|llava|qwen|kimi|glm|cantus|minimax|performance|ultimate|auto|inherit'
+  echo "$model" | grep -qiE 'mimo|gpt-4o|gpt-4\.1|gpt-5|claude.*sonnet|sonnet|opus|haiku|gemini.*(pro|flash|vision)|llava|qwen|kimi|glm|cantus|minimax|performance|ultimate|auto|inherit'
 }
 
 validate_multimodal_models() {
@@ -614,7 +676,8 @@ sync_agent_models() {
         continue
       fi
       sync_agent_frontmatter_key "$agent_file" model "$model"
-      if [ -n "$readonly" ]; then
+      # Claude agents restrict writes through their `tools:` list, not a readonly key.
+      if [ -n "$readonly" ] && [ "$name" != claude ]; then
         local readonly_bool
         readonly_bool=$( [ "$readonly" = "true" ] && echo true || echo false )
         sync_agent_frontmatter_key "$agent_file" readonly "$readonly_bool"
@@ -781,6 +844,7 @@ gitignore_entries_for() {
       echo ".agents/skills/init-goal/"
       echo ".agents/skills/init-skills/"
       echo ".agents/skills/goal-loop/"
+      echo ".agents/skills/create-issues/"
       echo "AGENTS.md"
       ;;
     qoder)
@@ -857,7 +921,7 @@ cmd_clean() {
     fi
     if [ "$name" = "codex" ]; then
       local skill
-      for skill in goal init-goal init-skills goal-loop; do
+      for skill in goal init-goal init-skills goal-loop create-issues; do
         if [ -d "$dest/.agents/skills/$skill" ]; then
           rm -rf "$dest/.agents/skills/$skill"
           log "Removed .agents/skills/$skill/"
@@ -1014,16 +1078,18 @@ print_tree() {
       echo "├── CLAUDE.md           (gitignored)"
       echo "├── .mcp.json           (Figma MCP, created by /init-goal)"
       echo "└── .claude/            (gitignored)"
-      echo "    ├── agents/         (6 specialized agents)"
-      echo "    ├── commands/       (/goal, /init-goal, /init-skills)"
-      echo "    ├── scripts/        (goal-git.sh, run-claude.sh)"
-      echo "    ├── skills/goal-loop/"
+      echo "    ├── agents/         (6 specialized workers, Markdown; MAIN coordinates)"
+      echo "    ├── skills/         (/goal, /init-goal, /init-skills, /create-issues, goal-loop)"
+      echo "    ├── scripts/        (shared harness modules with Codex/Cursor: goal-git.sh, goal-context.sh,"
+      echo "    │                    goal-delegation.sh, goal-delivery.sh, goal-evidence.sh,"
+      echo "    │                    forge.sh, delivery-groups.sh, run-claude.sh)"
+      echo "    ├── settings.json   (SubagentStart/Stop + Stop hooks → harness)"
       echo "    └── goal-models.json"
       ;;
     codex)
       echo "├── state.json          (gitignored, created at runtime; includes harness)"
       echo "├── AGENTS.md           (gitignored)"
-      echo "├── .agents/skills/     (\$goal, \$init-goal, \$init-skills, \$create-issues, goal-loop)"
+      echo "├── .agents/skills/     (\$goal, \$init-goal, \$init-skills, \$create-issues, goal-loop; gitignored)"
       echo "└── .codex/             (gitignored)"
       echo "    ├── agents/         (6 specialized agents, TOML)"
       echo "    ├── scripts/        (goal-git.sh harness/verify/route, run-codex.sh)"
@@ -1097,4 +1163,5 @@ done
 log "Setup complete."
 log "Use '/goal --list' (or '\$goal --list' on Codex) to see all goals. Resume with --continue."
 log "Codex: \$goal --status / harness progress for live milestones; trust project hooks on first run."
+log "Claude Code: approve the project hooks on first launch; /goal runs in the main session (the Stop hook keeps it going until harness done)."
 log "Optionally run /init-skills (or \$init-skills) to inject curated skills from agentic-awesome-skills."

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Public-command integration tests with real local repositories and no network.
-# Usage: AGENT=codex|cursor bash tests/codex/test-goal-context.sh
+# Usage: AGENT=codex|cursor|claude bash tests/codex/test-goal-context.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 AGENT="${AGENT:-${PLATFORM:-codex}}"
 case "$AGENT" in
-  codex|cursor) ;;
+  codex|cursor|claude) ;;
   *)
-    echo "Unknown AGENT=$AGENT (expected codex|cursor)" >&2
+    echo "Unknown AGENT=$AGENT (expected codex|cursor|claude)" >&2
     exit 1
     ;;
 esac
@@ -18,7 +18,8 @@ python3 - "$ROOT" "$AGENT" <<'PY'
 import json, os, pathlib, shutil, subprocess, sys, tempfile
 
 root = pathlib.Path(sys.argv[1]); agent = sys.argv[2]; count = 0
-agent_dir = '.codex' if agent == 'codex' else '.cursor'
+agent_dir = {'codex': '.codex', 'cursor': '.cursor', 'claude': '.claude'}[agent]
+root_doc = 'CLAUDE.md' if agent == 'claude' else 'AGENTS.md'
 src_agent = root / 'templates' / agent / agent_dir
 with tempfile.TemporaryDirectory(prefix=f'{agent}-context-') as tmp:
     tmp = pathlib.Path(tmp); project = tmp/'project with spaces'; project.mkdir()
@@ -29,13 +30,13 @@ with tempfile.TemporaryDirectory(prefix=f'{agent}-context-') as tmp:
     git('config','user.name','Fixture'); git('config','user.email','fixture@example.test')
     git('remote','add','origin',str(remote))
     (project/'README.md').write_text('seed\n')
-    ignore = f'{agent_dir}/\n.agents/\nAGENTS.md\nstate.json\n.worktrees/\n.goal-review/\nbin/\n'
+    ignore = f'{agent_dir}/\n.agents/\n{root_doc}\nstate.json\n.worktrees/\n.goal-review/\nbin/\n'
     (project/'.gitignore').write_text(ignore)
     git('add','.gitignore','README.md'); git('commit','-qm','seed'); git('push','-u','origin','main')
     shutil.copytree(src_agent, project/agent_dir)
     if agent == 'codex':
         shutil.copytree(root/'templates/codex/.agents', project/'.agents')
-    shutil.copy(root/f'templates/{agent}/AGENTS.md', project/'AGENTS.md')
+    shutil.copy(root/f'templates/{agent}/{root_doc}', project/root_doc)
     config = dict(platform='github',goal_source='prompt',target_branch='main',repos=['.'],
                   forge_repo='team/app',review_mode='local',verify_commands=[dict(name='syntax',cmd='git diff --check')])
     config_path=project/agent_dir/'goal-config.json'
@@ -96,11 +97,14 @@ else:raise SystemExit('unexpected forge call '+repr(args))
     check(dirty=='','issue worktree is clean immediately after start --worktree')
     exclude=(project/'.git/info/exclude').read_text()
     check(f'{agent_dir}/' in exclude and 'goal-workflow excludes' in exclude,'shared info/exclude installed for worktrees')
-    other = '.cursor' if agent == 'codex' else '.codex'
-    (project/other).mkdir(exist_ok=True)
+    for other in ('.codex', '.cursor'):
+        (project/other).mkdir(exist_ok=True)
+    if agent != 'claude':
+        (project/'.claude'/'scripts').mkdir(parents=True, exist_ok=True)
+        (project/'.claude'/'scripts'/'goal-git.sh').write_text('#!/usr/bin/env bash\n')
     run('worktree','sync',str(project),selectors=selected)
     exclude=(project/'.git/info/exclude').read_text()
-    check('.codex/' in exclude and '.cursor/' in exclude,'exclude block lists every installed platform')
+    check('.codex/' in exclude and '.cursor/' in exclude and '.claude/' in exclude and 'CLAUDE.md' in exclude,'exclude block lists every installed platform')
     context=json.loads(run('context',selectors=selected).stdout)
     check(context['TARGET_WORKTREE']==str(wt) and context['WORKFLOW_ROOT']==str(project),'root resolves selected issue worktree')
     check(context['GOAL_GIT']==str(helper),'context always returns the root helper')

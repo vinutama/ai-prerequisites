@@ -40,6 +40,12 @@ confirmed launches only. Missing required Agent/Task capability is a saved
 blocker. One targeted launch retry; `recover-spawn` restores the original phase
 only for launch blockers. Never implement in MAIN.
 
+Run until terminal: keep going until `harness done` exits 0 and delivery is
+recorded, or a blocker is saved with `harness event blocker`. After each worker
+returns, record it and take `harness status` `next_action`. Resume with
+`harness reap` then `harness status`. Rework: `harness retry rework`, `harness
+phase REWORK`, `BUILDING`; recover tasks with `task retry|cancel`.
+
 IMPLEMENTATION/ANALYSIS/VERIFICATION are always required. PLAN/REVIEW are
 required except TRIVIAL; VISUAL follows harness requirements. Only `verify run`
 passes VERIFICATION. MAIN records returned Reviewer LGTM as

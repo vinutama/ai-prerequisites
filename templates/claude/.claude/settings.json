@@ -11,5 +11,43 @@
       "WebFetch(*)",
       "Skill(*)"
     ]
+  },
+  "hooks": {
+    "SubagentStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/scripts/goal-git.sh harness hook 2>/dev/null || true",
+            "async": true,
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/scripts/goal-git.sh harness hook 2>/dev/null || true",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/scripts/goal-git.sh harness stop-check 2>/dev/null || true",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
   }
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deterministic tests for create-issues helper (no real forge calls).
-# Usage: AGENT=codex|cursor bash tests/codex/test-create-issues.sh
+# Usage: AGENT=codex|cursor|claude bash tests/codex/test-create-issues.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -12,8 +12,11 @@ case "$AGENT" in
   cursor)
     SCRIPT="$ROOT/templates/cursor/.cursor/skills/create-issues/scripts/create-issues.sh"
     ;;
+  claude)
+    SCRIPT="$ROOT/templates/claude/.claude/skills/create-issues/scripts/create-issues.sh"
+    ;;
   *)
-    echo "Unknown AGENT=$AGENT (expected codex|cursor)" >&2
+    echo "Unknown AGENT=$AGENT (expected codex|cursor|claude)" >&2
     exit 1
     ;;
 esac

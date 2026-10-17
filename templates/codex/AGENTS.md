@@ -50,6 +50,14 @@ Commit → analyze → `verify run` → review/visual. Evidence is SHA-bound.
 `pr draft` then `pr --title <conventional ≤72> --body-file <edited>`.
 Title form: `feat(scope): subject` (subject not Capitalized). Empty diff stops delivery.
 
+## Run until terminal
+
+Keep going until `harness done` exits 0 and delivery is recorded, or save a blocker
+with `harness event blocker "<reason>"`. After each worker returns: `spawn-finish`,
+record the result, then `harness status` and take its `next_action`. Resume with
+`harness reap` then `harness status`. Helper errors carry a `corrective_action`;
+stop only for authentication/permission errors or a missing delegation capability.
+
 ## Roles
 
 | Role | Responsibility |

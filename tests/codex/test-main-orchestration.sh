@@ -76,7 +76,7 @@ export ORCHESTRATION_TRACE="$TEST_ROOT/lifecycle.trace"
 cat > "$TEST_ROOT/bin/npx" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-[ "$*" = '--yes gitnexus@latest analyze' ] || exit 97
+case "$*" in '--yes gitnexus@'*' analyze') ;; *) exit 97 ;; esac
 printf '%s\n' analyze >> "$ORCHESTRATION_TRACE"
 bash -n implementation.sh
 bash -n verify-fixture.sh

@@ -31,6 +31,18 @@ optional pins in `.cursor/goal-models.json`). Resolve
 `inherit` (or the resolved catalog model) into `harness spawn`. Do not invent a
 per-spawn model override beyond what Cursor Agent/Task accepts.
 
+## Run until terminal
+
+Do not end the turn until `harness done` exits 0 and delivery is recorded
+(`state complete` / `issues finish`), or a blocker is saved with
+`"$GOAL_GIT" harness event blocker "<reason>"`. After every worker returns:
+`spawn-finish`, record its result, then run `harness status` and take its
+`next_action`. Every helper error carries a `corrective_action`: run it. Stop only
+for authentication/permission errors or a missing delegation capability.
+On resume run `harness reap` first, then `harness status`. An interrupted Agent/Task call
+(closed window, killed session) leaves its reservation held: `harness reap` releases it
+and returns its task to PENDING for a fresh launch.
+
 ## Dispatch
 
 Parse text after `/goal` before mutations.

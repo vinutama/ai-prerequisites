@@ -23,5 +23,6 @@ export GOAL_GROUP=<id>   # with all other selectors
 No aggregation PR. Evidence is per-group SHA. Context mismatch stops before edits.
 `worktree add` is not used for groups. One Builder per group checkout.
 
-On continue: restore `GOAL_GROUP` + identities; reuse current-SHA evidence.
+On continue: restore `GOAL_GROUP` + identities; `harness reap`, then `harness status`
+(`next_action`); reuse current-SHA evidence.
 Root `state complete` waits for every required group merged/completed/cancelled.

@@ -21,6 +21,13 @@ Markdown drafts are not accepted plans. Planner must emit routing, tasks,
 3. Builder stages only; MAIN records DONE/BLOCKED/FAILED
 4. Expert only after Builder attempt + real `verify run` FAIL (or serious architectural review defect)
 
+## Reconcile task worktrees
+
+Builders only stage; MAIN commits and reconciles. For `worktree add tN` tasks: commit
+the task's staged work in its worktree, then from the goal checkout
+`worktree merge tN`. On conflict resolve + `stage` + `commit` and re-run, or
+`worktree merge tN --abort` and rework the overlap. Then continue below.
+
 ## Commit → analyze → verify
 
 1. Reconcile/stage → `commit <message>` (invalidates SHA evidence)
@@ -37,6 +44,15 @@ Markdown drafts are not accepted plans. Planner must emit routing, tasks,
 - Visual when requirements say so; record with `harness visual add`
 - Findings → rework → fresh Builder → commit → analyze → verify → fresh review
 
+## Rework
+
+1. `harness retry rework` (fails past `max_rework`: ask the user, then `harness limit set max_rework <n>`)
+2. `harness phase REWORK` — legal from VERIFYING, REVIEWING, VISUAL_REVIEW, DONE (late finding) and FAILED
+3. `harness phase BUILDING`, then `harness task add builder <fix title>` or `harness task retry tN`
+4. Launch → confirm → finish → commit → analyze → verify → fresh review
+5. Builder/reviewer spawn caps grow automatically within `max_rework`; other caps: `harness budget set <key> <n>`.
+   Drop an obsolete task with `harness task cancel tN`.
+
 ## Finish
 
 1. `harness done` exit 0
@@ -46,5 +62,7 @@ Markdown drafts are not accepted plans. Planner must emit routing, tasks,
 
 ## Resume
 
-Restore selectors and source. Wait/close existing workers before duplicating launches.
+Restore selectors and source. `harness reap` first (releases reservations left by a
+dead session; their tasks become PENDING), then `harness status` and follow
+`next_action`. Wait/close live workers before duplicating launches.
 `harness recover-spawn` only for launch blockers. Reuse branches/PRs/worktrees.

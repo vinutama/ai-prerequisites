@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deterministic tests for Markdown multi-PR delivery groups.
-# Usage: AGENT=codex|cursor bash tests/codex/test-delivery-groups.sh
+# Usage: AGENT=codex|cursor|claude bash tests/codex/test-delivery-groups.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -20,8 +20,15 @@ case "$AGENT" in
     AGENT_DIR=".cursor"
     AGENTS_GLOB="*.md"
     ;;
+  claude)
+    SRC_SCRIPTS="$ROOT/templates/claude/.claude/scripts"
+    SRC_AGENTS="$ROOT/templates/claude/.claude/agents"
+    SRC_MODELS="$ROOT/templates/claude/.claude/goal-models.json"
+    AGENT_DIR=".claude"
+    AGENTS_GLOB="*.md"
+    ;;
   *)
-    echo "Unknown AGENT=$AGENT (expected codex|cursor)" >&2
+    echo "Unknown AGENT=$AGENT (expected codex|cursor|claude)" >&2
     exit 1
     ;;
 esac

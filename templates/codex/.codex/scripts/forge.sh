@@ -19,7 +19,7 @@ forge_cache_dir() {
       FORGE_CACHE_DIR="$PROJECT_ROOT/${AGENT_CONFIG_DIR:-.codex}/cache/forge"
     else
       # Stable even when the first call happens inside command substitution.
-      FORGE_CACHE_DIR="${TMPDIR:-/tmp}/codex-forge-${UID}"
+      FORGE_CACHE_DIR="${TMPDIR:-/tmp}/goal-forge-${UID}"
     fi
   fi
   (umask 077; mkdir -p "$FORGE_CACHE_DIR") || return 1
@@ -154,12 +154,22 @@ forge_run() {
   blocker="$FORGE_CACHE_DIR/blocker-$key.json"
   FORGE_LAST_ERROR_CATEGORY=""
   local attempt=0 rc=0 category retry_after wait_seconds now until_epoch stderr blocker_tmp
+  # Never sleep unattended beyond FORGE_MAX_WAIT (config forge_max_wait, default 120s).
+  local max_wait="${FORGE_MAX_WAIT:-120}"
+  case "$max_wait" in ''|*[!0-9]*) max_wait=120 ;; esac
   while :; do
     now=$(date +%s)
     if [ -f "$blocker" ]; then
       until_epoch=$(jq -r '.until // 0' "$blocker") || return 1
       if [ "$until_epoch" -gt "$now" ]; then
         wait_seconds=$((until_epoch - now))
+        if [ "$wait_seconds" -gt "$max_wait" ] && [ -z "${FORGE_RETRY_WAIT_OVERRIDE:-}" ]; then
+          FORGE_LAST_ERROR_CATEGORY=rate_limited
+          jq -cn --argjson wait "$wait_seconds" --argjson max "$max_wait" \
+            '{forge_error:{category:"rate_limited",message:("Forge rate limit blocks calls for " + ($wait|tostring) + "s (limit " + ($max|tostring) + "s)"),
+              retryable:true,corrective_action:"Do other independent work or run goal-git.sh harness event blocker rate_limited, then retry this command after the wait; raise config forge_max_wait only if waiting is acceptable"}}' >&2
+          return 1
+        fi
         sleep "${FORGE_RETRY_WAIT_OVERRIDE:-$wait_seconds}" || return 1
       fi
     fi
@@ -170,7 +180,7 @@ forge_run() {
     env GH_PROMPT_DISABLED=1 GH_BROWSER=false BROWSER=false GLAB_BROWSER=false \
       GLAB_CHECK_UPDATE=false CI=true "$executable" "$@" </dev/null 2>"$stderr" || rc=$?
     cat "$stderr" >&2
-    if [ "$rc" -eq 0 ]; then rm -f "$stderr"; return 0; fi
+    if [ "$rc" -eq 0 ]; then rm -f "$stderr" "$FORGE_CACHE_DIR/auth-error.json"; return 0; fi
     category=unknown
     if grep -Eiq 'rate.?limit|HTTP 429|status.?429|retry-after' "$stderr"; then category=rate_limit
     elif grep -Eiq 'HTTP 401|status.?401|authentication|not logged|auth login|invalid.*token' "$stderr"; then category=auth
@@ -201,16 +211,28 @@ forge_run() {
       mv "$blocker_tmp" "$blocker" || return 1
     fi
     FORGE_LAST_ERROR_CATEGORY="$category"
+    case "$category" in
+      auth|permission)
+        # Marker for the Claude Stop hook: authentication needs a human, so stopping is legitimate.
+        jq -cn --arg category "$category" --arg cli "$cli" --argjson at "$now" '{category:$category,cli:$cli,at:$at}' > "$FORGE_CACHE_DIR/auth-error.json" 2>/dev/null || true ;;
+    esac
+    if [ "$category" = rate_limit ] && [ "$retry_after" -gt "$max_wait" ] && [ -z "${FORGE_RETRY_WAIT_OVERRIDE:-}" ]; then
+      jq -cn --arg cli "$cli" --argjson retry_after "$retry_after" --argjson max "$max_wait" \
+        '{forge_error:{category:"rate_limited",message:($cli + " Retry-After " + ($retry_after|tostring) + "s exceeds the " + ($max|tostring) + "s limit; blocker saved"),
+          retryable:true,corrective_action:"Continue with other independent work, then retry after the saved Retry-After window; raise config forge_max_wait only if waiting is acceptable"}}' >&2
+      rm -f "$stderr"
+      return "$rc"
+    fi
     jq -cn --arg category "$category" --arg mode "$mode" --arg cli "$cli" \
       --argjson exit_code "$rc" --argjson attempt "$((attempt + 1))" --argjson retry_after "$retry_after" \
       '{forge_error:{category:$category,mode:$mode,cli:$cli,exit_code:$exit_code,attempt:$attempt,retry_after:$retry_after,
         retryable:($mode=="read" and ($category=="transient" or $category=="timeout" or $category=="rate_limit")),
         corrective_action:(if $category=="auth" then ($cli+" auth status; ask the user to authenticate locally")
-          elif $category=="permission" then "Check repository membership and token scopes; preserve state and stop"
+          elif $category=="permission" then "Check repository membership and token scopes; this needs the user, so save state, record a blocker (goal-git.sh harness event blocker permission) and stop"
           elif $category=="capability" then ($cli+" <command> --help; update the helper for installed capabilities")
-          elif $category=="rate_limit" then "Resume after Retry-After; the blocker is saved"
+          elif $category=="rate_limit" then "Wait for Retry-After (the blocker is saved) or do other independent work, then retry the same command"
           elif $mode=="write" then "Reconcile the exact remote object before any retry; never use browser fallback"
-          else "Run goal-git.sh doctor --json with the same assignment" end)}}'  >&2
+          else "Run goal-git.sh doctor --json with the same assignment, fix the named cause, then retry" end)}}'  >&2
     rm -f "$stderr"
     [ "$mode" = read ] && [ "$attempt" -lt 2 ] || return "$rc"
     case "$category" in transient|timeout|rate_limit) ;; *) return "$rc" ;; esac
@@ -382,7 +404,7 @@ forge_pr_upsert() {
   pending="$FORGE_CACHE_DIR/create-$key.pending"
   if [ "$before" = null ]; then
     mkdir "$pending" 2>/dev/null || {
-      forge_error uncertain "A previous create for this repository/head/base is unresolved; preserve its ledger and reconcile before retrying"; return 1;
+      forge_error uncertain "A previous create for this repository/head/base is unresolved; run goal-git.sh forge pending clear --reconcile (adopts an existing PR/MR or clears the ledger), then retry pr"; return 1;
     }
     jq -cn --arg repo "$repo" --arg head "$branch" --arg base "$base" --arg title "$title"       '{operation:"create",repo:$repo,head:$head,base:$base,title:$title,state:"pending"}' > "$pending/operation.json" || return 1
   fi
@@ -404,6 +426,38 @@ forge_pr_upsert() {
   # For updates, the old request's existence does not prove title/body applied.
   [ "$before" != null ] || return 0
   return "$rc"
+}
+
+# Unresolved create ledgers (create-*.pending) block later creates on purpose.
+# Lists them; with clear, removes each. With reconcile, first looks up an
+# existing open request for the recorded head/base: found means it is adopted
+# (the next `pr` run upserts it), absent means the create never happened.
+# A lookup that cannot decide (uncertain) keeps the ledger.
+forge_pending_clear() {
+  local platform="${1:-}" mode="${2:-clear}" dir op repo head base meta kept=0 cleared=0 state
+  forge_cache_dir || return 1
+  for dir in "$FORGE_CACHE_DIR"/create-*.pending; do
+    [ -d "$dir" ] || continue
+    op="$dir/operation.json"
+    repo=$(jq -r '.repo // empty' "$op" 2>/dev/null || true)
+    head=$(jq -r '.head // empty' "$op" 2>/dev/null || true)
+    base=$(jq -r '.base // empty' "$op" 2>/dev/null || true)
+    state=removed
+    if [ "$mode" = reconcile ] && [ -n "$repo" ] && [ -n "$head" ] && [ -n "$base" ]; then
+      if meta=$(forge_pr_metadata "$platform" "$repo" "$head" "$base" 2>/dev/null); then
+        [ "$meta" = null ] || state="adopted $(jq -r '.url' <<< "$meta")"
+      else
+        kept=$((kept + 1))
+        jq -cn --arg dir "$dir" --arg head "$head" '{pending:$dir,head:$head,result:"kept",reason:"lookup uncertain; retry later"}'
+        continue
+      fi
+    fi
+    rm -rf "$dir"
+    cleared=$((cleared + 1))
+    jq -cn --arg head "$head" --arg state "$state" '{head:$head,result:$state}'
+  done
+  jq -cn --argjson cleared "$cleared" --argjson kept "$kept" '{cleared:$cleared,kept:$kept}'
+  [ "$kept" -eq 0 ]
 }
 
 # Safe inventory, usable without goal-config.json or PROJECT_ROOT. Auth output

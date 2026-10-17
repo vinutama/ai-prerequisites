@@ -1,15 +1,114 @@
 {
-  "orchestrator": {
-    "model": "sonnet",
-    "capabilities": {
-      "multimodal": false,
-      "modalities": {
-        "input": [
-          "text"
-        ],
-        "output": [
-          "text"
-        ]
+  "$capabilities": {
+    "vision_models": [
+      "sonnet",
+      "opus"
+    ]
+  },
+  "$routing": {
+    "planner": {
+      "TRIVIAL": null,
+      "NORMAL": {
+        "model": "sonnet",
+        "effort": "medium"
+      },
+      "COMPLEX": {
+        "model": "opus",
+        "effort": "high"
+      },
+      "ARCHITECTURAL": {
+        "model": "opus",
+        "effort": "high"
+      }
+    },
+    "builder": {
+      "TRIVIAL": {
+        "model": "sonnet",
+        "effort": "low"
+      },
+      "NORMAL": {
+        "model": "sonnet",
+        "effort": "medium"
+      },
+      "COMPLEX": {
+        "model": "opus",
+        "effort": "high"
+      },
+      "ARCHITECTURAL": {
+        "model": "opus",
+        "effort": "high"
+      }
+    },
+    "reviewer": {
+      "TRIVIAL": {
+        "model": "sonnet",
+        "effort": "low"
+      },
+      "NORMAL": {
+        "model": "sonnet",
+        "effort": "medium"
+      },
+      "COMPLEX": {
+        "model": "opus",
+        "effort": "high"
+      },
+      "ARCHITECTURAL": {
+        "model": "opus",
+        "effort": "high"
+      }
+    },
+    "researcher": {
+      "TRIVIAL": {
+        "model": "sonnet",
+        "effort": "low"
+      },
+      "NORMAL": {
+        "model": "sonnet",
+        "effort": "medium"
+      },
+      "COMPLEX": {
+        "model": "opus",
+        "effort": "high"
+      },
+      "ARCHITECTURAL": {
+        "model": "opus",
+        "effort": "high"
+      }
+    },
+    "builder-expert": {
+      "TRIVIAL": {
+        "model": "opus",
+        "effort": "high"
+      },
+      "NORMAL": {
+        "model": "opus",
+        "effort": "high"
+      },
+      "COMPLEX": {
+        "model": "opus",
+        "effort": "high"
+      },
+      "ARCHITECTURAL": {
+        "model": "opus",
+        "effort": "high"
+      }
+    },
+    "visual-reviewer": {
+      "TRIVIAL": {
+        "model": "sonnet",
+        "effort": "low"
+      },
+      "NORMAL": {
+        "model": "sonnet",
+        "effort": "medium"
+      },
+      "COMPLEX": {
+        "model": "opus",
+        "effort": "high"
+      },
+      "ARCHITECTURAL": {
+        "model": "opus",
+        "effort": "high"
       }
     }
   },
@@ -41,7 +140,7 @@
       }
     }
   },
-  "builder-expert": {
+  "reviewer": {
     "model": "opus",
     "capabilities": {
       "multimodal": false,
@@ -55,7 +154,21 @@
       }
     }
   },
-  "reviewer": {
+  "researcher": {
+    "model": "sonnet",
+    "capabilities": {
+      "multimodal": false,
+      "modalities": {
+        "input": [
+          "text"
+        ],
+        "output": [
+          "text"
+        ]
+      }
+    }
+  },
+  "builder-expert": {
     "model": "opus",
     "capabilities": {
       "multimodal": false,

@@ -3,7 +3,7 @@
 ## Recipe
 
 ```bash
-export GOAL_RUN_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"   # or helper generate
+export GOAL_RUN_ID="$("$GOAL_GIT" run-id)"   # fresh run id (uuidgen also works)
 # resolve URL/count from args or config
 "$GOAL_GIT" issues list <url> <count>
 # for each ready issue in a parallel batch:
@@ -49,7 +49,7 @@ Workers use root `GOAL_GIT` (`.cursor/scripts/goal-git.sh` via `context --json`)
 + selectors. Shared excludes keep worktrees clean. Serialize state mutations in
 MAIN. Require PR metadata from [commands](commands.md).
 
-On continue: `issues plan show` — if `status` is `planned`, skip re-planning.
+On continue: `harness reap` per issue, then `issues plan show` — if `status` is `planned`, skip re-planning.
 Then `issues queue` + persisted plan; skip completed; reuse worktrees/PRs.
 If parallel Agent/Task delegation is unavailable, run sequentially in isolated
 checkouts. If Agent/Task itself is unavailable, save/stop — never implement in MAIN.

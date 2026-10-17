@@ -26,10 +26,23 @@ print(('' if host=='github.com' else host+'/')+path if platform=='github' else '
 PY
 }
 
+# Pathspecs that never make a checkout dirty: files rewritten by gitnexus/rtk
+# and build/coverage/screenshot output. Extend with config fingerprint_ignore.
+delivery_pathspecs() {
+  local entry
+  DELIVERY_PATHSPECS=(. ':(exclude)AGENTS.md' ':(exclude)CLAUDE.md' ':(exclude).gitnexus')
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    case "$entry" in /*|*..*|*[\'\"]*) continue ;; esac
+    DELIVERY_PATHSPECS+=(":(exclude,glob)**/$entry/**" ":(exclude,glob)**/$entry")
+  done < <(jq -r '(.fingerprint_ignore // ["coverage","test-results","playwright-report","screenshots",".screenshots"])[]' "$CONFIG_FILE" 2>/dev/null || true)
+}
+
 delivery_clean() {
   local wd="$1"
-  [ -z "$(git -C "$wd" status --porcelain)" ] || {
-    goal_error dirty_checkout "Uncommitted changes remain in $wd" "Stage and commit scoped changes, then verify and review again."; return 1;
+  delivery_pathspecs
+  [ -z "$(git -C "$wd" status --porcelain -- "${DELIVERY_PATHSPECS[@]}")" ] || {
+    goal_error dirty_checkout "Uncommitted changes remain in $wd" "Stage and commit scoped changes (stage <files>, commit), restore stray files with restore <file>, then run verify and review again for the new commit."; return 1;
   }
 }
 
@@ -387,7 +400,8 @@ delivery_require_complete() {
     jq -e --argjson idx "$GOAL_IDX" --arg repo "$repo" --arg sha "$sha" '
       .[$idx] | (if (.repos // [] | length) > 0 then .repos[] | select(.path == $repo) else . end)
       | .delivery.verified_sha == $sha
-    ' "$STATE_FILE" >/dev/null || { goal_error stale_evidence "Delivered SHA differs from the current implementation"; return 1; }
+    ' "$STATE_FILE" >/dev/null || { goal_error stale_evidence "Delivered SHA differs from the current implementation" \
+      "Re-deliver the current commit: goal-git.sh push, then pr --title <conventional> --body-file <file> (pr draft first); then retry"; return 1; }
   done < <(jq -r --argjson idx "$GOAL_IDX" 'if (.[$idx].repos // [] | length) > 0 then .[$idx].repos[].path else "." end' "$STATE_FILE")
 }
 
@@ -416,7 +430,8 @@ harness_require_current_evidence() {
       | (if $multiple then ($h.repo_gates[$repo] // {}) else $h.gates end) as $g
       | all($req[]; $g[.].sha == $sha and $g[.].status == "PASS")
     ' "$STATE_FILE" >/dev/null || {
-      goal_error stale_evidence "Analysis, verification, or review evidence is missing or belongs to another commit in repository $repo"; return 1;
+      goal_error stale_evidence "Analysis, verification, or review evidence is missing or belongs to another commit in repository $repo" \
+        "Refresh evidence on the current commit: goal-git.sh analyze, verify run, then the review (and visual) gates; a new commit invalidates earlier evidence. harness status shows the next step"; return 1;
     }
   done < <(jq -r --argjson idx "$GOAL_IDX" 'if (.[$idx].repos // [] | length) > 0 then .[$idx].repos[].path else "." end' "$STATE_FILE")
 }

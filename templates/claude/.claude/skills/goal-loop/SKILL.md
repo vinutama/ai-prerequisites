@@ -1,204 +1,68 @@
 ---
 name: goal-loop
 description: >-
-  Goal Architecture Loop Engineering — a persistent workflow pattern where an
-  orchestrator agent drives a task through plan → build → analyze → review
-  cycles, looping until the resulting PR has zero unresolved review threads.
-  Uses ponytail full mode for all agents.
+  Goal Architecture Loop Engineering for Claude Code: MAIN coordinates specialized
+  workers through evidence-backed plan, build, verification, review, and
+  conditional visual gates until the PR is clean.
 ---
 
 # Goal Architecture Loop Engineering
 
-## Core Pattern
-```
-/GOAL → PLAN → BUILD → ANALYZE → REVIEW → LOOP (until PR clean)
-```
+Use `/goal` and its relevant references. MAIN directly coordinates workers,
+waits for results, records them serially, and closes completed threads. Builders
+own application edits and staging. MAIN owns workflow state and delivery.
 
-Extra domain skills can be injected project-level via `/init-skills` (from
-[agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills)).
-Optionally also install
-[ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) for
-UI/UX/frontend design intelligence (`uipro init --ai opencode`).
-
-## Rules
-1. **Single source of truth**: `state.json` in the project root (project-level only).
-2. **One tool for git**: all agents route git and state operations through
-   `.claude/scripts/goal-git.sh`. NEVER invoke `git`, `gh`, or `glab` directly.
-3. **Orchestrator never fixes code**: review findings are delegated to `@builder` /
-   `@builder-expert` only; orchestrator has `edit: deny`.
-4. **Analyze before review**: after every code change, run
-   `npx gitnexus analyze && rtk gain`. If either fails, STOP.
-5. **Consensus gate**: PR must have zero unresolved review threads before
-   the loop exits. Reviewers must run `goal-git.sh resolve` (exit 0) for fixed threads before LGTM.
-6. **Skills via OpenCode tool**: agents load installed skills with
-   `skill({ name: "<skill-name>" })` from the native `skill` tool — not `@mentions` or Read on SKILL.md paths.
-7. **Ponytail full**: every agent operates in ponytail full mode — YAGNI
-   first, reuse over rewrite, shortest working diff wins.
-8. **Conventional commits**: all commits use the Conventional Commits format.
-9. **Inline review** (`review_mode: inline`, default): reviewers post comments on the PR/MR and resolve threads
-   when issues are fixed (use GraphQL thread `id` from `threads`; require resolve exit 0);
-   each pass outputs a structured **Review report**.
-9b. **Local review** (`review_mode: local`): no PR during review — reviewers read `diff`, record findings in
-   gitignored `.goal-review/`, orchestrator loops on `review pending`; PR is created only after review is clean.
-   Iteration cap (`review_max_iterations`, default 5) stops runaway loops via `review iterate`.
-10. **Builder handoff**: builders stage changes, pass `analyze`, then emit **Handoff**
-   (`FIXES_COMPLETE` or `BLOCKED`). Orchestrator resumes immediately — no idle wait.
-11. **Visual review for UI**: planner marks `@visual-reviewer` required for UI goals;
-   orchestrator always delegates when plan, Figma, or UI file changes require it.
-12. **UI/UX Pro Max (optional)**: when installed, UI/frontend goals use Figma as visual
-    source of truth if enabled; otherwise persist/reuse `design-system/MASTER.md` via the
-    skill's design-system generator. Builders and visual-reviewer apply the pre-delivery checklist.
-13. **Auto-merge opt-in**: when `auto_merge` is true, orchestrator runs `merge` after
-    clean review; default is manual merge.
-
-## Agent Roles
-| Agent | Role | Access |
-|---|---|---|
-| `orchestrator` | Manages workflow, delegates, runs scripts | Full + task |
-| `planner` | Architecture and implementation plans — tags tasks @builder or @builder-expert | Read-only |
-| `builder` | Routine execution (CRUD, UI, refactors, config, tests) across frontend and backend | Full |
-| `builder-expert` | Complex execution (algorithms, concurrency, security, perf, state machines, distributed coordination) | Full |
-| `reviewer` | Code correctness, security, tests — inline PR comments or local findings | Bash (goal-git.sh only) |
-| `visual-reviewer` | UI quality, accessibility, visuals — inline PR comments or local findings | Bash (goal-git.sh only) |
-
-## Delegation logic
-The planner analyzes task complexity and tags each planned item:
-- `@builder` — standard CRUD, UI, refactors, config, glue code, routine tests.
-- `@builder-expert` — novel algorithms, concurrency, auth/security, perf
-  hot paths, complex state machines, distributed coordination, DB migrations.
-
-The orchestrator reads these tags and delegates to the correct agent.
-
-When `concurrency` > 1, the planner groups independent tasks into concurrency
-batches. The orchestrator creates git worktrees per task, runs builders in
-parallel (capped at `concurrency`), then merges back sequentially.
-
-## State (`state.json`)
-Project-level only — pinned to the project root, never global.
-```json
-[
-  {
-    "goal": "the task objective",
-    "branch": "goal/<slug> | feat/DEL-4123-<slug>",
-    "base_branch": "main",
-    "pr_number": null,
-    "pr_url": "",
-    "status": "in_progress|completed|failed",
-    "run_id": "run-1700000000-12345",
-    "batch": 1,
-    "worktree": ".worktrees/issue-42",
-    "issue": {"number": 42, "url": "https://...", "title": "..."},
-    "repos": [
-      {"path": "repo-name", "pr_number": null, "pr_url": ""}
-    ]
-  }
-]
-```
-The last entry is the active goal. Read via `goal-git.sh state`.
-Branch format: `goal/<slug>` for prompt/markdown; `{task_type}/{ticket}-{slug}` for jira
-(e.g. `feat/DEL-4123-add-health-check`).
-
-**Single-repo:** `repos` field absent or `[{path: ".", ...}]`. Top-level `pr_number`/`pr_url` still present for backward compat.
-
-**Multi-repo:** `repos` array contains {path, pr_number, pr_url} per repo. Top-level `pr_number`/`pr_url` may be absent.
-
-## Config (`.claude/goal-config.json`)
-Project-level only — set via `/init-goal`.
-```json
-{
-  "goal_source": "prompt|markdown|jira|issues",
-  "target_branch": "main",
-  "platform": "github|gitlab",
-  "concurrency": 1,
-  "auto_merge": false,
-  "review_mode": "inline",
-  "review_max_iterations": 5,
-  "issue_list_url": "https://github.com/org/repo/issues",
-  "issue_limit": 3,
-  "repos": ["repo1", "repo2"],
-  "figma_enabled": false,
-  "figma_design_url": "https://www.figma.com/design/...",
-  "figma_file_key": "AbCdEf",
-  "figma_node_id": "1:2"
-}
-```
-`concurrency` = 1 means sequential only. Values > 1 enable parallel builders
-via git worktrees.
-
-`repos` — array of repository paths (relative to PROJECT_ROOT). Absent in single-repo mode (defaults to `["."]`). Set by `/init-goal` repo selection step. Used by `goal-git.sh` to create branches/PRs in all selected repos.
-
-`.worktrees/` — isolated git worktrees for concurrent tasks (gitignored).
-`.goal-review/` — local review findings JSON per goal branch (gitignored; used when `review_mode` is `local`).
-
-Figma PAT is stored separately in `.claude/figma.env` (gitignored). MCP config
-is in project `.mcp.json`. Commands:
-```bash
-.claude/scripts/goal-git.sh figma setup <token>
-.claude/scripts/goal-git.sh figma design set <url>
-.claude/scripts/goal-git.sh figma status
-.claude/scripts/run-opencode.sh   # launch opencode with FIGMA_API_KEY loaded
+```text
+intake snapshot → start → classify → plan? → research? → build
+→ reconcile → commit → analyze → verify → review? → visual?
+→ rework as needed → harness done → local PR/merge
 ```
 
-## Model fallback (`.mcp.json`)
-Project-level — generated by `init.sh` from `goal-models.json`.
-Loads `@razroo/opencode-model-fallback` with per-agent `model` +
-`fallback_models` in `.mcp.json`. Plugin settings in
-`.claude/opencode-model-fallback.json`. On rate limit or API error, the
-plugin tries fallbacks in order.
+Inline PR publication precedes Reviewer; local publication follows a clean
+harness with idempotent review initialization before Reviewer. PR metadata is
+mandatory: short descriptive single-line title ≤72 characters and body file
+preferably with 100–200 words on actual changes/checks/reference. Empty diff stops.
 
-## Model capabilities (`goal-models.json`)
-Single source of truth for per-agent models and input modalities:
+`goal-git.sh` is the sole operational entry. `doctor --json`, `help`, and
+`context --json` provide diagnostics and concrete paths. Carry explicit
+`GOAL_ID`, `GOAL_RUN_ID`, `GOAL_ISSUE`, `GOAL_GROUP`, `GOAL_TASK`, and `GOAL_REPO`
+in every invocation. One root state authority serves isolated worktrees;
+shared `.git/info/exclude` keeps them clean and nothing is copied into them.
+Workers return milestones/tasks/findings instead of writing workflow state.
 
-```json
-{
-  "visual-reviewer": {
-    "preferred_models": ["opencode-go/mimo-v2.5-pro"],
-    "fallback_models": ["opencode/mimo-v2.5-free"],
-    "capabilities": {
-      "multimodal": true,
-      "modalities": { "input": ["text", "image"], "output": ["text"] }
-    }
-  }
-}
-```
+Reserve with `harness spawn`, print the brief with `harness brief`, launch with the
+Agent tool (`subagent_type=<role>`, `prompt="Read and follow your brief: <path>"`;
+subagents cannot spawn subagents, so MAIN launches every worker), then
+`spawn-confirm` with the returned `agentId`; `spawn-fail` releases failed launches.
+After the Agent call returns, `spawn-finish … --closed`. Counters count confirmed
+launches only. Missing required Agent capability is a saved blocker. One targeted
+launch retry; `recover-spawn` restores the original phase only for launch blockers.
+Never implement in MAIN. A Stop hook (`harness stop-check`) blocks ending the turn
+while the goal is unfinished.
 
-Text-only agents set `"multimodal": false` and `"input": ["text"]`.
-`init.sh` syncs `preferred_models[0]` into agent `.md` frontmatter and
-regenerates `.mcp.json`. Only `visual-reviewer` handles image input.
+Run until terminal: keep going until `harness done` exits 0 and delivery is
+recorded, or a blocker is saved with `harness event blocker`. After each worker
+returns, record it and take `harness status` `next_action`. Resume with
+`harness reap` then `harness status`. Rework: `harness retry rework`, `harness
+phase REWORK`, `BUILDING`; recover tasks with `task retry|cancel`.
 
-## Git Helper (`.claude/scripts/goal-git.sh`)
-```bash
-.claude/scripts/goal-git.sh start <goal> [ticket] [task_type]  # create branch (jira: task_type/TICKET-slug)
-.claude/scripts/goal-git.sh continue [id]    # resume active or switch goal (/goal --continue [id] [instruction])
-.claude/scripts/goal-git.sh list             # list all goals
-.claude/scripts/goal-git.sh state            # print active goal JSON
-.claude/scripts/goal-git.sh stage <file>...   # stage specific files
-.claude/scripts/goal-git.sh commit [msg]     # commit staged changes
-.claude/scripts/goal-git.sh push             # push branch to origin
-.claude/scripts/goal-git.sh pr               # create or update PR
-.claude/scripts/goal-git.sh pending          # exit 0 if no unresolved threads
-.claude/scripts/goal-git.sh threads          # list review threads as JSON
-.claude/scripts/goal-git.sh comment <path> <line> <body>  # post inline comment
-.claude/scripts/goal-git.sh resolve <thread-id>  # resolve thread
-.claude/scripts/goal-git.sh review init [repo_path]  # init local findings file
-.claude/scripts/goal-git.sh review add <path> <line> <severity> <body> [repo_path]
-.claude/scripts/goal-git.sh review list [repo_path]  # list local findings JSON
-.claude/scripts/goal-git.sh review resolve <id> [repo_path]
-.claude/scripts/goal-git.sh review pending [repo_path]  # exit 0 if no unresolved findings
-.claude/scripts/goal-git.sh review iterate [repo_path]  # increment iteration (exit 1 if cap exceeded)
-.claude/scripts/goal-git.sh merge            # merge PR/MR (when auto_merge enabled)
-.claude/scripts/goal-git.sh state complete   # mark goal completed
-.claude/scripts/goal-git.sh analyze          # npx gitnexus analyze && rtk gain
-.claude/scripts/goal-git.sh status           # working tree status
-.claude/scripts/goal-git.sh restore <file>   # restore files to HEAD
-.claude/scripts/goal-git.sh diff             # diff against base branch
-.claude/scripts/goal-git.sh config get       # print goal config
-.claude/scripts/goal-git.sh worktree add <slug>    # create isolated worktree
-.claude/scripts/goal-git.sh worktree merge <slug>  # merge into goal branch
-.claude/scripts/goal-git.sh worktree list          # list worktrees
-.claude/scripts/goal-git.sh worktree remove <slug>  # discard worktree
-.claude/scripts/goal-git.sh issues list [url] [limit]  # list open issues from forge URL
-.claude/scripts/goal-git.sh issues start <n> [--worktree]  # start issue goal (branch off base)
-.claude/scripts/goal-git.sh issues queue  # current run's issue entries
-.claude/scripts/goal-git.sh issues finish <n>  # complete issue + remove worktree
-```
+IMPLEMENTATION/ANALYSIS/VERIFICATION are always required. PLAN/REVIEW are
+required except TRIVIAL; VISUAL follows harness requirements. Only `verify run`
+passes VERIFICATION. MAIN records returned Reviewer LGTM as
+`{"verdict":"LGTM","sha":"<commit>"}` under `review_verdict`. All gate evidence
+belongs to current committed SHA/assignment and is invalidated by rework.
+Never complete before `harness done` exits 0. Only Reviewer/Visual Reviewer
+supply evidence for resolving review findings; MAIN applies it serially.
+
+Models/effort come from helper complexity routing (Claude aliases `sonnet|opus|haiku`; effort is audit-only). Vision requirements stay
+combined with complexity and `--next` filtering. Expert requires prior Builder
+plus real verify FAIL or serious architectural review defect. New Markdown
+`auto`/`task` goals deliver one typed branch/worktree/harness/PR per group;
+legacy/single retains one PR. Issues retain URL/run/repo identity and one PR
+each. Multi-repo checks and delivery remain separate. Auto-merge is opt-in.
+
+CLI failures use helper structured diagnostics. Stop auth/permission blockers
+with a suggested local command. No automatic browser login/upgrades, web or
+`--web` fallback, or ad hoc forge operations. Read-only CLI help/version is
+allowed; CLI docs lookup is maintenance outside active operations. Researcher
+web for unrelated questions and application browser testing remain available.

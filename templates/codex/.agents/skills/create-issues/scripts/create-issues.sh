@@ -3,10 +3,18 @@ set -euo pipefail
 
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPTS_DIR/../../../.." && pwd)"
-CONFIG_FILE="$PROJECT_ROOT/.codex/goal-config.json"
+# The install location selects the platform (Codex skills live under .agents/).
+case "$SCRIPTS_DIR" in
+  */.cursor/skills/create-issues/scripts)
+    AGENT_DIR=.cursor; SKILL_HELP=".cursor/skills/create-issues/SKILL.md"; INIT_GOAL_CMD='/init-goal' ;;
+  */.claude/skills/create-issues/scripts)
+    AGENT_DIR=.claude; SKILL_HELP=".claude/skills/create-issues/SKILL.md"; INIT_GOAL_CMD='/init-goal' ;;
+  *)
+    AGENT_DIR=.codex; SKILL_HELP=".agents/skills/create-issues/SKILL.md"; INIT_GOAL_CMD='$init-goal' ;;
+esac
+CONFIG_FILE="$PROJECT_ROOT/$AGENT_DIR/goal-config.json"
 # Standalone issue creation shares transport/capabilities, not goal orchestration.
-source "$PROJECT_ROOT/.codex/scripts/forge.sh"
-SKILL_HELP=".agents/skills/create-issues/SKILL.md"
+source "$PROJECT_ROOT/$AGENT_DIR/scripts/forge.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -91,7 +99,7 @@ resolve_platform() {
   case "$platform" in
     github|gitlab) echo "$platform" ;;
     unknown)
-      err "Cannot detect platform. Pass --platform github|gitlab, set GOAL_PLATFORM, or run \$init-goal"
+      err "Cannot detect platform. Pass --platform github|gitlab, set GOAL_PLATFORM, or run $INIT_GOAL_CMD"
       exit 1
       ;;
     *)

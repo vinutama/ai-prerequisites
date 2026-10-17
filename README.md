@@ -47,10 +47,30 @@ recoverable `.disabled` backup so Cursor no longer discovers it.
 ```bash
 ./init.sh --claude /path/to/your/project
 cd /path/to/your/project
-claude
+claude                # approve the project hooks on first launch
 /init-goal
 /goal Add a health-check endpoint
+# optional: /create-issues plan.md, /init-skills
 ```
+
+Claude Code `/goal` is a skill (`.claude/skills/goal/`, `disable-model-invocation`) that
+runs the full loop on MAIN, the main session, and launches the six project subagents
+(`.claude/agents/*.md`, listed by `/agents`) directly with the Agent tool. Claude Code
+subagents cannot spawn subagents, so there is no orchestrator. The helper tree under
+`.claude/scripts/` is byte-identical to Codex and Cursor (a parity test enforces it);
+launch uses `models` → `harness spawn` → `harness brief` → Agent tool →
+`spawn-confirm <reservation> <agentId>` → `spawn-finish`. Read-only roles
+(planner, researcher, reviewer, visual-reviewer) have no Write/Edit tools. Re-running
+`init.sh --claude` moves the old OpenCode-derived `commands/{goal,init-goal,init-skills}.md`
+and `agents/orchestrator.md` to recoverable `.disabled` backups and merges the hooks into
+an existing `.claude/settings.json`.
+
+`.claude/settings.json` wires `SubagentStart`/`SubagentStop` to `harness hook` (progress
+events) and `Stop` to `harness stop-check`: a guarded Stop hook that blocks ending the turn
+while the Claude goal is unfinished and feeds back the harness `next_action`. It allows the
+stop after `harness done`, a saved blocker (`harness event blocker "<reason>"`), a forge
+auth error, a FAILED harness with a blocker, long inactivity (`stop_check_window`, 180 min),
+or three blocks without any state change, and it never fails the session.
 
 ### Codex
 ```bash
@@ -249,15 +269,15 @@ Shared across every target: `state.json` (gitignored, project root),
 |---|---|---|
 | OpenCode | `AGENTS.md`, `.opencode/` (agents, commands, skills, scripts), `opencode.json`, `create-issues.sh` | `/goal`, `/create-issues` |
 | Cursor | `AGENTS.md`, `.cursor/` (agents, skills, scripts, harness) | `/goal`, `/create-issues` (skills with `disable-model-invocation`) |
-| Claude Code | `CLAUDE.md`, `.claude/` (agents, commands, skills, scripts) | `/goal` |
+| Claude Code | `CLAUDE.md`, `.claude/` (agents, skills, scripts, `settings.json` hooks), `.mcp.json` (Figma) | `/goal`, `/create-issues` (skills with `disable-model-invocation`) |
 | Codex | `AGENTS.md`, `.codex/` (TOML agents, scripts, `config.toml`), `.agents/skills/` | `$goal`, `$create-issues` |
 | Qoder | `AGENTS.md`, `.qoder/` (agents, commands, skills, scripts), `.qoder/settings.json` (Figma MCP) | `/goal-arch` (not built-in `/goal`) |
 
 Each tree includes core worker agents (`planner`, `builder`, `builder-expert`,
 `reviewer`, `visual-reviewer`), `goal-git.sh`, `goal-models.json`, and the
-`goal-loop` skill. OpenCode, Claude, and Qoder retain an `orchestrator`
-agent; Cursor and Codex use MAIN.
-**Codex** and **Cursor** also ship `researcher`, plus
+`goal-loop` skill. OpenCode and Qoder retain an `orchestrator`
+agent; Claude Code, Cursor and Codex use MAIN.
+**Codex**, **Cursor** and **Claude Code** also ship `researcher`, plus
 `harness` / `verify` / `route` / `groups` on their `goal-git.sh`.
 The harness (not the coordinator's judgment) is the completion authority for
 those targets.
@@ -269,37 +289,39 @@ those targets.
 | `./init.sh --<agent> <path>` | Scaffold the selected agent(s) into a project (single-repo) or parent directory (multi-repo) |
 | `./init.sh --all <path>` | Scaffold all five agents |
 | `./init.sh --clean --<agent> <path>` | Remove that agent's scaffold |
-| `./init.sh --reset --cursor\|--codex <path>` | Fresh runtime for that platform only, then reinstall its scripts |
+| `./init.sh --reset --cursor\|--codex\|--claude <path>` | Fresh runtime for that platform only, then reinstall its scripts |
 | `/init-goal` or `$init-goal` | One-time setup: goal source, target branch, git platform, concurrency, auto_merge, review_mode, repos (multi-repo), optional Figma |
 | `/init-skills` or `$init-skills` | Optional: inject curated skills from agentic-awesome-skills |
 | `/goal <objective>` or `$goal <objective>` | Start a new goal. Use `--source <type>` to override goal_source per invocation |
 | `/goal --issues [url] [count]` or `$goal --issues [url] [count]` | Fetch open issues from a list URL and drive each to its own PR |
 | `/goal --list` or `$goal --list` | List all goals |
 | `/goal --continue [id] [instruction]` | Resume a goal; optional new instruction for this pass |
-| `/create-issues <path.md>` or `$create-issues <path.md>` | Create GitHub/GitLab issues from a markdown epic (one task checkbox under `### Tasks` per issue). OpenCode/Cursor: `/create-issues`. Codex: `$create-issues`. |
+| `/create-issues <path.md>` or `$create-issues <path.md>` | Create GitHub/GitLab issues from a markdown epic (one task checkbox under `### Tasks` per issue). OpenCode/Cursor/Claude Code: `/create-issues`. Codex: `$create-issues`. |
 
 ## Resetting one platform
 
-`state.json`, `.goal-review/`, and `.worktrees/` are shared by Cursor and Codex.
+`state.json`, `.goal-review/`, and `.worktrees/` are shared by Codex, Cursor and Claude Code.
 A reset therefore removes only the goals that belong to the platform you name.
 
 ```bash
 ./init.sh --reset --cursor /path/to/project
 ./init.sh --reset --codex /path/to/project
+./init.sh --reset --claude /path/to/project
 ./init.sh --reset --force --cursor /path/to/project   # discard dirty worktrees
 ```
 
 New goals record `agent_platform`. Older goals are inferred from their spawn
-models: `inherit` belongs to Cursor, any other model name belongs to Codex, and
-a goal with no reservations is kept and listed as unknown.
+models: `inherit` belongs to Cursor, `sonnet`/`opus`/`haiku` to Claude Code, any other
+model name to Codex, and a goal with no reservations is kept and listed as unknown.
 
 Removed for that platform: its goals, their review files and worktrees, and its
 runtime files (`goal-progress.log`, briefs, queue plans, pr drafts, discovery
-context). Kept: the other platform, `goal-config.json`, `figma.env`, `mcp.json`,
+context). Kept: the other platforms, `goal-config.json`, `figma.env`, `mcp.json`,
 and every branch. A customized `goal-models.json` is copied to
 `goal-models.json.bak` before the template copy replaces it. `state.json` is
-backed up under `.<platform>/backups/` first. When the other platform is still
-installed, the shared `AGENTS.md` is left as it is.
+backed up under `.<platform>/backups/` first. When another `AGENTS.md` platform is
+still installed, the shared `AGENTS.md` is left as it is (Claude Code uses its own `CLAUDE.md`).
+A state lock whose process is gone is removed automatically; a live one refuses the reset.
 
 The same filter is `goal-git.sh reset runtime [--force] [--yes]`.
 
@@ -344,7 +366,7 @@ When initialized at a parent directory with multiple git repos:
 3. **Planner** — sees all repos. Produces a unified plan with repo-tagged tasks (`[repo-name]`). Groups into dependency batches.
 4. **Builders** — work in parallel within each batch, across repos. Each builder works in one repo at a time.
 5. **Reviewers** — review each repo's PR independently. Cross-repo consistency checks are part of the review.
-6. **Coordinator** — MAIN on Cursor/Codex (the orchestrator subagent on other targets) coordinates the loop across repos, tracks per-repo state, and reports all PR URLs at the end.
+6. **Coordinator** — MAIN on Claude Code/Cursor/Codex (the orchestrator subagent on other targets) coordinates the loop across repos, tracks per-repo state, and reports all PR URLs at the end.
 
 **Example:**
 ```
@@ -519,26 +541,28 @@ filter: `safe,none`.
 | Agent | Role | OpenCode | Claude | Cursor | Codex | Qoder |
 |---|---|---|---|---|---|---|
 | `planner` | Architecture & plans | `opencode-go/qwen3.7-max` | `opus` | inherit | see `.codex/goal-models.json` `$routing` (read-only) | performance |
-| `researcher` | On-demand research (Codex + Cursor) | — | — | inherit | see `goal-models.json` (read-only) | — |
+| `researcher` | On-demand research (Codex, Cursor, Claude) | — | `sonnet` | inherit | see `goal-models.json` (read-only) | — |
 | `builder` | Routine execution (CRUD, UI, refactors, config, tests) | `opencode-go/deepseek-v4-flash` | `sonnet` | inherit | see `goal-models.json` `$routing` | efficient |
 | `builder-expert` | Complex execution (escalation-only on Codex/Cursor) | `opencode-go/kimi-k2.7-code` | `opus` | inherit | see `goal-models.json` | performance |
 | `reviewer` | Code review + inline PR comments | `opencode-go/deepseek-v4-pro` | `opus` | inherit | see `goal-models.json` `$routing` | performance |
-| Workflow coordinator | Goal-loop manager | `orchestrator` | `orchestrator` | MAIN (`/goal`) | MAIN (`$goal`) | `orchestrator` |
+| Workflow coordinator | Goal-loop manager | `orchestrator` | MAIN (`/goal`) | MAIN (`/goal`) | MAIN (`$goal`) | `orchestrator` |
 | `visual-reviewer` | UI/multimodal review + inline PR comments | `opencode-go/mimo-v2.5-pro` | `sonnet` | inherit | see `goal-models.json` + vision allowlist | inherit |
 
 Every agent operates in `/ponytail full` mode.
 
 ### Delegation
 On most platforms the planner tags every task `@builder` or `@builder-expert`.
-**Codex** and **Cursor** tag implementation tasks `@builder` only; `@builder-expert`
+**Codex**, **Cursor** and **Claude Code** tag implementation tasks `@builder` only; `@builder-expert`
 is an escalation path, and `@researcher` is conditional. Verification
 is deterministic (`goal-git.sh verify run`). `route detect` is only a baseline
 classifier; after planning, the Planner's `### Routing` block (`route`,
 `visual_required`) is authoritative — Visual is not implied by "frontend".
 
-The coordinator delegates automatically (OpenCode `@mentions`, Claude/Qoder
-orchestrator subagent, Cursor MAIN Agent/Task with brief/spawn-confirm
+The coordinator delegates automatically (OpenCode `@mentions`, Qoder
+orchestrator subagent, Claude Code and Cursor MAIN Agent/Task with brief/spawn-confirm
 lifecycle, Codex MAIN delegation using the supported live tool schema).
+Claude Code models are `sonnet|opus|haiku` aliases routed by complexity in
+`.claude/goal-models.json` (`$routing`; effort is recorded for audit only).
 Cursor models default to `inherit`; optional per-role pins live in
 `.cursor/goal-models.json`. Catalog routing feeds `harness spawn` for audit;
 workers follow `harness brief` then Agent/Task.
@@ -550,13 +574,15 @@ The loop is the same. These are the harness limits:
 - **Codex has no slash commands.** Custom prompts were removed in CLI 0.117.0. Use `$goal`.
 - **Codex delegation requires supported live tools.** Inspect role/model/effort capability in the actual launch schema; a version number alone does not prove support. Save/stop if required capability is missing and resume with `$goal --continue`. Never prescribe unsupported `agent_type`/`fork_turns` or implement in MAIN.
 - **Codex `.codex/config.toml` loads only for trusted projects.** `goal-git.sh codex ensure-user-config` writes `trust_level = "trusted"` into `~/.codex/config.toml` without changing an existing global `max_depth`. The project config uses depth 1 because MAIN spawns workers directly. A newly trusted project may need a new Codex session before its config loads; resume with `$goal --continue`.
-- **Codex and Cursor harness** (`harness` / `verify` / `route` / `complexity` / `groups` on `goal-git.sh`) plus `researcher` ship on those targets; Claude/OpenCode/Qoder keep the prior six-agent loop. Both share the same helper module layout under `.codex/scripts/` or `.cursor/scripts/`. Gates are evidence-backed; `analyze` is not part of `verify`. Models: Codex uses `.codex/goal-models.json` `$routing` at spawn; Cursor defaults to `inherit` with optional per-role frontmatter pins (catalog route audits `harness spawn`). TRIVIAL skips Planner; spawn budgets cap runaway loops.
+- **Codex, Cursor and Claude Code harness** (`harness` / `verify` / `route` / `complexity` / `groups` on `goal-git.sh`) plus `researcher` ship on those targets; OpenCode/Qoder keep the prior six-agent loop. All three share the same helper modules under `.codex/scripts/`, `.cursor/scripts/` or `.claude/scripts/`. Gates are evidence-backed; `analyze` is not part of `verify`. Models: Codex uses `.codex/goal-models.json` `$routing` at spawn; Cursor defaults to `inherit` with optional per-role frontmatter pins (catalog route audits `harness spawn`). TRIVIAL skips Planner; spawn budgets cap runaway loops.
 - **Cursor delegation is one level.** `/goal` (MAIN) uses `harness spawn` → `harness brief` → Agent/Task → `spawn-confirm` / `spawn-finish` (or `spawn-fail`). MAIN stays active through all gates. If Cursor withholds the Agent/Task tool, stop with a capability blocker and resume with `/goal --continue`; builders must never spawn subagents.
 - **Codex visual-reviewer** hard-fails rather than downgrading to a text-only model. Vision allowlist is `$capabilities.vision_models` in `goal-models.json` (edit per project).
-- **Codex and Cursor cannot machine-enforce `edit: deny`** on MAIN coordination, `reviewer`, or `visual-reviewer`. MAIN's no-source-edit rule is instruction-enforced. (Claude Code uses a `tools` allowlist; OpenCode uses `permission.edit: deny`.)
+- **Codex and Cursor cannot machine-enforce `edit: deny`** on MAIN coordination, `reviewer`, or `visual-reviewer`. MAIN's no-source-edit rule is instruction-enforced. (OpenCode uses `permission.edit: deny`.) On Claude Code the read-only workers (`planner`, `researcher`, `reviewer`, `visual-reviewer`) are machine-restricted by omitting Write/Edit from their `tools` list; MAIN itself (the main session) still relies on instructions, and the `permissions` in `.claude/settings.json` are permissive (`bypassPermissions`).
 - **Goal-loop installs auto-approve tool prompts** (paths, bash, MCP) on all five targets so agents are not interrupted for permission dialogs. MAIN/planner/reviewer do not edit application source during Cursor/Codex goals.
 - **Model fallback is OpenCode-only** for automatic plugin fallbacks; Codex uses `goal-git.sh models <role> --complexity <LEVEL> --next <failed-model>` at spawn time (vision-filtered for multimodal roles via `$capabilities.vision_models`).
-- **Cursor and Codex have no `$ARGUMENTS` expansion.** Command skills read the text typed after `/goal` or `$goal` from the user message.
+- **Cursor and Codex have no `$ARGUMENTS` expansion.** Command skills read the text typed after `/goal` or `$goal` from the user message. Claude Code skills do expand `$ARGUMENTS`.
+- **Claude Code runs `/goal` on MAIN only.** Subagents cannot spawn subagents, so workers are launched one level deep from the main session. Claude subagents take no per-launch effort; the routed effort is recorded in the spawn reservation for audit.
+- **Stall recovery (all three targets).** Spawn caps for builders/reviewers grow during rework (bounded by `max_rework`), every helper error names a corrective command, FAILED/DONE can re-enter `REWORK`, and `harness reap`, `harness task retry|cancel`, `forge pending clear`, `worktree merge --abort`, `verify run` timeouts (`verify_timeout`) and a capped forge Retry-After wait (`forge_max_wait`) keep a resumed run from wedging.
 - **Installing `--cursor` and `--codex` together** surfaces the goal skills twice in Cursor, because Cursor also scans `.agents/skills/`.
 ## Requirements
 
