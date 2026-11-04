@@ -72,6 +72,12 @@ stop after `harness done`, a saved blocker (`harness event blocker "<reason>"`),
 auth error, a FAILED harness with a blocker, long inactivity (`stop_check_window`, 180 min),
 or three blocks without any state change, and it never fails the session.
 
+Codex and Cursor get the same guard from the same `harness stop-check`:
+`.codex/hooks.json` wires `Stop` (decision `block`; trust it with `/hooks` on first run and
+after hook changes), and `.cursor/hooks.json` wires `stop` (returns `followup_message`, with
+`loop_limit: null` so the guard above is the only limit, and it never resumes a user abort
+or an errored turn). `init.sh --cursor` merges into an existing `.cursor/hooks.json`.
+
 ### Codex
 ```bash
 ./init.sh --codex /path/to/your/project
@@ -291,7 +297,7 @@ those targets.
 | `./init.sh --clean --<agent> <path>` | Remove that agent's scaffold |
 | `./init.sh --reset --cursor\|--codex\|--claude <path>` | Fresh runtime for that platform only, then reinstall its scripts |
 | `/init-goal` or `$init-goal` | One-time setup: goal source, target branch, git platform, concurrency, auto_merge, review_mode, repos (multi-repo), optional Figma |
-| `/init-skills` or `$init-skills` | Optional: inject curated skills from agentic-awesome-skills |
+| `/init-skills` or `$init-skills` | Optional: install role-matched skills from addyosmani/agent-skills (Claude, Codex, Cursor) |
 | `/goal <objective>` or `$goal <objective>` | Start a new goal. Use `--source <type>` to override goal_source per invocation |
 | `/goal --issues [url] [count]` or `$goal --issues [url] [count]` | Fetch open issues from a list URL and drive each to its own PR |
 | `/goal --list` or `$goal --list` | List all goals |
@@ -522,19 +528,26 @@ When configured, `/goal --issues` or bare `/goal` fetches open issues from
 verifies list access with `goal-git.sh issues list <url> 1` before saving.
 
 ### Skill injection (optional)
-Run `/init-skills` to install a filtered subset of
-[agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills)
-into the target's skills directory (project-level, not global). Choose the
-**recommended** preset to install skills that all goal-loop agents look for, or
-pick custom categories. Optionally also install
+Run `/init-skills` (`$init-skills` on Codex) to install the
+[addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) matched to each
+role into the target's skills directory (project-level, not global). This applies to
+Claude Code, Codex and Cursor; OpenCode and Qoder keep their existing `/init-skills`.
+Choose **recommended** for every role's skills, or **custom** to pick roles:
+
+| Role | Skills |
+|---|---|
+| `planner` | `spec-driven-development`, `planning-and-task-breakdown`, `api-and-interface-design`, `documentation-and-adrs` |
+| `researcher` | `source-driven-development`, `documentation-and-adrs`, `security-and-hardening`, `performance-optimization` |
+| `builder` | `incremental-implementation`, `test-driven-development`, `api-and-interface-design`, `frontend-ui-engineering`, `code-simplification` |
+| `builder-expert` | `debugging-and-error-recovery`, `test-driven-development`, `security-and-hardening`, `performance-optimization`, `deprecation-and-migration` |
+| `reviewer` | `code-review-and-quality`, `security-and-hardening`, `performance-optimization`, `code-simplification` |
+| `visual-reviewer` | `browser-testing-with-devtools`, `frontend-ui-engineering` |
+
+Optionally also install
 [ui-ux-pro-max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
 (`npx -y ui-ux-pro-max-cli init --ai opencode|cursor|claude|codex`) for UI/UX
 design intelligence. Each agent loads related skills when present; if absent,
 it proceeds normally. Requires `python3` for design-system generation.
-
-Custom mode categories: `architecture`, `business`, `data-ai`, `development`,
-`general`, `infrastructure`, `security`, `testing`, `workflow`. Default risk
-filter: `safe,none`.
 
 ## Agent roles
 
@@ -594,7 +607,8 @@ Shared:
 - [Atlassian MCP](https://github.com/sooperset/mcp-atlassian) — required only for Jira goal source
 - [RTK](https://github.com/rtk-ai/rtk) (`cargo install rtk`)
 - `jq`, `npx` (Node.js >= 22), `git`
-- [agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills) — optional, via `/init-skills`
+- [agent-skills](https://github.com/addyosmani/agent-skills) — optional, via `/init-skills` (Claude, Codex, Cursor)
+- [agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills) — optional, via `/init-skills` (OpenCode, Qoder)
 
 Per target:
 - **OpenCode**: [OpenCode](https://opencode.ai) with OpenCode Go and Zen credentials; `@razroo/opencode-model-fallback`

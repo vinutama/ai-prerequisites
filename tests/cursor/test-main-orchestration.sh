@@ -13,8 +13,12 @@ git init -q "$PROJECT"
 
 # Re-install must disable, not delete, a previously generated coordinator.
 printf '%s\n' 'custom legacy coordinator content' > "$PROJECT/.cursor/agents/orchestrator.md"
+# The project's own hooks must survive install; the goal stop hook is added exactly once.
+printf '%s\n' '{"version":1,"hooks":{"stop":[{"command":"./user-stop.sh"}],"afterFileEdit":[{"command":"./fmt.sh"}]}}' > "$PROJECT/.cursor/hooks.json"
 bash "$ROOT/init.sh" --cursor "$PROJECT" > "$TEST_ROOT/init.log"
 bash "$ROOT/init.sh" --cursor "$PROJECT" > "$TEST_ROOT/reinit.log"
+jq -e '.version == 1 and .hooks.afterFileEdit[0].command == "./fmt.sh"
+  and ([.hooks.stop[].command] | any(. == "./user-stop.sh") and (map(select(test("harness stop-check"))) | length == 1))' "$PROJECT/.cursor/hooks.json" >/dev/null
 
 test -f "$PROJECT/.cursor/skills/goal/SKILL.md"
 test -f "$PROJECT/.cursor/skills/goal/references/execution.md"

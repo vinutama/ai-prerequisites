@@ -76,3 +76,14 @@ builder_next_step, and remaining unknowns. Include task_id/task_result and
 milestones. FIX status is FIXES_COMPLETE, ANALYSIS_ONLY is ANALYSIS_ONLY,
 and unavailable evidence is BLOCKED. Return control to MAIN/Builder with
 next_action VERIFY|BUILDER_CONTINUE|RESEARCH|BLOCKED.
+
+## Related skills
+Load relevant installed skills with the Skill tool. Skip if unavailable.
+This role's rules and MAIN's gates win over a skill, including who commits and who asks the user.
+
+- `debugging-and-error-recovery` — real verify failures and root-cause work
+- `test-driven-development` — regression tests for fixes
+- `security-and-hardening` — security-sensitive fixes
+- `performance-optimization` — performance and concurrency fixes
+- `deprecation-and-migration` — risky migrations
+- `ui-ux-pro-max` — UI escalations

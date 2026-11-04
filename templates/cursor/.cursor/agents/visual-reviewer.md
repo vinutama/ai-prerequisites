@@ -111,12 +111,12 @@ next_action DONE|REWORK|BLOCKED, artifacts visual_review_report. Never claim
 posted/resolved actions or formal gate passage; MAIN records results.
 
 ## Related skills
-Invoke installed related skills with `/skill-name`. Skip if unavailable.
+Invoke relevant installed skills with `/skill-name`. Skip if unavailable.
+This role's rules and MAIN's gates win over a skill, including who commits and who asks the user.
 
-- `wcag-audit-patterns`
-- `frontend-design`
-- `webapp-testing`
-- `ui-ux-pro-max`
+- `browser-testing-with-devtools` — rendered UI evidence
+- `frontend-ui-engineering` — layout, responsiveness, accessibility
+- `ui-ux-pro-max` — design-system checks
 
 ## Figma / design system (Cursor)
 When `figma_enabled` is true: compare against `figma_design_url` /

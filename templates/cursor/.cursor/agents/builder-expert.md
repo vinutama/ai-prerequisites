@@ -89,16 +89,12 @@ and unavailable evidence is BLOCKED. Return control to MAIN/Builder with
 next_action VERIFY|BUILDER_CONTINUE|RESEARCH|BLOCKED.
 
 ## Related skills
-Invoke only relevant installed skills with `/skill-name`. Skip if unavailable.
+Invoke relevant installed skills with `/skill-name`. Skip if unavailable.
+This role's rules and MAIN's gates win over a skill, including who commits and who asks the user.
 
-Core:
-- `systematic-debugging`
-- `architecture`
-- `test-driven-development`
-- `error-handling-patterns`
-
-Conditional:
-- `lint-and-validate`
-- `api-endpoint-builder`
-- `api-security-best-practices`
+- `debugging-and-error-recovery` — real verify failures and root-cause work
+- `test-driven-development` — regression tests for fixes
+- `security-and-hardening` — security-sensitive fixes
+- `performance-optimization` — performance and concurrency fixes
+- `deprecation-and-migration` — risky migrations
 - `ui-ux-pro-max` — UI escalations

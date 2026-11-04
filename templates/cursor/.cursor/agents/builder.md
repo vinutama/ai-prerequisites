@@ -93,12 +93,14 @@ next_action is VERIFY or BLOCKED; provide precise evidence for any failure.
 Do not request Expert merely for missing tooling, locks, network, or UNKNOWN.
 
 ## Related skills
-Invoke installed related skills with `/skill-name`. Skip if unavailable.
+Invoke relevant installed skills with `/skill-name`. Skip if unavailable.
+This role's rules and MAIN's gates win over a skill, including who commits and who asks the user.
 
-- `test-driven-development` — when behavior needs automated tests
-- `lint-and-validate` — when relevant checks exist
-- `error-handling-patterns` — failure/error paths
-- `api-endpoint-builder` — API/REST endpoint changes
+- `incremental-implementation` — changes touching more than one file
+- `test-driven-development` — behavior needs automated tests
+- `api-and-interface-design` — API/REST endpoint changes
+- `frontend-ui-engineering` — UI/frontend changes
+- `code-simplification` — refactors without behavior change
 - `ui-ux-pro-max` — UI/frontend/visual changes
 
 ## UI (Cursor)

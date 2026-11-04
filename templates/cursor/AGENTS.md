@@ -54,6 +54,14 @@ Title form: `feat(scope): subject` (subject not Capitalized). Empty diff stops d
 
 ## Run until terminal
 
+`.cursor/hooks.json` wires `stop` to `harness stop-check`: while this platform's goal
+is unfinished it resumes the turn with `next_action` as a follow-up message. It never
+resumes a user abort or an errored turn. It allows the stop
+after `harness done`, a saved blocker (`harness event blocker "<reason>"`), a
+forge auth error, a FAILED harness with a blocker, long inactivity
+(`stop_check_window`, default 180 min), or three blocks without any state change.
+It never fails the session.
+
 Keep going until `harness done` exits 0 and delivery is recorded, or save a blocker
 with `harness event blocker "<reason>"`. After each worker returns: `spawn-finish`,
 record the result, then `harness status` and take its `next_action`. Resume with

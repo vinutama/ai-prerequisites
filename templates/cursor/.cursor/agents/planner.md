@@ -140,17 +140,14 @@ deterministic checks, conditional visual acceptance), and delivery_groups
 when applicable. MAIN records all artifacts; planning never means checks passed.
 
 ## Related skills
-Invoke installed related skills with `/skill-name`. Skip if unavailable.
-Do not `@mention` skills or manually read `.cursor/skills/*/SKILL.md`.
+Invoke relevant installed skills with `/skill-name`. Skip if unavailable.
+This role's rules and MAIN's gates win over a skill, including who commits and who asks the user.
 
-Always relevant:
-- `concise-planning` — clear, atomic task breakdown
-- `writing-plans` — structured multi-step plans
-- `architecture` — trade-offs and decision frameworks
-
-Conditional:
-- `brainstorming` — only when requirements/product intent are materially ambiguous
-- `ui-ux-pro-max` — only for UI/frontend/visual work
+- `spec-driven-development` — requirements need a written spec first
+- `planning-and-task-breakdown` — ordered, verifiable tasks
+- `api-and-interface-design` — new APIs or module boundaries
+- `documentation-and-adrs` — architecture decisions worth recording
+- `ui-ux-pro-max` — UI/frontend/visual work
 
 ## UI / visual (Cursor)
 If Figma enabled: use Figma MCP / config URLs as visual source of truth;
