@@ -101,9 +101,10 @@ comments/resolutions were posted by you. MAIN alone stores review_verdict JSON
 {"verdict":"LGTM","sha":"<commit>"} from your actual report.
 
 ## Related skills
-Invoke installed related skills with `/skill-name`. Skip if unavailable.
+Invoke relevant installed skills with `/skill-name`. Skip if unavailable.
+This role's rules and MAIN's gates win over a skill, including who commits and who asks the user.
 
-- `code-review-excellence`
-- `verification-before-completion`
-- `api-security-best-practices`
-- `systematic-debugging`
+- `code-review-and-quality` — every review
+- `security-and-hardening` — input handling, auth, secrets
+- `performance-optimization` — hot paths and queries
+- `code-simplification` — needless complexity

@@ -90,3 +90,12 @@ and ## Milestones. Include ## Agent output status PASS|FAIL|BLOCKED and
 next_action DONE|REWORK|ESCALATE|BLOCKED. Report requested actions, never claim
 comments/resolutions were posted by you. MAIN alone stores review_verdict JSON
 {"verdict":"LGTM","sha":"<commit>"} from your actual report.
+
+## Related skills
+Load relevant installed skills with the Skill tool. Skip if unavailable.
+This role's rules and MAIN's gates win over a skill, including who commits and who asks the user.
+
+- `code-review-and-quality` — every review
+- `security-and-hardening` — input handling, auth, secrets
+- `performance-optimization` — hot paths and queries
+- `code-simplification` — needless complexity

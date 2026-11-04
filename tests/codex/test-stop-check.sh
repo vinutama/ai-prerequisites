@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Claude Stop hook (harness stop-check) block/allow matrix, the consecutive-block
+# Stop hook (harness stop-check) block/allow matrix, the consecutive-block
 # guard, and the SubagentStart/Stop hook handler. Local only.
-# Usage: AGENT=claude|codex|cursor bash tests/codex/test-stop-check.sh  (default claude)
+# Usage: AGENT=claude|codex|cursor bash tests/codex/test-stop-check.sh  (default codex)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-AGENT="${AGENT:-${PLATFORM:-claude}}"
+AGENT="${AGENT:-${PLATFORM:-codex}}"
 case "$AGENT" in
   codex)  AGENT_DIR=.codex;  AGENTS_GLOB='*.toml' ;;
   cursor) AGENT_DIR=.cursor; AGENTS_GLOB='*.md' ;;
@@ -54,9 +54,12 @@ stop() {
   [ "$rc" = 0 ] || die "stop-check must exit 0 (got $rc)"
   cat "$TEST_ROOT/stop.out"
 }
+# Cursor continues through followup_message; Claude and Codex through decision/reason.
+BLOCK_REASON='.reason'; [ "$AGENT" = cursor ] && BLOCK_REASON='.followup_message'
+is_block() { if [ "$AGENT" = cursor ]; then jq -e 'has("decision") | not' >/dev/null; else jq -e '.decision == "block"' >/dev/null; fi; }
 expect_block() {
   local out; out="$(stop "${2:-{\}}")"
-  printf '%s' "$out" | jq -e '.decision == "block" and (.reason | length > 20)' >/dev/null || die "expected block: $1 (got: ${out:-<empty>})"
+  printf '%s' "$out" | is_block && printf '%s' "$out" | jq -e "($BLOCK_REASON | length > 20)" >/dev/null || die "expected block: $1 (got: ${out:-<empty>})"
 }
 expect_allow() {
   local out; out="$(stop "${2:-{\}}")"
@@ -77,9 +80,29 @@ pass "no goal, other platform, no harness, corrupt state: allowed"
 # --- block while unfinished, with the next action -----------------------------------------
 fresh
 out="$(stop '{"hook_event_name":"Stop","stop_hook_active":false}')"
-printf '%s' "$out" | jq -e '.decision == "block" and (.reason | test("Ship the thing")) and (.reason | test("BUILDING")) and (.reason | test("Next:")) and (.reason | test("harness event blocker"))' >/dev/null || die "block payload: $out"
+printf '%s' "$out" | is_block || die "block shape: $out"
+printf '%s' "$out" | jq -e "$BLOCK_REASON"' as $r | ($r | test("Ship the thing")) and ($r | test("BUILDING")) and ($r | test("Next:")) and ($r | test("harness event blocker"))' >/dev/null || die "block payload: $out"
 rm -f "$GUARD"
 pass "unfinished goal blocks stopping and names the next action"
+
+# --- the installed hook config reaches stop-check, and an unfinished goal blocks through it --------
+case "$AGENT" in
+  claude) hook_file=settings.json; hook_cmd='.hooks.Stop[0].hooks[0].command' ;;
+  codex)  hook_file=hooks.json;    hook_cmd='.hooks.Stop[0].hooks[0].command' ;;
+  cursor) hook_file=hooks.json;    hook_cmd='.hooks.stop[0].command' ;;
+esac
+cmd="$(jq -r "$hook_cmd" "$SRC/$hook_file")"
+case "$cmd" in *"harness stop-check"*) ;; *) die "$hook_file does not wire stop-check: $cmd" ;; esac
+fresh
+out="$(cd "$PROJECT" && CLAUDE_PROJECT_DIR="$PROJECT" bash -c "$cmd" <<< '{}')"
+printf '%s' "$out" | is_block || die "wired hook command did not block: ${out:-<empty>}"
+if [ "$AGENT" = cursor ]; then
+  jq -e '.version == 1 and (.hooks.stop[0] | has("loop_limit") and .loop_limit == null)' "$SRC/hooks.json" >/dev/null || die "cursor hook must set version and loop_limit null"
+  fresh; expect_block "completed turn" '{"status":"completed","loop_count":1}'
+  fresh; expect_allow "user abort" '{"status":"aborted","loop_count":0}'
+  fresh; expect_allow "errored turn" '{"status":"error","loop_count":0}'
+fi
+pass "$hook_file wires Stop to stop-check"
 
 # --- allow: DONE, saved blocker, FAILED with blocker, auth error, inactivity ------------------
 fresh; mutate '.[0].harness.phase = "DONE"'; expect_allow "harness DONE"

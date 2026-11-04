@@ -98,3 +98,11 @@ PLAYWRIGHT|SCREENSHOTS|MIXED|STATIC, confidence, and limitations. Include
 ## Milestones and ## Agent output status PASS|FAIL|PARTIAL|BLOCKED,
 next_action DONE|REWORK|BLOCKED, artifacts visual_review_report. Never claim
 posted/resolved actions or formal gate passage; MAIN records results.
+
+## Related skills
+Load relevant installed skills with the Skill tool. Skip if unavailable.
+This role's rules and MAIN's gates win over a skill, including who commits and who asks the user.
+
+- `browser-testing-with-devtools` — rendered UI evidence
+- `frontend-ui-engineering` — layout, responsiveness, accessibility
+- `ui-ux-pro-max` — design-system checks

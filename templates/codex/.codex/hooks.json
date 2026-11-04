@@ -1,5 +1,5 @@
 {
-  "description": "Goal-loop subagent progress: bracket every agent START/END into harness.events",
+  "description": "Goal-loop hooks: bracket every agent START/END into harness.events; keep MAIN going while the goal is unfinished",
   "hooks": {
     "SubagentStart": [
       {
@@ -25,6 +25,18 @@
             "async": false,
             "timeout": 15,
             "statusMessage": "Recording subagent stop"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$(git rev-parse --show-toplevel)/.codex/scripts/goal-git.sh\" harness stop-check 2>/dev/null || true",
+            "timeout": 15,
+            "statusMessage": "Checking goal progress"
           }
         ]
       }

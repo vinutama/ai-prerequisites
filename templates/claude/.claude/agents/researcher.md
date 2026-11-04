@@ -74,3 +74,12 @@ alternatives_considered, evidence, risks_and_constraints, unknowns, and
 confidence HIGH|MEDIUM|LOW. Include ## Milestones and ## Agent output status
 DONE|PARTIAL|BLOCKED, next_action BUILD|PLAN|BLOCKED, artifacts research_report.
 MAIN persists the report and milestones; you write no state or source.
+
+## Related skills
+Load relevant installed skills with the Skill tool. Skip if unavailable.
+This role's rules and MAIN's gates win over a skill, including who commits and who asks the user.
+
+- `source-driven-development` — verify against official docs
+- `documentation-and-adrs` — structured findings and decisions
+- `security-and-hardening` — auth / security questions
+- `performance-optimization` — performance questions

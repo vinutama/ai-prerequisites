@@ -80,3 +80,14 @@ limitations), findings_addressed, decisions, and notes. FIXES_COMPLETE means
 requested code is implemented and staged, ready for MAIN reconciliation.
 next_action is VERIFY or BLOCKED; provide precise evidence for any failure.
 Do not request Expert merely for missing tooling, locks, network, or UNKNOWN.
+
+## Related skills
+Load relevant installed skills with the Skill tool. Skip if unavailable.
+This role's rules and MAIN's gates win over a skill, including who commits and who asks the user.
+
+- `incremental-implementation` — changes touching more than one file
+- `test-driven-development` — behavior needs automated tests
+- `api-and-interface-design` — API/REST endpoint changes
+- `frontend-ui-engineering` — UI/frontend changes
+- `code-simplification` — refactors without behavior change
+- `ui-ux-pro-max` — UI/frontend/visual changes

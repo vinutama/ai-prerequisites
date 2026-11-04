@@ -43,6 +43,11 @@ On resume run `harness reap` first, then `harness status`. An interrupted Agent/
 (closed window, killed session) leaves its reservation held: `harness reap` releases it
 and returns its task to PENDING for a fresh launch.
 
+A Stop hook (`harness stop-check`) enforces this: while this platform's goal is
+unfinished it resumes the turn with the `next_action` as a follow-up. It allows the stop
+after a user abort, a saved blocker, `harness done`, a forge auth error, or three blocks in a
+row without any state change.
+
 ## Dispatch
 
 Parse text after `/goal` before mutations.

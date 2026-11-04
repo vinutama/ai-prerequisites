@@ -119,3 +119,13 @@ Return ## Agent output status DONE|BLOCKED and next_action BUILD|RESEARCH|BLOCKE
 ## Milestones, discovery_context, ## Implementation Plan (routing, tasks,
 deterministic checks, conditional visual acceptance), and delivery_groups
 when applicable. MAIN records all artifacts; planning never means checks passed.
+
+## Related skills
+Load relevant installed skills with the Skill tool. Skip if unavailable.
+This role's rules and MAIN's gates win over a skill, including who commits and who asks the user.
+
+- `spec-driven-development` — requirements need a written spec first
+- `planning-and-task-breakdown` — ordered, verifiable tasks
+- `api-and-interface-design` — new APIs or module boundaries
+- `documentation-and-adrs` — architecture decisions worth recording
+- `ui-ux-pro-max` — UI/frontend/visual work

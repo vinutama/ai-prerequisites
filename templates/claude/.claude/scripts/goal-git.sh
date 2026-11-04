@@ -84,7 +84,7 @@ Commands:
   harness progress [-n N] [--json]
                             Render recent harness timeline (default last 20)
   harness hook              Read Codex/Claude hook JSON on stdin; emit START/END event
-  harness stop-check        Claude Stop hook: block stopping while a goal is unfinished (never errors)
+  harness stop-check        Stop hook: block stopping while a goal is unfinished (never errors)
   harness spawn <role> <model> <effort> [--task tN]
                             Reserve a launch; returns reservation JSON
   harness spawn-confirm <reservation> <agent-id>
@@ -3485,9 +3485,10 @@ cmd_harness_hook() {
   return 0
 }
 
-# Claude Stop hook. Blocks stopping while this platform's goal is unfinished and
-# prints {"decision":"block","reason":...}. Everything else, including any
-# internal error, allows the stop silently: it must never break a session.
+# Stop hook. Blocks stopping while this platform's goal is unfinished and prints
+# {"decision":"block","reason":...} (Claude, Codex) or {"followup_message":...}
+# (Cursor). Everything else, including any internal error, allows the stop
+# silently: it must never break a session.
 cmd_harness_stop_check() {
   local payload=""
   [ -t 0 ] || payload="$(cat 2>/dev/null || true)"
@@ -3500,6 +3501,10 @@ harness_stop_check_eval() (
   command -v jq >/dev/null 2>&1 || exit 0
   [ -f "$STATE_FILE" ] || exit 0
   local idx verdict count fp guard_file guard_fp window now_epoch auth_file auth_at reason
+  # Cursor also fires its stop hook when the user aborts or the turn errors: never resume those.
+  if [ "$AGENT_PLATFORM" = cursor ]; then
+    case "$(printf '%s' "${1:-}" | jq -r '.status // empty' 2>/dev/null)" in aborted|error) exit 0 ;; esac
+  fi
   idx="$(platform_goal_idx)"
   [ -n "$idx" ] || exit 0
 
@@ -3545,7 +3550,11 @@ harness_stop_check_eval() (
   reason="$(printf '%s' "$verdict" | jq -r '
     "Goal \"" + .goal + "\" is not finished (harness phase " + .phase + "). Do not stop yet. Next: " + .next
     + " Keep going until goal-git.sh harness done exits 0 and delivery is recorded. If you are genuinely blocked (needs the user, authentication, a decision), save it with goal-git.sh harness event blocker \"<reason>\" and then stop."')" || exit 0
-  jq -cn --arg reason "$reason" '{decision:"block",reason:$reason}'
+  if [ "$AGENT_PLATFORM" = cursor ]; then
+    jq -cn --arg reason "$reason" '{followup_message:$reason}'
+  else
+    jq -cn --arg reason "$reason" '{decision:"block",reason:$reason}'
+  fi
 )
 
 cmd_harness_done() {

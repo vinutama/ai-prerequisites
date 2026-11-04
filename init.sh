@@ -187,11 +187,21 @@ install_target() {
     prev_settings="$(mktemp)"
     cp "$dest/.claude/settings.json" "$prev_settings"
   fi
+  # Same for .cursor/hooks.json: keep the project's hooks, add the goal-loop stop hook.
+  local prev_cursor_hooks=""
+  if [ "$name" = cursor ] && [ -f "$dest/.cursor/hooks.json" ]; then
+    prev_cursor_hooks="$(mktemp)"
+    cp "$dest/.cursor/hooks.json" "$prev_cursor_hooks"
+  fi
 
   cp -R "$tree/$dir" "$dest/"
   if [ -n "$prev_settings" ]; then
     merge_claude_settings "$prev_settings" "$dest/.claude/settings.json"
     rm -f "$prev_settings"
+  fi
+  if [ -n "$prev_cursor_hooks" ]; then
+    merge_cursor_hooks "$prev_cursor_hooks" "$dest/.cursor/hooks.json"
+    rm -f "$prev_cursor_hooks"
   fi
   if [ -d "$tree/.agents" ]; then
     mkdir -p "$dest/.agents/skills"
@@ -275,6 +285,26 @@ merge_claude_settings() {
     rm -f "$target.merged"
     cp "$previous" "$target.user-backup"
     warn "Could not merge existing .claude/settings.json; kept template (your file: $target.user-backup)"
+  fi
+}
+
+# Merge the template's stop hook into the project's existing .cursor/hooks.json.
+# Existing hooks stay; goal-git.sh entries are replaced, never duplicated.
+merge_cursor_hooks() {
+  local previous="$1" target="$2"
+  if command -v jq >/dev/null 2>&1 && jq -s '
+    .[0] as $e | .[1] as $t
+    | $e
+    | .version = ($e.version // $t.version)
+    | .hooks = (reduce (($t.hooks // {}) | keys[]) as $k (($e.hooks // {});
+        .[$k] = (((.[$k] // []) | map(select((.command // "") | test("goal-git.sh harness") | not))) + $t.hooks[$k])))
+  ' "$previous" "$target" > "$target.merged" 2>/dev/null; then
+    mv "$target.merged" "$target"
+    log "Merged goal-loop stop hook into existing .cursor/hooks.json"
+  else
+    rm -f "$target.merged"
+    cp "$previous" "$target.user-backup"
+    warn "Could not merge existing .cursor/hooks.json; kept template (your file: $target.user-backup)"
   fi
 }
 
@@ -1067,6 +1097,7 @@ print_tree() {
       echo "├── AGENTS.md           (gitignored)"
       echo "└── .cursor/            (gitignored)"
       echo "    ├── agents/         (6 specialized workers; MAIN coordinates)"
+      echo "    ├── hooks.json      (stop hook → harness stop-check)"
       echo "    ├── skills/         (/goal, /init-goal, /init-skills, /create-issues, goal-loop)"
       echo "    ├── scripts/        (shared harness modules with Codex: goal-git.sh, goal-context.sh,"
       echo "    │                    goal-delegation.sh, goal-delivery.sh, goal-evidence.sh,"
@@ -1093,7 +1124,7 @@ print_tree() {
       echo "└── .codex/             (gitignored)"
       echo "    ├── agents/         (6 specialized agents, TOML)"
       echo "    ├── scripts/        (goal-git.sh harness/verify/route, run-codex.sh)"
-      echo "    ├── hooks.json      (SubagentStart/Stop → harness events)"
+      echo "    ├── hooks.json      (SubagentStart/Stop + Stop hooks → harness)"
       echo "    ├── config.toml     (agents + hooks + multi_agent_v2, Figma MCP)"
       echo "    └── goal-models.json"
       ;;
@@ -1162,6 +1193,7 @@ done
 
 log "Setup complete."
 log "Use '/goal --list' (or '\$goal --list' on Codex) to see all goals. Resume with --continue."
-log "Codex: \$goal --status / harness progress for live milestones; trust project hooks on first run."
+log "Codex: \$goal --status / harness progress for live milestones; trust project hooks with /hooks on first run and after hooks change (the Stop hook keeps \$goal going until harness done)."
+log "Cursor: /goal runs in the main session; trust the workspace so .cursor/hooks.json runs (the stop hook keeps it going until harness done)."
 log "Claude Code: approve the project hooks on first launch; /goal runs in the main session (the Stop hook keeps it going until harness done)."
-log "Optionally run /init-skills (or \$init-skills) to inject curated skills from agentic-awesome-skills."
+log "Optionally run /init-skills (or \$init-skills) to install role-matched skills from addyosmani/agent-skills (Claude, Codex, Cursor)."
